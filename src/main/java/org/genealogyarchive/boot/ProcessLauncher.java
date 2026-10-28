@@ -30,8 +30,18 @@ public final class ProcessLauncher {
     }
 
     public static ConfigurableApplicationContext startWeb(InstallationConfig config, Map<String, Object> overrides) {
-        return start(WebApplication.class, WebApplicationType.SERVLET, WEB, config, overrides);
+        Map<String, Object> web = new LinkedHashMap<>(WEB_PROPERTIES);
+        web.putAll(overrides);
+        return start(WebApplication.class, WebApplicationType.SERVLET, WEB, config, web);
     }
+
+    /**
+     * Web-only settings: /actuator/health/liveness and /actuator/health/readiness, with readiness
+     * requiring the database and the "schema" contributor (which exists only in the web process).
+     */
+    static final Map<String, Object> WEB_PROPERTIES = Map.of(
+            "management.endpoint.health.probes.enabled", "true",
+            "management.endpoint.health.group.readiness.include", "readinessState,db,schema");
 
     public static ConfigurableApplicationContext startWorker(InstallationConfig config, Map<String, Object> overrides) {
         return start(WorkerApplication.class, WebApplicationType.NONE, WORKER, config, overrides);

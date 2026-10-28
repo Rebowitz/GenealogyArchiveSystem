@@ -71,7 +71,7 @@ $worker.WaitForExit()
 Write-Output "ok: worker started and stopped"
 
 $webLog = Get-Content "$Work\logs\genealogy-archive-web.log" -Raw
-if ($webLog -notmatch '"log.level"') { Fail "structured JSON web log not written" }
+if ($webLog -notmatch '"ecs":\{"version"') { Fail "structured JSON web log not written" }
 if (Select-String -Path "$Work\logs\*.log" -SimpleMatch -Pattern $env:GAS_TEST_DB_PASSWORD -Quiet) { Fail "database password found in logs" }
 Write-Output "ok: structured logs written, no secrets in logs"
 Write-Output "SMOKE TEST PASSED"

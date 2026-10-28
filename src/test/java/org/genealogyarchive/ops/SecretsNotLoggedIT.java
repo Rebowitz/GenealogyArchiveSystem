@@ -56,7 +56,7 @@ class SecretsNotLoggedIT {
                 Map.of("logging.structured.format.console", "ecs"))) {
             Http.get(app, "/actuator/health/readiness");
         }
-        assertThat(output.getAll()).contains("\"log.level\"");
+        assertThat(output.getAll()).as("ECS JSON lines").contains("\"ecs\":{\"version\"", "\"log\":{\"level\"");
         assertThat(output.getAll()).doesNotContain(WRONG_PASSWORD);
     }
 }

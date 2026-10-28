@@ -68,7 +68,7 @@ kill -TERM "$WORKER"
 wait "$WORKER" || true
 echo "ok: worker started and stopped"
 
-grep -q '"log.level"' "$WORK/logs/genealogy-archive-web.log" || fail "structured JSON web log not written"
+grep -q '"ecs":{"version"' "$WORK/logs/genealogy-archive-web.log" || fail "structured JSON web log not written"
 grep -q 'Worker stopped' "$WORK/logs/genealogy-archive-worker.log" || fail "worker did not log clean shutdown"
 if grep -rq -- "$GAS_TEST_DB_PASSWORD" "$WORK/logs"; then fail "database password found in logs"; fi
 echo "ok: structured logs written, no secrets in logs"
