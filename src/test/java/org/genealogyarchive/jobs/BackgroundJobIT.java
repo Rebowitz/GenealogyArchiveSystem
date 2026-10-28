@@ -449,6 +449,116 @@ class BackgroundJobIT {
         assertThat(job(live).state()).isEqualTo(JobState.SUCCEEDED);
     }
 
+    // ---- GAS-P1-R01: the claim result is bound to the attempt that produced it.
+
+    /**
+     * Worker A's claim statement completes (token A) but delivery of its result to the caller is held
+     * at the boundary where a separate re-read used to happen; meanwhile A's lease expires and worker
+     * B reclaims (token B). When A's result is finally delivered it must still carry token A.
+     */
+    @Test
+    void claimResultCarriesItsOwnAttemptTokenEvenWhenDeliveredAfterAnotherWorkerReclaimed() throws Exception {
+        UUID id = core.jobs().enqueue("test.race", "{}", 5);
+        UUID workerA = GlobalIds.newId();
+        UUID workerB = GlobalIds.newId();
+        CountDownLatch claimStatementDone = new CountDownLatch(1);
+        CountDownLatch deliver = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Job> producedByClaimA = new java.util.concurrent.atomic.AtomicReference<>();
+        BackgroundJobRepository repoA = new BackgroundJobRepository(ds, claimed -> {
+            producedByClaimA.set(claimed);
+            claimStatementDone.countDown();
+            try {
+                assertThat(deliver.await(1, TimeUnit.MINUTES)).isTrue();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        Job claimA;
+        Job[] claimB = new Job[1];
+        try {
+            var pendingA = pool.submit(() -> repoA.claim(List.of("test.race"), workerA, Clock.systemUTC().instant(), Duration.ofMillis(500)));
+            assertThat(claimStatementDone.await(30, TimeUnit.SECONDS)).as("A's claim statement completed").isTrue();
+
+            // A's result is not yet delivered. Its lease expires and B reclaims the job.
+            awaitTrue(Duration.ofSeconds(30), () -> {
+                claimB[0] = repo.claim(List.of("test.race"), workerB, Clock.systemUTC().instant(), Duration.ofMinutes(5)).orElse(null);
+                return claimB[0] != null;
+            });
+            assertThat(job(id).leaseToken()).as("B now holds the job").isEqualTo(claimB[0].leaseToken());
+
+            deliver.countDown();
+            claimA = pendingA.get(1, TimeUnit.MINUTES).orElseThrow();
+        } finally {
+            deliver.countDown();
+            pool.shutdownNow();
+        }
+
+        assertThat(claimA.leaseToken()).as("A's delivered result is A's own attempt")
+                .isEqualTo(producedByClaimA.get().leaseToken())
+                .isNotEqualTo(claimB[0].leaseToken());
+        assertThat(claimA.leaseOwner()).isEqualTo(workerA);
+        assertThat(claimA.attempts()).isEqualTo(1);
+        assertThat(claimB[0].leaseOwner()).isEqualTo(workerB);
+        assertThat(claimB[0].attempts()).isEqualTo(2);
+
+        java.time.Instant now = Clock.systemUTC().instant();
+        assertThat(repo.renew(id, claimA.leaseToken(), Duration.ofMinutes(5), now)).as("A renew").isFalse();
+        assertThat(repo.succeed(id, claimA.leaseToken(), now)).as("A succeed").isFalse();
+        assertThat(repo.fail(id, claimA.leaseToken(), "stale", now, now)).as("A fail").isFalse();
+
+        Job current = job(id);
+        assertThat(current.state()).isEqualTo(JobState.RUNNING);
+        assertThat(current.leaseToken()).isEqualTo(claimB[0].leaseToken());
+        assertThat(current.leaseOwner()).isEqualTo(workerB);
+        assertThat(current.lastError()).isNull();
+        assertThat(repo.renew(id, claimB[0].leaseToken(), Duration.ofMinutes(5), now)).as("B renews").isTrue();
+        assertThat(repo.succeed(id, claimB[0].leaseToken(), now)).as("B completes").isTrue();
+    }
+
+    /** The runner's pre-invocation safeguard: a claim delivered after its lease ended never starts a handler. */
+    @Test
+    void runnerDoesNotStartAHandlerWhoseClaimWasDeliveredAfterItsLeaseEnded() throws Exception {
+        UUID id = core.jobs().enqueue("test.late", "{}", 5);
+        CountDownLatch claimStatementDone = new CountDownLatch(1);
+        CountDownLatch deliver = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Job> producedByClaimA = new java.util.concurrent.atomic.AtomicReference<>();
+        BackgroundJobRepository repoA = new BackgroundJobRepository(ds, claimed -> {
+            producedByClaimA.set(claimed);
+            claimStatementDone.countDown();
+            try {
+                assertThat(deliver.await(1, TimeUnit.MINUTES)).isTrue();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        AtomicInteger handlerRuns = new AtomicInteger();
+        JobRunner runnerA = new JobRunner(repoA, Clock.systemUTC(), GlobalIds.newId(), Duration.ofMillis(500),
+                Duration.ofMillis(100), List.of(handler("test.late", j -> handlerRuns.incrementAndGet())));
+        Job[] claimB = new Job[1];
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            var resultA = pool.submit((java.util.concurrent.Callable<Boolean>) runnerA::runOne);
+            assertThat(claimStatementDone.await(30, TimeUnit.SECONDS)).isTrue();
+            awaitTrue(Duration.ofSeconds(30), () -> {
+                claimB[0] = repo.claim(List.of("test.late"), GlobalIds.newId(), Clock.systemUTC().instant(), Duration.ofMinutes(5)).orElse(null);
+                return claimB[0] != null;
+            });
+            deliver.countDown();
+            assertThat(resultA.get(1, TimeUnit.MINUTES)).as("A claimed").isTrue();
+        } finally {
+            deliver.countDown();
+            pool.shutdownNow();
+            runnerA.close();
+        }
+        assertThat(handlerRuns).as("A's handler never started").hasValue(0);
+        Job current = job(id);
+        assertThat(current.state()).isEqualTo(JobState.RUNNING);
+        assertThat(current.leaseToken()).isEqualTo(claimB[0].leaseToken()).isNotEqualTo(producedByClaimA.get().leaseToken());
+        assertThat(current.lastError()).as("A recorded no outcome").isNull();
+        assertThat(repo.succeed(id, claimB[0].leaseToken(), Clock.systemUTC().instant())).isTrue();
+    }
+
     private void expireLease(UUID id) throws Exception {
         try (Connection c = db.connect(); Statement s = c.createStatement()) {
             s.execute("UPDATE gas.background_job SET lease_until = now() - interval '1 minute' WHERE job_id = '" + id + "'");

@@ -80,7 +80,8 @@ public final class JobRunner implements AutoCloseable {
     /**
      * Claims and runs at most one job.
      *
-     * @return true if a job was claimed and run (whatever its outcome)
+     * @return true if a job was claimed (whether its handler ran, succeeded, failed, or was not
+     *         started because the lease had already ended before delivery)
      */
     public boolean runOne() {
         Instant now = clock.instant();
@@ -95,6 +96,13 @@ public final class JobRunner implements AutoCloseable {
         }
         Job job = claimed.get();
         JobExecution execution = new JobExecution(job, clock, requestedAt.plus(lease));
+        // Safeguard (GAS-P1-R01): if the claim result reached this point only after the lease could
+        // already have expired (e.g. a long pause), another worker may own the job: never start it.
+        if (!execution.leaseHeld()) {
+            log.warn("Job {} ({}) attempt {} was delivered after its lease ended; the handler was not started",
+                    job.jobId(), job.kind(), job.attempts());
+            return true;
+        }
         ScheduledFuture<?> renewal = renewals.scheduleWithFixedDelay(() -> renew(execution),
                 renewInterval.toMillis(), renewInterval.toMillis(), TimeUnit.MILLISECONDS);
         Exception failure = null;

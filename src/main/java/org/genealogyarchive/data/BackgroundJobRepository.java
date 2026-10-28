@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * background_job rows (V0006): technical scheduling state for the worker. Not Archival Operation
@@ -37,10 +38,26 @@ public final class BackgroundJobRepository {
             rs.getString("last_error"), Rows.instant(rs, "created_at"), Rows.instant(rs, "updated_at"),
             Rows.instant(rs, "finished_at"));
 
+    /** The claimed row exactly as written by the claiming UPDATE (GAS-P1-R01). */
+    private static final String CLAIMED_COLUMNS = """
+            j.job_id, j.kind, j.state, j.payload::text AS payload, j.attempts, j.max_attempts, j.run_after,
+            j.lease_owner, j.lease_token, j.lease_until, j.last_error, j.created_at, j.updated_at, j.finished_at""";
+
     private final JdbcClient jdbc;
+    private final Consumer<Job> claimDelivery;
 
     public BackgroundJobRepository(DataSource dataSource) {
+        this(dataSource, claimed -> { });
+    }
+
+    /**
+     * Test seam: {@code claimDelivery} runs after the claiming statement has completed and before its
+     * result is returned to the caller - the boundary at which a separate re-read could previously
+     * observe a later attempt. Production code uses {@link #BackgroundJobRepository(DataSource)}.
+     */
+    public BackgroundJobRepository(DataSource dataSource, Consumer<Job> claimDelivery) {
         this.jdbc = JdbcClient.create(dataSource);
+        this.claimDelivery = claimDelivery;
     }
 
     public void insert(UUID jobId, String kind, String payloadJson, int maxAttempts, Instant runAfter) {
@@ -91,12 +108,17 @@ public final class BackgroundJobRepository {
      * Claims one runnable job of the given kinds: queued and due, or running with an expired lease
      * (recovery after a worker was lost, OP-001). Increments attempts and takes a lease with a
      * fresh token. A lease that its owner keeps renewing never expires, so it is never reclaimed here.
+     * <p>
+     * GAS-P1-R01: the result is the attempt snapshot produced by this claim's own
+     * {@code UPDATE ... RETURNING} - the token, owner, attempt number and lease end written by this
+     * statement. There is no second read, so a later reclaim can never substitute its token here.
      */
     public Optional<Job> claim(Collection<String> kinds, UUID workerId, Instant now, Duration lease) {
         if (kinds.isEmpty()) {
             return Optional.empty();
         }
-        return jdbc.sql("""
+        UUID token = UUID.randomUUID();
+        Optional<Job> claimed = jdbc.sql("""
                 WITH next AS (
                     SELECT job_id FROM gas.background_job
                      WHERE kind IN (:kinds)
@@ -111,12 +133,17 @@ public final class BackgroundJobRepository {
                        updated_at = :now
                   FROM next
                  WHERE j.job_id = next.job_id
-                RETURNING j.job_id
-                """)
+                RETURNING """ + CLAIMED_COLUMNS)
                 .param("kinds", List.copyOf(kinds)).param("now", Rows.param(now)).param("worker", workerId)
-                .param("token", UUID.randomUUID()).param("leaseMillis", lease.toMillis())
-                .query(UUID.class).optional()
-                .flatMap(this::findById);
+                .param("token", token).param("leaseMillis", lease.toMillis())
+                .query(JOB).optional();
+        claimed.ifPresent(job -> {
+            if (!token.equals(job.leaseToken()) || !workerId.equals(job.leaseOwner())) {
+                throw new IllegalStateException("Claim of job " + job.jobId() + " returned another attempt's lease");
+            }
+        });
+        claimed.ifPresent(claimDelivery);
+        return claimed;
     }
 
     /**
