@@ -47,12 +47,22 @@ public final class ProcessLauncher {
         return start(WorkerApplication.class, WebApplicationType.NONE, WORKER, config, overrides);
     }
 
+    /** Worker with additional configuration classes (tests register job handlers this way). */
+    public static ConfigurableApplicationContext startWorker(InstallationConfig config, Map<String, Object> overrides,
+                                                             Class<?>... additionalSources) {
+        return start(WorkerApplication.class, WebApplicationType.NONE, WORKER, config, overrides, additionalSources);
+    }
+
     private static ConfigurableApplicationContext start(Class<?> source, WebApplicationType type, String process,
-                                                        InstallationConfig config, Map<String, Object> overrides) {
+                                                        InstallationConfig config, Map<String, Object> overrides,
+                                                        Class<?>... additionalSources) {
         Map<String, Object> properties = new LinkedHashMap<>(installationProperties(config, process));
         properties.putAll(overrides);
 
-        SpringApplication app = new SpringApplication(source);
+        Class<?>[] sources = new Class<?>[additionalSources.length + 1];
+        sources[0] = source;
+        System.arraycopy(additionalSources, 0, sources, 1, additionalSources.length);
+        SpringApplication app = new SpringApplication(sources);
         app.setWebApplicationType(type);
         app.addListeners(new InstallationPropertiesListener(properties));
         app.addInitializers(ctx -> ctx.getBeanFactory().registerSingleton("installationConfig", config));

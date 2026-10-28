@@ -1,5 +1,6 @@
 package org.genealogyarchive.service;
 
+import org.genealogyarchive.data.ArchiveInstanceRepository;
 import org.genealogyarchive.data.PostgresServer;
 import org.genealogyarchive.data.SchemaIdentityRepository;
 import java.util.List;
@@ -23,13 +24,15 @@ public class SystemStatusService {
     private final SchemaMigrator migrator;
     private final Clock clock;
     private final SchemaIdentityRepository identity;
+    private final ArchiveInstanceRepository archives;
 
     public SystemStatusService(PostgresServer postgres, SchemaMigrator migrator, Clock clock,
-                               SchemaIdentityRepository identity) {
+                               SchemaIdentityRepository identity, ArchiveInstanceRepository archives) {
         this.postgres = postgres;
         this.migrator = migrator;
         this.clock = clock;
         this.identity = identity;
+        this.archives = archives;
     }
 
     public SystemStatus check() {
@@ -42,7 +45,8 @@ public class SystemStatusService {
         } catch (RuntimeException e) {
             log.warn("Database unavailable: {}", rootMessage(e));
             return new SystemStatus(applicationVersion(), HostPlatform.current(), false, null, false,
-                    SchemaStatus.unavailable("Database unavailable: " + rootMessage(e)), clock.instant());
+                    SchemaStatus.unavailable("Database unavailable: " + rootMessage(e)),
+                    ArchiveStatus.unknown("The archive cannot be checked while the database is unavailable."), clock.instant());
         }
         SchemaStatus schema;
         if (!supported) {
@@ -61,7 +65,26 @@ public class SystemStatusService {
             }
         }
         return new SystemStatus(applicationVersion(), HostPlatform.current(), true, version, supported, schema,
-                clock.instant());
+                archiveStatus(schema), clock.instant());
+    }
+
+    private ArchiveStatus archiveStatus(SchemaStatus schema) {
+        if (!schema.isCurrent()) {
+            return ArchiveStatus.unknown("The archive cannot be checked until the schema is current.");
+        }
+        try {
+            var all = archives.findAll();
+            if (all.isEmpty()) {
+                return ArchiveStatus.notInitialized();
+            }
+            if (all.size() > 1) {
+                return ArchiveStatus.unknown("Archive identity is inconsistent: more than one Archive Instance record exists.");
+            }
+            return ArchiveStatus.initialized(all.get(0).archiveId());
+        } catch (RuntimeException e) {
+            log.warn("Archive state could not be determined: {}", rootMessage(e));
+            return ArchiveStatus.unknown("Archive state could not be determined: " + rootMessage(e));
+        }
     }
 
     public static String applicationVersion() {

@@ -44,6 +44,13 @@ Expect-Exit 0 @('check-config')
 Expect-Exit 3 @('status')      # not yet migrated: visibly not ready
 Expect-Exit 0 @('migrate')
 Expect-Exit 0 @('migrate')     # repeat is a no-op
+Expect-Exit 3 @('status')      # Phase 1: migrated but the archive is not initialized yet
+Expect-Exit 0 @('init-archive', '--name=Smoke Test Archive')
+Expect-Exit 5 @('init-archive', '--name=Second Archive')   # an Archive ID is created only once
+$AdminPw = 'smoke-' + (-join ((1..24) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) }))
+$env:GAS_NEW_ADMIN_PASSWORD = $AdminPw
+Expect-Exit 0 @('create-admin', '--username=smoke-admin')
+Remove-Item Env:GAS_NEW_ADMIN_PASSWORD
 Expect-Exit 0 @('status')
 
 $web = Start-Process -FilePath 'java' -ArgumentList @('-jar', "`"$Jar`"", 'serve', "`"$Config`"") -PassThru -NoNewWindow
@@ -59,6 +66,20 @@ for ($i = 0; $i -lt 90; $i++) {
 if (-not $ready) { Stop-Process -Id $web.Id -Force; Fail "web application not ready" }
 $page = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing
 if ($page.Content -notmatch 'Archive instance is ready') { Stop-Process -Id $web.Id -Force; Fail "home page does not report ready" }
+# Phase 1: sign in through the real form (CSRF token from the page) and read an archive page.
+$login = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/login" -UseBasicParsing -SessionVariable browser
+$tokenMatch = [regex]::Match($login.Content, 'name="_csrf" value="([^"]+)"')
+if (-not $tokenMatch.Success) { Stop-Process -Id $web.Id -Force; Fail "no CSRF token on the sign-in page" }
+$signIn = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/login" -Method Post -WebSession $browser -UseBasicParsing `
+    -Body @{ _csrf = $tokenMatch.Groups[1].Value; username = 'smoke-admin'; password = $AdminPw } `
+    -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction SilentlyContinue
+$location = [string]$signIn.Headers.Location
+if (-not $location -or $location -match 'error') { Stop-Process -Id $web.Id -Force; Fail "sign-in failed (redirect: $location)" }
+$archivePage = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/archive" -WebSession $browser -UseBasicParsing
+if ($archivePage.Content -notmatch 'Smoke Test Archive') { Stop-Process -Id $web.Id -Force; Fail "signed-in archive page not shown" }
+$anonymous = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/archive" -UseBasicParsing -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction SilentlyContinue
+if ($anonymous.StatusCode -ne 302) { Stop-Process -Id $web.Id -Force; Fail "archive page reachable without sign-in" }
+Write-Output "ok: local sign-in works and protects archive pages"
 Stop-Process -Id $web.Id -Force   # graceful stop on Windows is exercised by the WinSW service test
 $web.WaitForExit()
 Write-Output "ok: web application started, ready, stopped"
@@ -73,6 +94,7 @@ Write-Output "ok: worker started and stopped"
 $webLog = Get-Content "$Work\logs\genealogy-archive-web.log" -Raw
 if ($webLog -notmatch '"ecs":\{"version"') { Fail "structured JSON web log not written" }
 if (Select-String -Path "$Work\logs\*.log" -SimpleMatch -Pattern $env:GAS_TEST_DB_PASSWORD -Quiet) { Fail "database password found in logs" }
+if (Select-String -Path "$Work\logs\*.log" -SimpleMatch -Pattern $AdminPw -Quiet) { Fail "administrator password found in logs" }
 Write-Output "ok: structured logs written, no secrets in logs"
 Write-Output "SMOKE TEST PASSED"
 exit 0

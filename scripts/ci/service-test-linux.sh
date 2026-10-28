@@ -43,6 +43,16 @@ sudo -u genealogy-archive "$JAVA" -jar /opt/genealogy-archive/genealogy-archive.
   || fail "check-config as service account"
 sudo -u genealogy-archive "$JAVA" -jar /opt/genealogy-archive/genealogy-archive.jar migrate --config="$ETC/installation.yml" \
   || fail "migrate as service account"
+# Phase 1: the archive is created explicitly (never as a migration side effect); the worker and
+# readiness require it. The administrator password is passed through the environment, never argv.
+sudo -u genealogy-archive "$JAVA" -jar /opt/genealogy-archive/genealogy-archive.jar init-archive --name="Service Test Archive" \
+  --config="$ETC/installation.yml" || fail "init-archive as service account"
+GAS_NEW_ADMIN_PASSWORD="svc-$(openssl rand -hex 12)"
+export GAS_NEW_ADMIN_PASSWORD
+sudo --preserve-env=GAS_NEW_ADMIN_PASSWORD -u genealogy-archive "$JAVA" -jar /opt/genealogy-archive/genealogy-archive.jar \
+  create-admin --username=service-admin --config="$ETC/installation.yml" || fail "create-admin as service account"
+SVC_ADMIN_PW="$GAS_NEW_ADMIN_PASSWORD"
+unset GAS_NEW_ADMIN_PASSWORD
 
 systemctl start genealogy-archive-web
 code=000
@@ -64,6 +74,8 @@ systemctl is-active --quiet genealogy-archive-worker || fail "worker service not
 systemctl stop genealogy-archive-worker
 [ "$(systemctl show -p Result --value genealogy-archive-worker)" = success ] || fail "worker service did not stop cleanly"
 grep -q 'Worker stopped' /var/log/genealogy-archive/genealogy-archive-worker.log || fail "worker stop was not graceful"
+grep -q 'started for archive' /var/log/genealogy-archive/genealogy-archive-worker.log || fail "worker did not start for the archive"
+if grep -rq -- "$SVC_ADMIN_PW" /var/log/genealogy-archive; then fail "administrator password found in service logs"; fi
 echo "ok: systemd worker service started and stopped gracefully"
 
 bash deploy/linux/uninstall.sh

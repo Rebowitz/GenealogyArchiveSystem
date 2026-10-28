@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Operations')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Operations</h1>
+    <section th:class="${ops.anyWorkerAlive()} ? 'status ok' : 'status problem'">
+        <h2 th:text="${ops.anyWorkerAlive()} ? 'Background worker is running' : 'Background worker is not running'">Worker</h2>
+        <p th:unless="${ops.anyWorkerAlive()}">Queued work waits until a worker runs. Research and data entry are not affected.</p>
+        <p>Jobs: <span th:text="${ops.queuedJobs()}">0</span> queued,
+            <span th:text="${ops.runningJobs()}">0</span> running,
+            <span th:text="${ops.failedJobs()}">0</span> failed.</p>
+    </section>
+    <section th:class="${ops.volumeProblems()} ? 'status problem' : 'status ok'">
+        <h2 th:text="${ops.volumeProblems()} ? 'A required storage volume is not available' : 'Storage volumes'">Volumes</h2>
+        <table class="list">
+            <thead><tr><th>Volume</th><th>Purpose</th><th>Required</th><th>On this computer</th></tr></thead>
+            <tbody>
+            <tr th:each="s : ${ops.volumes()}" th:class="${s.problem()} ? 'problem' : ''">
+                <td th:text="${s.volume().name()}">v</td>
+                <td th:text="${s.volume().purpose()}">p</td>
+                <td th:text="${s.volume().required()} ? 'Yes' : 'No'">r</td>
+                <td th:text="${s.availability()}">a</td>
+            </tr>
+            </tbody>
+        </table>
+        <p th:unless="${#sets.isEmpty(ops.unregisteredConfiguredVolumes())}" class="muted">
+            Installation configuration maps volume IDs that this archive has not registered:
+            <code th:each="id : ${ops.unregisteredConfiguredVolumes()}" th:text="${id} + ' '">id</code></p>
+    </section>
+    <section>
+        <h2>Recent background jobs</h2>
+        <p class="muted" th:if="${#lists.isEmpty(jobs)}">No background jobs.</p>
+        <table class="list" th:unless="${#lists.isEmpty(jobs)}">
+            <thead><tr><th>Kind</th><th>State</th><th>Attempts</th><th>Last error</th><th></th></tr></thead>
+            <tbody>
+            <tr th:each="j : ${jobs}">
+                <td th:text="${j.kind()}">k</td>
+                <td th:text="${j.state()}">s</td>
+                <td th:text="${j.attempts()} + ' of ' + ${j.maxAttempts()}">a</td>
+                <td th:text="${j.lastError()}">e</td>
+                <td><form th:if="${j.state().name() == 'FAILED'}" th:action="@{/operations/jobs/{id}/retry(id=${j.jobId()})}" method="post">
+                    <button type="submit">Retry</button></form></td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+</main>
+</body>
+</html>

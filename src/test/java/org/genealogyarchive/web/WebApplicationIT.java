@@ -1,11 +1,8 @@
 package org.genealogyarchive.web;
 
-import com.zaxxer.hikari.HikariDataSource;
 import org.genealogyarchive.boot.ProcessLauncher;
 import org.genealogyarchive.config.InstallationConfig.DatabaseSettings;
 import org.genealogyarchive.config.Secret;
-import org.genealogyarchive.data.DataSources;
-import org.genealogyarchive.migration.SchemaMigrator;
 import org.genealogyarchive.testsupport.Http;
 import org.genealogyarchive.testsupport.NetworkAttemptRecorder;
 import org.genealogyarchive.testsupport.TestDatabase;
@@ -37,15 +34,17 @@ class WebApplicationIT {
         db.close();
     }
 
-    private void migrate() {
-        try (HikariDataSource ds = DataSources.create(db.settings(), "test")) {
-            new SchemaMigrator(ds).migrate();
-        }
+    /**
+     * Phase 1 (owner decision B): an instance is ready only after migrate AND init-archive, so this
+     * fixture performs both. The Phase 0 assertions in this class are unchanged.
+     */
+    private void migrateAndInitialize() {
+        org.genealogyarchive.testsupport.ArchiveFixtures.migrateAndInitialize(db);
     }
 
     @Test
     void startsAndReportsReadyWithoutRecordedNonLoopbackProxyConsultations() {
-        migrate();
+        migrateAndInitialize();
         try (NetworkAttemptRecorder network = NetworkAttemptRecorder.install();
              ConfigurableApplicationContext app = ProcessLauncher.startWeb(db.installationConfig(), Map.of())) {
 
@@ -96,7 +95,7 @@ class WebApplicationIT {
 
     @Test
     void onlyHealthIsExposedAmongManagementEndpoints() {
-        migrate();
+        migrateAndInitialize();
         try (ConfigurableApplicationContext app = ProcessLauncher.startWeb(db.installationConfig(), Map.of())) {
             assertThat(Http.get(app, "/actuator/env").statusCode()).isEqualTo(404);
             assertThat(Http.get(app, "/actuator/configprops").statusCode()).isEqualTo(404);
@@ -108,7 +107,7 @@ class WebApplicationIT {
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"missing-row", "incorrect-value", "missing-table"})
     void foundationIdentityDamageMakesWebNotReadyAndWorkerRefuseStartup(String damage) throws Exception {
-        migrate();
+        migrateAndInitialize();
         try (var connection = db.connect(); var statement = connection.createStatement()) {
             switch (damage) {
                 case "missing-row" -> statement.execute("DELETE FROM gas.schema_identity");

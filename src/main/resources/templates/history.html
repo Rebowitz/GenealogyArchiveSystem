@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Change history')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Recent changes</h1>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

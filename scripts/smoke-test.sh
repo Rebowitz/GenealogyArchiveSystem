@@ -43,6 +43,13 @@ expect_exit 0 check-config
 expect_exit 3 status          # not yet migrated: visibly not ready
 expect_exit 0 migrate
 expect_exit 0 migrate         # repeat is a no-op
+expect_exit 3 status          # Phase 1: migrated but the archive is not initialized yet
+expect_exit 0 init-archive --name="Smoke Test Archive"
+expect_exit 5 init-archive --name="Second Archive"   # an Archive ID is created only once
+ADMIN_PW="smoke-$(openssl rand -hex 12)"
+export GAS_NEW_ADMIN_PASSWORD="$ADMIN_PW"
+expect_exit 0 create-admin --username=smoke-admin
+unset GAS_NEW_ADMIN_PASSWORD
 expect_exit 0 status
 
 java -jar "$JAR" serve "$CONFIG" &
@@ -56,6 +63,18 @@ for _ in $(seq 1 90); do
 done
 [ "$code" = "200" ] || fail "web application not ready (last HTTP status $code)"
 curl -fsS "http://127.0.0.1:${PORT}/" | grep -q "Archive instance is ready" || fail "home page does not report ready"
+# Phase 1: sign in through the real form (CSRF token from the page) and read an archive page.
+COOKIES="$WORK/cookies.txt"
+login_page="$(curl -fsS -c "$COOKIES" -b "$COOKIES" "http://127.0.0.1:${PORT}/login")"
+token="$(printf '%s' "$login_page" | sed -n 's/.*name="_csrf" value="\([^"]*\)".*/\1/p' | head -1)"
+[ -n "$token" ] || fail "no CSRF token on the sign-in page"
+location="$(curl -s -o /dev/null -w '%{redirect_url}' -c "$COOKIES" -b "$COOKIES" \
+  --data-urlencode "_csrf=$token" --data-urlencode "username=smoke-admin" --data-urlencode "password=$ADMIN_PW" \
+  "http://127.0.0.1:${PORT}/login")"
+case "$location" in *error*|"") fail "sign-in failed (redirect: $location)";; esac
+curl -fsS -b "$COOKIES" "http://127.0.0.1:${PORT}/archive" | grep -q "Smoke Test Archive" || fail "signed-in archive page not shown"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/archive")" = "302" ] || fail "archive page reachable without sign-in"
+echo "ok: local sign-in works and protects archive pages"
 kill -TERM "$WEB"
 wait "$WEB" || true
 echo "ok: web application started, ready, stopped"
@@ -71,5 +90,6 @@ echo "ok: worker started and stopped"
 grep -q '"ecs":{"version"' "$WORK/logs/genealogy-archive-web.log" || fail "structured JSON web log not written"
 grep -q 'Worker stopped' "$WORK/logs/genealogy-archive-worker.log" || fail "worker did not log clean shutdown"
 if grep -rq -- "$GAS_TEST_DB_PASSWORD" "$WORK/logs"; then fail "database password found in logs"; fi
+if grep -rq -- "$ADMIN_PW" "$WORK/logs"; then fail "administrator password found in logs"; fi
 echo "ok: structured logs written, no secrets in logs"
 echo "SMOKE TEST PASSED"

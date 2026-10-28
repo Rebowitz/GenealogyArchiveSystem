@@ -1,9 +1,6 @@
 package org.genealogyarchive.worker;
 
-import com.zaxxer.hikari.HikariDataSource;
 import org.genealogyarchive.boot.ProcessLauncher;
-import org.genealogyarchive.data.DataSources;
-import org.genealogyarchive.migration.SchemaMigrator;
 import org.genealogyarchive.testsupport.TestDatabase;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,9 +29,8 @@ class WorkerProcessIT {
 
     @Test
     void startsOnMigratedDatabaseAndStopsCleanly() {
-        try (HikariDataSource ds = DataSources.create(db.settings(), "test")) {
-            new SchemaMigrator(ds).migrate();
-        }
+        // Phase 1 (owner decision B): migrate, then init-archive.
+        org.genealogyarchive.testsupport.ArchiveFixtures.migrateAndInitialize(db);
         ConfigurableApplicationContext worker =
                 ProcessLauncher.startWorker(db.installationConfig(), Map.of("gas.worker.heartbeat", "PT1S"));
         WorkerProcess process = worker.getBean(WorkerProcess.class);

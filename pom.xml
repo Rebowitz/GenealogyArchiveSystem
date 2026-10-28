@@ -25,6 +25,7 @@
         <!-- Fixed timestamp for reproducible jar contents. -->
         <project.build.outputTimestamp>2026-10-28T00:00:00Z</project.build.outputTimestamp>
         <archunit.version>1.4.1</archunit.version>
+        <uuid-creator.version>6.1.1</uuid-creator.version>
     </properties>
 
     <dependencies>
@@ -59,6 +60,17 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+        <!-- Phase 1: local authentication, sessions and password hashing (no external identity provider). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <!-- Phase 1: RFC 9562 UUIDv7 generation, application-side (keeps PostgreSQL 16 baseline, ADR-0003). -->
+        <dependency>
+            <groupId>com.github.f4b6a3</groupId>
+            <artifactId>uuid-creator</artifactId>
+            <version>${uuid-creator.version}</version>
         </dependency>
         <!-- Installation configuration file parsing (safe constructor only). -->
         <dependency>

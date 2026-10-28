@@ -73,6 +73,17 @@ public final class TestDatabase implements AutoCloseable {
         return m.group(1) + databaseName + (m.group(3) != null ? m.group(3) : "");
     }
 
+    /**
+     * A byte-for-byte copy of this database (PostgreSQL TEMPLATE copy), as a restore onto another
+     * server would produce. All connections to this database must be closed first.
+     */
+    public TestDatabase copy() {
+        String name = NAME_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toLowerCase(Locale.ROOT);
+        TestDatabase copy = new TestDatabase(adminUrl, user, password, name);
+        copy.adminExecute("CREATE DATABASE " + name + " TEMPLATE " + this.name);
+        return copy;
+    }
+
     /** Guard: only harness-created databases may ever be dropped. */
     static void requireTestDatabaseName(String databaseName) {
         if (!databaseName.startsWith(NAME_PREFIX) || !databaseName.matches("[a-z0-9_]+")) {
