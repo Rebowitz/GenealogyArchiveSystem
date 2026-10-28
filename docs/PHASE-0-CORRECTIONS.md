@@ -7,7 +7,7 @@ This correction set remains Phase 0; it does not constitute acceptance. PR #1 mu
 
 JDBC URLs now accept only documented connection-option keys: sslmode, sslrootcert, connectTimeout,
 socketTimeout, tcpKeepAlive, targetServerType, loadBalanceHosts, hostRecheckSeconds.
-Decoded keys are checked; URL user-info, fragments, unknown/credential/extension parameters and malformed
+Option names must match those canonical spellings exactly (superseded detail: see GAS-P0-R01); URL user-info, fragments, unknown/credential/extension parameters and malformed
 percent escapes are rejected without echoing input. The DatabaseSettings constructor enforces the
 same rule for programmatic callers. Diagnostic URL/config rendering omits query values.
 Passwords still come only from the approved environment/protected-file channel.
@@ -15,6 +15,33 @@ Malformed YAML parser excerpts are suppressed because they can echo attempted in
 Tests exercise literal/encoded/case-varied credential keys, malformed encodings, user-info,
 CLI output, direct construction, safe options, and malformed-YAML output.
 This is an explicit connection-option surface, not a general arbitrary JDBC-driver-properties interface.
+
+## GAS-P0-R01: validation and driver interpretation must agree
+
+Finding: the GAS-P0-001 validator percent-decoded and lower-cased option NAMES before checking them, but
+passed the original URL to PostgreSQL JDBC, which matches names literally and case-sensitively and decodes
+only values. `SSLMODE=verify-full` and `ssl%6dode=verify-full` were therefore approved while the driver
+applied its default `PREFER`.
+
+Correction (no URL is ever rewritten):
+- Canonical names are PgJDBC's own spellings, matched byte-for-byte: sslmode, sslrootcert,
+  connectTimeout, socketTimeout, tcpKeepAlive, targetServerType, loadBalanceHosts, hostRecheckSeconds.
+  Case variants and percent-encoded names are rejected.
+- Every option may appear at most once; any duplicate (including duplicate sslmode) is rejected.
+- sslmode values must be one of disable, allow, prefer, require, verify-ca, verify-full, spelled literally
+  (no case variants or percent-encoding).
+- Credential/extension parameters (GAS-P0-001) remain rejected. Rejection messages state a reason category
+  only and never echo URL text, option names or values.
+- `JdbcUrls.approvedOptions` returns what was approved (canonical name -> decoded value).
+
+Regression evidence (`JdbcUrlsDriverAgreementTest`) checks the validator against the driver on the
+classpath (`org.postgresql.Driver.parseURL`, `org.postgresql.jdbc.SslMode.of`), not against itself:
+canonical verify-full is accepted and the driver applies VERIFY_FULL; each canonical sslmode agrees;
+SSLMODE / SslMode / ssl%6dode / %73slmode variants and duplicate sslmode combinations are rejected while
+the test records the driver's divergent effective mode; non-canonical sslmode values and duplicated
+ordinary options are rejected; credential parameters remain rejected without echo; a URL using every
+permitted canonical option is accepted and the driver's value for every approved option equals the
+approved value.
 
 ## GAS-P0-002: lexical checks versus physical snapshots
 
