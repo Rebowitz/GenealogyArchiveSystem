@@ -49,7 +49,7 @@ public final class SchemaMigrator {
                 .validateMigrationNaming(true)
                 .validateOnMigrate(true)
                 // Never ignore unknown ("future"), missing or failed migrations: report them.
-                .ignoreMigrationPatterns()
+                .ignoreMigrationPatterns(new String[0])
                 .outOfOrder(false)
                 .baselineOnMigrate(false)
                 .cleanDisabled(true)

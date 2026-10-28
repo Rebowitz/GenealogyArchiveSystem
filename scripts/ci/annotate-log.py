@@ -9,6 +9,7 @@ import sys
 label = sys.argv[1]
 MAX_ANNOTATIONS = 8
 CHUNK = 3500
+SUCCESS_MARKERS = ("ready on port", "BUILD SUCCESS", "SMOKE TEST PASSED", "SERVICE TEST PASSED")
 
 def escape(s: str) -> str:
     return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -20,6 +21,8 @@ for path in sys.argv[2:]:
         continue
     with open(path, encoding="utf-8", errors="replace") as f:
         lines = [ansi.sub("", l.rstrip("\n")) for l in f]
+    if any(marker in l for l in lines for marker in SUCCESS_MARKERS):
+        continue  # this step succeeded; do not bury the real failure in noise
     interesting = [l for l in lines if re.search(r"\[ERROR\]|::error|FAIL|Exception|error:|Error:|expected|Caused by", l)]
     body = "\n".join((interesting or lines)[-150:])
     tail = "\n".join(lines[-40:])
