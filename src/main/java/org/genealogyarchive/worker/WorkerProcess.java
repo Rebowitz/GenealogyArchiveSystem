@@ -65,6 +65,8 @@ public class WorkerProcess implements SmartLifecycle {
         }
         startedAt = core.clock().instant();
         reportPresence();
+        // The lease is renewed every third of its duration while a handler runs (GAS-P1-001); a worker
+        // that stops renewing (crash, kill, lost database) loses the job after one lease interval.
         JobRunner runner = new JobRunner(core.jobRepository(), core.clock(), workerId, lease, handlers);
         log.info("Worker {} started for archive {}; schema version {}; job kinds: {}", workerId,
                 status.archive().archiveId(), status.schema().currentVersion(),
@@ -95,6 +97,8 @@ public class WorkerProcess implements SmartLifecycle {
             } while (!stopSignal.await(pollInterval.toMillis(), TimeUnit.MILLISECONDS));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } finally {
+            runner.close();
         }
         try {
             core.workerPresence().remove(workerId);

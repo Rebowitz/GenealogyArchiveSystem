@@ -9,6 +9,7 @@ import org.genealogyarchive.boot.CoreServices;
 import org.genealogyarchive.boot.ProcessLauncher;
 import org.genealogyarchive.config.ConfigValidationException;
 import org.genealogyarchive.config.InstallationConfig;
+import org.genealogyarchive.config.TransportSecurity;
 import org.genealogyarchive.config.JdbcUrls;
 import org.genealogyarchive.config.InstallationConfigLoader;
 import org.genealogyarchive.data.DataSources;
@@ -154,11 +155,18 @@ public final class Cli {
     }
 
     private Outcome checkConfig(InstallationConfig config) {
+        List<String> transportProblems = TransportSecurity.problems(config.server());
+        if (!transportProblems.isEmpty()) {
+            throw new ConfigValidationException(transportProblems);
+        }
         out.println("Installation configuration is valid: " + config.sourceFile());
         out.println("  database.url      " + JdbcUrls.diagnostic(config.database().jdbcUrl()));
         out.println("  database.username " + config.database().username());
         out.println("  database.password " + config.database().password()); // masked by Secret.toString()
         out.println("  server            " + config.server().bindAddress() + ":" + config.server().port());
+        if (!config.server().tlsReverseProxyAddresses().isEmpty()) {
+            out.println("  tlsReverseProxy   " + String.join(", ", config.server().tlsReverseProxyAddresses()));
+        }
         out.println("  logging           " + config.logging().format()
                 + config.logging().directory().map(d -> " -> " + d).orElse(" -> console only"));
         if (config.storageRoots().isEmpty()) {

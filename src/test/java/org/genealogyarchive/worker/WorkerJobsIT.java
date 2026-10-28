@@ -6,7 +6,7 @@ import org.genealogyarchive.access.Role;
 import org.genealogyarchive.boot.ProcessLauncher;
 import org.genealogyarchive.data.BackgroundJobRepository;
 import org.genealogyarchive.data.DataSources;
-import org.genealogyarchive.jobs.Job;
+import org.genealogyarchive.jobs.JobExecution;
 import org.genealogyarchive.jobs.JobHandler;
 import org.genealogyarchive.jobs.JobState;
 import org.genealogyarchive.migration.SchemaMigrator;
@@ -55,7 +55,7 @@ class WorkerJobsIT {
                 }
 
                 @Override
-                public void run(Job job) {
+                public void run(JobExecution execution) {
                     // no side effects: completion is the observable result
                 }
             };

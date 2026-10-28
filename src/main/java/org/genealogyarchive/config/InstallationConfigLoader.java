@@ -52,7 +52,8 @@ public final class InstallationConfigLoader {
     private static final Set<String> ROOT_KEYS = Set.of("database", "server", "logging", "storageRoots");
     private static final Set<String> DATABASE_KEYS =
             Set.of("url", "username", "password", "passwordEnv", "passwordFile", "maxPoolSize");
-    private static final Set<String> SERVER_KEYS = Set.of("bindAddress", "port");
+    private static final Set<String> SERVER_KEYS = Set.of("bindAddress", "port", "tlsReverseProxy");
+    private static final Set<String> TLS_PROXY_KEYS = Set.of("addresses");
     private static final Set<String> LOGGING_KEYS = Set.of("format", "directory");
 
     private InstallationConfigLoader() {
@@ -186,7 +187,36 @@ public final class InstallationConfigLoader {
         String bind = p.string(server, "bindAddress", "server.bindAddress", false);
         // Port 0 (ephemeral) is permitted for tests and diagnostics.
         int port = p.integer(server, "port", "server.port", DEFAULT_PORT, 0, 65535);
-        return new ServerSettings(bind != null ? bind : DEFAULT_BIND_ADDRESS, port);
+        List<String> proxies = parseTlsReverseProxy(p.section(server, "tlsReverseProxy", false), p);
+        return new ServerSettings(bind != null ? bind : DEFAULT_BIND_ADDRESS, port, proxies);
+    }
+
+    /**
+     * {@code server.tlsReverseProxy.addresses}: the exact IP addresses of the TLS reverse proxy in front
+     * of this server (GAS-P1-002). Only requests from these addresses may assert HTTPS via
+     * {@code X-Forwarded-Proto}. Whether the overall deployment is acceptable is decided by
+     * {@link TransportSecurity} when the web application is checked or started.
+     */
+    private static List<String> parseTlsReverseProxy(Map<String, Object> proxy, Problems p) {
+        if (proxy == null) {
+            return List.of();
+        }
+        p.rejectUnknown(proxy, "server.tlsReverseProxy", TLS_PROXY_KEYS);
+        Object value = proxy.get("addresses");
+        if (!(value instanceof List<?> list) || list.isEmpty()) {
+            p.add("server.tlsReverseProxy.addresses must be a non-empty list of IP addresses");
+            return List.of();
+        }
+        List<String> addresses = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof String text) || text.isBlank()) {
+                p.add("server.tlsReverseProxy.addresses entries must be IP addresses written as text");
+                return List.of();
+            }
+            addresses.add(text.strip());
+        }
+        TransportSecurity.proxyAddressProblems(addresses).forEach(p::add);
+        return addresses;
     }
 
     private static LoggingSettings parseLogging(Map<String, Object> logging, Problems p) {

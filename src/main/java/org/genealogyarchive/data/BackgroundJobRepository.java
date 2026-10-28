@@ -18,17 +18,22 @@ import java.util.UUID;
 /**
  * background_job rows (V0006): technical scheduling state for the worker. Not Archival Operation
  * History. Claiming uses FOR UPDATE SKIP LOCKED so concurrent workers never take the same job.
+ * <p>
+ * Lease ownership (GAS-P1-001): each claim issues a fresh {@code lease_token}. Renewal and completion
+ * require that token and an unexpired lease. Lease times are compared with the database clock
+ * ({@code clock_timestamp()}), so workers on hosts with different clocks agree on expiry.
  */
 public final class BackgroundJobRepository {
 
     private static final String COLUMNS = """
             job_id, kind, state, payload::text AS payload, attempts, max_attempts, run_after, lease_owner,
-            lease_until, last_error, created_at, updated_at, finished_at""";
+            lease_token, lease_until, last_error, created_at, updated_at, finished_at""";
 
     private static final RowMapper<Job> JOB = (rs, n) -> new Job(
             Rows.uuid(rs, "job_id"), rs.getString("kind"), JobState.valueOf(rs.getString("state")),
             rs.getString("payload"), rs.getInt("attempts"), rs.getInt("max_attempts"),
-            Rows.instant(rs, "run_after"), Rows.uuid(rs, "lease_owner"), Rows.instant(rs, "lease_until"),
+            Rows.instant(rs, "run_after"), Rows.uuid(rs, "lease_owner"), Rows.uuid(rs, "lease_token"),
+            Rows.instant(rs, "lease_until"),
             rs.getString("last_error"), Rows.instant(rs, "created_at"), Rows.instant(rs, "updated_at"),
             Rows.instant(rs, "finished_at"));
 
@@ -76,15 +81,16 @@ public final class BackgroundJobRepository {
     public int failExpiredWithoutAttemptsLeft(Instant now) {
         return jdbc.sql("""
                 UPDATE gas.background_job
-                   SET state = 'FAILED', lease_owner = NULL, lease_until = NULL, finished_at = :now, updated_at = :now,
-                       last_error = 'The worker stopped before the job finished and no attempts remain.'
-                 WHERE state = 'RUNNING' AND lease_until < :now AND attempts >= max_attempts
+                   SET state = 'FAILED', lease_owner = NULL, lease_token = NULL, lease_until = NULL, finished_at = :now, updated_at = :now,
+                       last_error = 'The worker stopped or lost its lease before the job finished and no attempts remain.'
+                 WHERE state = 'RUNNING' AND lease_until < clock_timestamp() AND attempts >= max_attempts
                 """).param("now", Rows.param(now)).update();
     }
 
     /**
      * Claims one runnable job of the given kinds: queued and due, or running with an expired lease
-     * (recovery after restart, OP-001). Increments attempts and takes a lease.
+     * (recovery after a worker was lost, OP-001). Increments attempts and takes a lease with a
+     * fresh token. A lease that its owner keeps renewing never expires, so it is never reclaimed here.
      */
     public Optional<Job> claim(Collection<String> kinds, UUID workerId, Instant now, Duration lease) {
         if (kinds.isEmpty()) {
@@ -95,44 +101,64 @@ public final class BackgroundJobRepository {
                     SELECT job_id FROM gas.background_job
                      WHERE kind IN (:kinds)
                        AND attempts < max_attempts
-                       AND ((state = 'QUEUED' AND run_after <= :now) OR (state = 'RUNNING' AND lease_until < :now))
+                       AND ((state = 'QUEUED' AND run_after <= :now) OR (state = 'RUNNING' AND lease_until < clock_timestamp()))
                      ORDER BY run_after, job_id
                      LIMIT 1
                      FOR UPDATE SKIP LOCKED)
                 UPDATE gas.background_job j
-                   SET state = 'RUNNING', attempts = j.attempts + 1, lease_owner = :worker,
-                       lease_until = :leaseUntil, updated_at = :now
+                   SET state = 'RUNNING', attempts = j.attempts + 1, lease_owner = :worker, lease_token = :token,
+                       lease_until = clock_timestamp() + make_interval(secs => CAST(:leaseMillis AS double precision) / 1000),
+                       updated_at = :now
                   FROM next
                  WHERE j.job_id = next.job_id
                 RETURNING j.job_id
                 """)
                 .param("kinds", List.copyOf(kinds)).param("now", Rows.param(now)).param("worker", workerId)
-                .param("leaseUntil", Rows.param(now.plus(lease)))
+                .param("token", UUID.randomUUID()).param("leaseMillis", lease.toMillis())
                 .query(UUID.class).optional()
                 .flatMap(this::findById);
     }
 
-    /** @return true if this worker still held the lease and the job is now SUCCEEDED */
-    public boolean succeed(UUID jobId, UUID workerId, Instant now) {
+    /**
+     * Extends the lease of the attempt holding {@code leaseToken}, only while that lease is still
+     * unexpired. A refused renewal means ownership is lost for good: the token is never reissued.
+     *
+     * @return true if the lease was extended
+     */
+    public boolean renew(UUID jobId, UUID leaseToken, Duration lease, Instant now) {
         return jdbc.sql("""
                 UPDATE gas.background_job
-                   SET state = 'SUCCEEDED', lease_owner = NULL, lease_until = NULL, last_error = NULL,
-                       finished_at = :now, updated_at = :now
-                 WHERE job_id = :id AND state = 'RUNNING' AND lease_owner = :worker
-                """).param("id", jobId).param("worker", workerId).param("now", Rows.param(now)).update() == 1;
+                   SET lease_until = clock_timestamp() + make_interval(secs => CAST(:leaseMillis AS double precision) / 1000),
+                       updated_at = :now
+                 WHERE job_id = :id AND state = 'RUNNING' AND lease_token = :token AND lease_until >= clock_timestamp()
+                """).param("id", jobId).param("token", leaseToken).param("leaseMillis", lease.toMillis())
+                .param("now", Rows.param(now)).update() == 1;
     }
 
-    /** Records a failed attempt: re-queued after {@code retryAt} if attempts remain, otherwise FAILED. */
-    public boolean fail(UUID jobId, UUID workerId, String error, Instant now, Instant retryAt) {
+    /** @return true if this attempt still held an unexpired lease and the job is now SUCCEEDED */
+    public boolean succeed(UUID jobId, UUID leaseToken, Instant now) {
+        return jdbc.sql("""
+                UPDATE gas.background_job
+                   SET state = 'SUCCEEDED', lease_owner = NULL, lease_token = NULL, lease_until = NULL, last_error = NULL,
+                       finished_at = :now, updated_at = :now
+                 WHERE job_id = :id AND state = 'RUNNING' AND lease_token = :token AND lease_until >= clock_timestamp()
+                """).param("id", jobId).param("token", leaseToken).param("now", Rows.param(now)).update() == 1;
+    }
+
+    /**
+     * Records a failed attempt: re-queued after {@code retryAt} if attempts remain, otherwise FAILED.
+     * Like {@link #succeed}, accepted only from the attempt holding an unexpired lease.
+     */
+    public boolean fail(UUID jobId, UUID leaseToken, String error, Instant now, Instant retryAt) {
         return jdbc.sql("""
                 UPDATE gas.background_job
                    SET state = CASE WHEN attempts < max_attempts THEN 'QUEUED' ELSE 'FAILED' END,
                        run_after = CASE WHEN attempts < max_attempts THEN :retryAt ELSE run_after END,
                        finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE :now END,
-                       lease_owner = NULL, lease_until = NULL, last_error = :error, updated_at = :now
-                 WHERE job_id = :id AND state = 'RUNNING' AND lease_owner = :worker
+                       lease_owner = NULL, lease_token = NULL, lease_until = NULL, last_error = :error, updated_at = :now
+                 WHERE job_id = :id AND state = 'RUNNING' AND lease_token = :token AND lease_until >= clock_timestamp()
                 """)
-                .param("id", jobId).param("worker", workerId).param("error", error)
+                .param("id", jobId).param("token", leaseToken).param("error", error)
                 .param("now", Rows.param(now)).param("retryAt", Rows.param(retryAt))
                 .update() == 1;
     }

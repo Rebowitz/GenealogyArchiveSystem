@@ -69,10 +69,30 @@ class BackgroundJobIT {
             }
 
             @Override
-            public void run(Job job) throws Exception {
-                action.run(job);
+            public void run(JobExecution execution) throws Exception {
+                action.run(execution.job());
             }
         };
+    }
+
+    /** A handler that sees its {@link JobExecution} (lease state). */
+    private static JobHandler executionHandler(String kind, ExecutionAction action) {
+        return new JobHandler() {
+            @Override
+            public String kind() {
+                return kind;
+            }
+
+            @Override
+            public void run(JobExecution execution) throws Exception {
+                action.run(execution);
+            }
+        };
+    }
+
+    @FunctionalInterface
+    interface ExecutionAction {
+        void run(JobExecution execution) throws Exception;
     }
 
     @FunctionalInterface
@@ -138,7 +158,7 @@ class BackgroundJobIT {
         UUID id = core.jobs().enqueue("test.recover", "{}", 3);
         // Worker A claims the job and then "crashes" (never reports completion).
         UUID workerA = GlobalIds.newId();
-        assertThat(repo.claim(List.of("test.recover"), workerA, Clock.systemUTC().instant(), Duration.ofMinutes(5))).isPresent();
+        Job claimedByA = repo.claim(List.of("test.recover"), workerA, Clock.systemUTC().instant(), Duration.ofMinutes(5)).orElseThrow();
         assertThat(job(id).state()).isEqualTo(JobState.RUNNING);
         assertThat(runner(handler("test.recover", j -> { })).runOne())
                 .as("an unexpired lease is respected").isFalse();
@@ -150,7 +170,7 @@ class BackgroundJobIT {
         assertThat(runs).hasValue(1);
         assertThat(job(id).state()).isEqualTo(JobState.SUCCEEDED);
         assertThat(job(id).attempts()).isEqualTo(2);
-        assertThat(repo.succeed(id, workerA, Clock.systemUTC().instant()))
+        assertThat(repo.succeed(id, claimedByA.leaseToken(), Clock.systemUTC().instant()))
                 .as("the crashed worker can no longer complete the job").isFalse();
     }
 
@@ -208,6 +228,225 @@ class BackgroundJobIT {
         assertThat(executions).hasSize(40);
         assertThat(executions.values()).allMatch(n -> n.get() == 1);
         assertThat(ids).allMatch(id -> job(id).state() == JobState.SUCCEEDED);
+    }
+
+    // ---- GAS-P1-001: lease ownership during live execution. Short real leases, so expiry and renewal
+    // actually happen during the test rather than being inferred from the 5-minute production lease.
+
+    private static final Duration SHORT_LEASE = Duration.ofSeconds(2);
+    private static final Duration RENEW_EVERY = Duration.ofMillis(250);
+
+    private JobRunner shortLeaseRunner(Duration renewInterval, JobHandler... handlers) {
+        return new JobRunner(repo, Clock.systemUTC(), GlobalIds.newId(), SHORT_LEASE, renewInterval, List.of(handlers));
+    }
+
+    /** Polls until {@code condition} holds; fails the test after {@code timeout}. */
+    private static void awaitTrue(Duration timeout, java.util.function.BooleanSupplier condition) throws InterruptedException {
+        long end = System.nanoTime() + timeout.toNanos();
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() > end) {
+                throw new AssertionError("condition not met within " + timeout);
+            }
+            Thread.sleep(50);
+        }
+    }
+
+    @Test
+    void leaseIsRenewedWhileAHealthyWorkerRunsAHandlerLongerThanTheLease() throws Exception {
+        UUID id = core.jobs().enqueue("test.long", "{}", 3);
+        CountDownLatch release = new CountDownLatch(1);
+        List<Boolean> leaseHeldWhileRunning = new java.util.concurrent.CopyOnWriteArrayList<>();
+        JobRunner owner = shortLeaseRunner(RENEW_EVERY, executionHandler("test.long", e -> {
+            assertThat(release.await(1, TimeUnit.MINUTES)).isTrue();
+            leaseHeldWhileRunning.add(e.leaseHeld());
+        }));
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            var result = pool.submit((java.util.concurrent.Callable<Boolean>) owner::runOne);
+            awaitTrue(Duration.ofSeconds(30), () -> job(id).state() == JobState.RUNNING);
+            java.time.Instant firstLeaseEnd = job(id).leaseUntil();
+            Thread.sleep(SHORT_LEASE.multipliedBy(2).toMillis()); // well past the original lease end
+
+            Job during = job(id);
+            assertThat(during.state()).isEqualTo(JobState.RUNNING);
+            assertThat(during.leaseUntil()).as("the owner renewed its lease").isAfter(firstLeaseEnd);
+            assertThat(during.leaseUntil()).as("the lease is still current").isAfter(firstLeaseEnd.plus(SHORT_LEASE));
+
+            release.countDown();
+            assertThat(result.get(1, TimeUnit.MINUTES)).isTrue();
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+            owner.close();
+        }
+        assertThat(leaseHeldWhileRunning).containsExactly(true);
+        assertThat(job(id).state()).isEqualTo(JobState.SUCCEEDED);
+        assertThat(job(id).attempts()).isEqualTo(1);
+    }
+
+    @Test
+    void competingWorkerDoesNotClaimOrRunAJobWhoseOwnerIsRenewingItsLease() throws Exception {
+        UUID id = core.jobs().enqueue("test.exclusive", "{}", 3);
+        AtomicInteger executions = new AtomicInteger();
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maxActive = new AtomicInteger();
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutionAction body = e -> {
+            executions.incrementAndGet();
+            maxActive.accumulateAndGet(active.incrementAndGet(), Math::max);
+            try {
+                assertThat(release.await(1, TimeUnit.MINUTES)).isTrue();
+            } finally {
+                active.decrementAndGet();
+            }
+        };
+        JobRunner owner = shortLeaseRunner(RENEW_EVERY, executionHandler("test.exclusive", body));
+        JobRunner competitor = shortLeaseRunner(RENEW_EVERY, executionHandler("test.exclusive", body));
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            var result = pool.submit((java.util.concurrent.Callable<Boolean>) owner::runOne);
+            awaitTrue(Duration.ofSeconds(30), () -> executions.get() == 1);
+
+            // The competitor keeps trying for three lease intervals.
+            long end = System.nanoTime() + SHORT_LEASE.multipliedBy(3).toNanos();
+            int competitorClaims = 0;
+            while (System.nanoTime() < end) {
+                if (competitor.runOne()) {
+                    competitorClaims++;
+                }
+                Thread.sleep(100);
+            }
+            assertThat(competitorClaims).as("competing worker claimed a live job").isZero();
+
+            release.countDown();
+            assertThat(result.get(1, TimeUnit.MINUTES)).isTrue();
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+            owner.close();
+            competitor.close();
+        }
+        assertThat(executions).as("handler executions").hasValue(1);
+        assertThat(maxActive).as("concurrent handler executions").hasValue(1);
+        assertThat(job(id).state()).isEqualTo(JobState.SUCCEEDED);
+        assertThat(job(id).attempts()).isEqualTo(1);
+    }
+
+    @Test
+    void jobAbandonedByAWorkerThatStoppedRenewingIsRecoveredAfterTheShortLeaseExpires() throws Exception {
+        UUID id = core.jobs().enqueue("test.abandoned", "{}", 3);
+        // The first worker claims and then disappears: nothing renews its lease.
+        Job abandoned = repo.claim(List.of("test.abandoned"), GlobalIds.newId(), Clock.systemUTC().instant(), SHORT_LEASE)
+                .orElseThrow();
+        AtomicInteger runs = new AtomicInteger();
+        JobRunner recoverer = shortLeaseRunner(RENEW_EVERY, handler("test.abandoned", j -> runs.incrementAndGet()));
+        try {
+            assertThat(recoverer.runOne()).as("lease not yet expired").isFalse();
+            awaitTrue(Duration.ofSeconds(30), recoverer::runOne);
+        } finally {
+            recoverer.close();
+        }
+        assertThat(runs).hasValue(1);
+        assertThat(job(id).state()).isEqualTo(JobState.SUCCEEDED);
+        assertThat(job(id).attempts()).isEqualTo(2);
+        assertThat(repo.succeed(id, abandoned.leaseToken(), Clock.systemUTC().instant())).isFalse();
+    }
+
+    @Test
+    void afterOwnershipTransfersTheStaleAttemptCanNeitherRenewNorRecordAnOutcome() throws Exception {
+        UUID id = core.jobs().enqueue("test.transfer", "{}", 5);
+        Job stale = repo.claim(List.of("test.transfer"), GlobalIds.newId(), Clock.systemUTC().instant(), Duration.ofMillis(300))
+                .orElseThrow();
+        Job[] current = new Job[1];
+        awaitTrue(Duration.ofSeconds(30), () -> {
+            current[0] = repo.claim(List.of("test.transfer"), GlobalIds.newId(), Clock.systemUTC().instant(), Duration.ofMinutes(5))
+                    .orElse(null);
+            return current[0] != null;
+        });
+        assertThat(current[0].leaseToken()).isNotEqualTo(stale.leaseToken());
+        java.time.Instant now = Clock.systemUTC().instant();
+
+        assertThat(repo.renew(id, stale.leaseToken(), Duration.ofMinutes(5), now)).as("stale renewal").isFalse();
+        assertThat(repo.succeed(id, stale.leaseToken(), now)).as("stale success").isFalse();
+        assertThat(repo.fail(id, stale.leaseToken(), "stale", now, now)).as("stale failure").isFalse();
+        Job after = job(id);
+        assertThat(after.state()).isEqualTo(JobState.RUNNING);
+        assertThat(after.leaseToken()).isEqualTo(current[0].leaseToken());
+        assertThat(after.lastError()).isNull();
+
+        assertThat(repo.renew(id, current[0].leaseToken(), Duration.ofMinutes(5), now)).as("current owner renews").isTrue();
+        assertThat(repo.succeed(id, current[0].leaseToken(), now)).isTrue();
+    }
+
+    @Test
+    void workerThatStopsRenewingLosesTheJobObservesTheLossAndRecordsNoOutcome() throws Exception {
+        UUID id = core.jobs().enqueue("test.stalled", "{}", 3);
+        CountDownLatch recovered = new CountDownLatch(1);
+        AtomicInteger recoveredRuns = new AtomicInteger();
+        List<Boolean> staleSawLease = new java.util.concurrent.CopyOnWriteArrayList<>();
+        // Renewal interval far beyond the lease: this worker is alive but stalled (e.g. paused or cut off
+        // from the database), so its lease genuinely expires while its handler is still running.
+        JobRunner stalled = shortLeaseRunner(Duration.ofMinutes(10), executionHandler("test.stalled", e -> {
+            assertThat(recovered.await(1, TimeUnit.MINUTES)).isTrue();
+            staleSawLease.add(e.leaseHeld());
+            throw new IllegalStateException("stale attempt reports a failure");
+        }));
+        JobRunner recoverer = shortLeaseRunner(RENEW_EVERY, handler("test.stalled", j -> recoveredRuns.incrementAndGet()));
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            var stalledResult = pool.submit((java.util.concurrent.Callable<Boolean>) stalled::runOne);
+            awaitTrue(Duration.ofSeconds(30), () -> job(id).state() == JobState.RUNNING);
+            awaitTrue(Duration.ofSeconds(30), recoverer::runOne);
+            recovered.countDown();
+            assertThat(stalledResult.get(1, TimeUnit.MINUTES)).isTrue();
+        } finally {
+            recovered.countDown();
+            pool.shutdownNow();
+            stalled.close();
+            recoverer.close();
+        }
+        assertThat(staleSawLease).as("stale attempt sees it no longer owns the job").containsExactly(false);
+        assertThat(recoveredRuns).hasValue(1);
+        Job finalState = job(id);
+        assertThat(finalState.state()).as("the stale attempt's failure was not recorded").isEqualTo(JobState.SUCCEEDED);
+        assertThat(finalState.lastError()).isNull();
+        assertThat(finalState.attempts()).isEqualTo(2);
+    }
+
+    @Test
+    void exhaustedAttemptsFailAnAbandonedJobButNotALiveOneRunningPastTheOriginalLease() throws Exception {
+        // Live: one attempt allowed, handler runs for three lease intervals while another worker sweeps.
+        UUID live = core.jobs().enqueue("test.live-once", "{}", 1);
+        // Abandoned: one attempt allowed, claimed by a worker that then disappears.
+        UUID abandoned = core.jobs().enqueue("test.abandoned-once", "{}", 1);
+        repo.claim(List.of("test.abandoned-once"), GlobalIds.newId(), Clock.systemUTC().instant(), SHORT_LEASE).orElseThrow();
+
+        CountDownLatch release = new CountDownLatch(1);
+        JobRunner owner = shortLeaseRunner(RENEW_EVERY, handler("test.live-once", j ->
+                assertThat(release.await(1, TimeUnit.MINUTES)).isTrue()));
+        JobRunner sweeper = shortLeaseRunner(RENEW_EVERY, handler("test.unrelated", j -> { }));
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            var result = pool.submit((java.util.concurrent.Callable<Boolean>) owner::runOne);
+            awaitTrue(Duration.ofSeconds(30), () -> job(live).state() == JobState.RUNNING);
+            long end = System.nanoTime() + SHORT_LEASE.multipliedBy(3).toNanos();
+            while (System.nanoTime() < end) {
+                sweeper.runOne(); // runs the expired-lease sweep each time
+                Thread.sleep(100);
+            }
+            assertThat(job(live).state()).as("live job past its original lease").isEqualTo(JobState.RUNNING);
+            assertThat(job(abandoned).state()).as("abandoned job with no attempts left").isEqualTo(JobState.FAILED);
+            assertThat(job(abandoned).lastError()).contains("worker stopped");
+
+            release.countDown();
+            assertThat(result.get(1, TimeUnit.MINUTES)).isTrue();
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+            owner.close();
+            sweeper.close();
+        }
+        assertThat(job(live).state()).isEqualTo(JobState.SUCCEEDED);
     }
 
     private void expireLease(UUID id) throws Exception {

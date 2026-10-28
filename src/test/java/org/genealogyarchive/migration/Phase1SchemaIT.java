@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -52,11 +53,29 @@ class Phase1SchemaIT {
         SchemaMigrator.MigrationReport report = current.migrate();
 
         assertThat(report.fromVersion()).isEqualTo("0001");
-        assertThat(report.migrationsApplied()).isEqualTo(6);
+        assertThat(report.migrationsApplied()).as("V0002-V0008").isEqualTo(7);
         assertThat(current.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
         assertThat(new PostMigrationValidator(ds, current).validate()).isEmpty();
         assertThat(ArchiveFixtures.services(ds).archives().current())
                 .as("upgrading never invents an Archive ID; init-archive is explicit").isEmpty();
+    }
+
+    @Test
+    void jobRunningBeforeTheLeaseTokenMigrationGetsAnUnheldTokenAndRemainsRecoverable() throws Exception {
+        SchemaMigrator.upTo(ds, "0007").migrate();
+        try (Connection c = db.connect(); Statement s = c.createStatement()) {
+            s.execute("""
+                    INSERT INTO gas.background_job (job_id, kind, state, max_attempts, run_after, lease_owner, lease_until, attempts)
+                    VALUES ('0192f0c4-2222-7000-8000-000000000001', 'test.legacy', 'RUNNING', 3, now(), gen_random_uuid(),
+                            now() - interval '1 minute', 1)""");
+        }
+        new SchemaMigrator(ds).migrate();
+        var repo = new org.genealogyarchive.data.BackgroundJobRepository(ds);
+        UUID id = UUID.fromString("0192f0c4-2222-7000-8000-000000000001");
+        assertThat(repo.findById(id).orElseThrow().leaseToken()).isNotNull();
+        var claimed = repo.claim(List.of("test.legacy"), UUID.randomUUID(), java.time.Instant.now(), java.time.Duration.ofMinutes(5));
+        assertThat(claimed).as("expired legacy lease is recovered").isPresent();
+        assertThat(claimed.get().attempts()).isEqualTo(2);
     }
 
     @Test

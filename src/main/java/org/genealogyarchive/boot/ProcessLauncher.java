@@ -1,6 +1,7 @@
 package org.genealogyarchive.boot;
 
 import org.genealogyarchive.config.InstallationConfig;
+import org.genealogyarchive.config.TransportSecurity;
 import org.genealogyarchive.config.InstallationConfig.LogFormat;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
@@ -32,6 +33,10 @@ public final class ProcessLauncher {
     public static ConfigurableApplicationContext startWeb(InstallationConfig config, Map<String, Object> overrides) {
         Map<String, Object> web = new LinkedHashMap<>(WEB_PROPERTIES);
         web.putAll(overrides);
+        // GAS-P1-002: refuse, before anything listens, a deployment that would expose password
+        // sign-in over plain HTTP on a network. WebSecurityConfiguration checks the effective value again.
+        Object bind = web.getOrDefault("server.address", config.server().bindAddress());
+        TransportSecurity.forDeployment(bind == null ? null : bind.toString(), config.server().tlsReverseProxyAddresses());
         return start(WebApplication.class, WebApplicationType.SERVLET, WEB, config, web);
     }
 
@@ -75,6 +80,13 @@ public final class ProcessLauncher {
         p.put("gas.process", process);
         p.put("server.address", config.server().bindAddress());
         p.put("server.port", config.server().port());
+        // Never let the container rewrite the client address or scheme from forwarding headers; the
+        // narrowly defined proxy trust lives in TransportSecurity (GAS-P1-002).
+        p.put("server.forward-headers-strategy", "none");
+        if (!config.server().tlsReverseProxyAddresses().isEmpty()) {
+            // Browsers reach the archive over HTTPS at the proxy: the session cookie is HTTPS-only.
+            p.put("server.servlet.session.cookie.secure", "true");
+        }
         boolean json = config.logging().format() == LogFormat.JSON;
         if (json) {
             p.put("logging.structured.format.console", "ecs");
