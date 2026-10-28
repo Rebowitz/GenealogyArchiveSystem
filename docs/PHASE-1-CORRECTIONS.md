@@ -180,3 +180,19 @@ exhausted-attempt tests are retained unchanged.
 no transport code changed), concurrent Archive initialization (`ArchiveInitializationConcurrencyIT`),
 Change History atomicity (`ChangeHistoryAtomicityIT`), all accepted Phase 0 tests. No schema change
 (no new migration) and no Phase 2 functionality.
+
+**Files changed (from `3b698a9`):** `data/BackgroundJobRepository.java` (claim `RETURNING` snapshot,
+token/owner verification, delivery test seam), `jobs/JobRunner.java` (pre-invocation lease check),
+`jobs/BackgroundJobIT.java` (+2 tests), `docs/PHASE-1-CORRECTIONS.md`, `docs/architecture/ADR-0008-history-and-jobs.md`.
+
+**CI — corrected code head `15835eaa47ea4b6d8023fd30a5a616a86a9109ed`, run 40777566611:**
+| Job | Tests | Failures | Errors | Skipped | Smoke | Native service |
+|---|---|---|---|---|---|---|
+| ubuntu-24.04 / PostgreSQL 16 | 339 | 0 | 0 | 0 | passed | systemd passed |
+| ubuntu-24.04 / PostgreSQL 18 | 339 | 0 | 0 | 0 | passed | systemd passed |
+| windows-2025 / PostgreSQL 16 | 339 | 0 | 0 | 0 | passed | WinSW passed |
+| windows-2025 / PostgreSQL 18 | 339 | 0 | 0 | 0 | passed | WinSW passed |
+
+337 → 339 (+2 GAS-P1-R01 tests). An intermediate push (`052ce95`, run 40776518070) failed because a Java
+text block dropped the space after `RETURNING`; fixed in `15835ea`. Any later commit is documentation only
+and its CI run is reported in PR #3.
