@@ -1,0 +1,25 @@
+<!--
+  Genealogy Archive System - web application as a Windows service (WinSW v2).
+  install-services.ps1 copies this next to a renamed WinSW executable (GenealogyArchive-Web.exe)
+  and replaces @JAVA@, @APP_DIR@ and @DATA_DIR@.
+  On service stop WinSW sends Ctrl+C, so the JVM shuts down gracefully before the stop timeout.
+-->
+<service>
+  <id>GenealogyArchiveWeb</id>
+  <name>Genealogy Archive System - Web</name>
+  <description>Browser entry point of the Genealogy Archive System.</description>
+  <executable>@JAVA@</executable>
+  <arguments>-jar "@APP_DIR@\genealogy-archive.jar" serve --config="@DATA_DIR@\installation.yml"</arguments>
+  <workingdirectory>@DATA_DIR@</workingdirectory>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <stoptimeout>45 sec</stoptimeout>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <resetfailure>1 hour</resetfailure>
+  <logpath>@DATA_DIR@\logs\service</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

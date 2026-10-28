@@ -1,0 +1,23 @@
+<!--
+  Genealogy Archive System - background worker as a Windows service (WinSW v2).
+  install-services.ps1 copies this next to a renamed WinSW executable (GenealogyArchive-Worker.exe)
+  and replaces @JAVA@, @APP_DIR@ and @DATA_DIR@.
+-->
+<service>
+  <id>GenealogyArchiveWorker</id>
+  <name>Genealogy Archive System - Worker</name>
+  <description>Background worker of the Genealogy Archive System.</description>
+  <executable>@JAVA@</executable>
+  <arguments>-jar "@APP_DIR@\genealogy-archive.jar" worker --config="@DATA_DIR@\installation.yml"</arguments>
+  <workingdirectory>@DATA_DIR@</workingdirectory>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <stoptimeout>45 sec</stoptimeout>
+  <onfailure action="restart" delay="30 sec"/>
+  <resetfailure>1 hour</resetfailure>
+  <logpath>@DATA_DIR@\logs\service</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

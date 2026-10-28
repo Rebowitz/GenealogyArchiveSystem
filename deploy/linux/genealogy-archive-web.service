@@ -1,0 +1,26 @@
+# Genealogy Archive System - web application (systemd).
+# Installed by deploy/linux/install.sh, which replaces @JAVA@ and @APP_DIR@.
+[Unit]
+Description=Genealogy Archive System - web application
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=genealogy-archive
+Group=genealogy-archive
+Environment=GAS_CONFIG=/etc/genealogy-archive/installation.yml
+ExecStart=@JAVA@ -jar @APP_DIR@/genealogy-archive.jar serve
+# 143 = terminated by SIGTERM after a graceful Spring shutdown.
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=45
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

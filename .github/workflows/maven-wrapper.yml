@@ -10,6 +10,10 @@ on:
         description: "Apache Maven version for the wrapper to use"
         required: true
         default: "3.9.11"
+      maven-sha256:
+        description: "Independently verified SHA-256 of the Maven binary zip"
+        required: true
+        default: "0d7125e8c91097b36edb990ea5934e6c68b4440eef4ea96510a0f6815e7eeadb"
 
 permissions:
   contents: write
@@ -17,6 +21,9 @@ permissions:
 jobs:
   wrapper:
     runs-on: ubuntu-24.04
+    env:
+      MAVEN_VERSION: ${{ inputs.maven-version }}
+      MAVEN_SHA256: ${{ inputs.maven-sha256 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -25,8 +32,12 @@ jobs:
           java-version: "21"
       - name: Generate wrapper (script-only, no binary jar committed)
         run: |
+          [[ "$MAVEN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$MAVEN_SHA256" =~ ^[a-f0-9]{64}$ ]]
           mvn -B -N org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper \
-            -Dmaven=${{ inputs.maven-version }} -Dtype=only-script
+            -Dmaven="$MAVEN_VERSION" -Dtype=only-script
+          printf 'distributionSha256Sum=%s\n' "$MAVEN_SHA256" >> .mvn/wrapper/maven-wrapper.properties
+          bash mvnw -v
           chmod +x mvnw
           git update-index --add --chmod=+x mvnw || true
       - name: Commit wrapper
@@ -38,6 +49,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "Wrapper already up to date."
           else
-            git commit -m "Update Maven Wrapper to Maven ${{ inputs.maven-version }}"
+            git commit -m "Update Maven Wrapper to Maven $MAVEN_VERSION"
             git push
           fi

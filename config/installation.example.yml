@@ -1,0 +1,40 @@
+# Genealogy Archive System - INSTALLATION configuration (example; contains no real secrets).
+#
+# Installation configuration belongs to THIS host only: database connection, binding, log
+# location and the native root folder of each Storage Volume. It is never part of the archive and
+# never travels in backups, exports or Transfer Packages. Archive configuration (Archive ID,
+# vocabularies, classifications) lives in the archive database instead (Phase 1+).
+#
+# Validate with:  genealogy-archive check-config --config=<this file>
+# Unknown keys are errors. Paths must be absolute for THIS host. Quote Windows paths with single
+# quotes so backslashes stay literal, e.g.  directory: 'C:\ProgramData\GenealogyArchive\logs'
+
+database:
+  url: jdbc:postgresql://localhost:5432/genealogy_archive
+  username: genealogy_archive
+  # The password is NEVER written in this file. Choose one:
+  #   (a) environment variable GAS_DB_PASSWORD (default), or passwordEnv: <OTHER_VARIABLE_NAME>
+  #   (b) a protected one-line file readable only by the service account:
+  # passwordFile: '/etc/genealogy-archive/db-password'                      # Linux
+  # passwordFile: 'C:\ProgramData\GenealogyArchive\secrets\db-password'     # Windows
+  maxPoolSize: 10
+
+server:
+  # 127.0.0.1 = this computer only (default). Use 0.0.0.0 or a LAN address to serve browsers on
+  # the local network (UP-002) - do that deliberately, behind your firewall.
+  bindAddress: 127.0.0.1
+  port: 8080
+
+logging:
+  # json (default, one JSON object per line) or text.
+  format: json
+  # Optional: also write rolling log files here (console output is always produced).
+  # directory: '/var/log/genealogy-archive'                       # Linux
+  # directory: 'C:\ProgramData\GenealogyArchive\logs'             # Windows
+
+# Storage Volume ID (UUID) -> absolute native root on this host. The ID is the portable identity
+# used in archival data; the path is local. The same volume may be D:\... on a Windows host and
+# /srv/... on a Linux host. The Storage Volume model itself arrives in Phase 1.
+storageRoots: {}
+#  '0192f0c4-1111-7000-8000-000000000001': '/srv/genealogy-archive/primary'     # Linux
+#  '0192f0c4-1111-7000-8000-000000000001': 'D:\GenealogyArchive\primary'        # Windows
