@@ -20,7 +20,10 @@ public record Actor(Kind kind, UUID userId, String label, Role role) {
     public Actor {
         Objects.requireNonNull(kind, "kind");
         Objects.requireNonNull(label, "label");
-        if ((kind == Kind.USER) != (userId != null && role != null)) {
+        boolean valid = kind == Kind.USER
+                ? userId != null && role != null
+                : userId == null && role == null;
+        if (!valid) {
             throw new IllegalArgumentException("A USER actor needs a user ID and role; a SYSTEM actor has neither");
         }
     }
