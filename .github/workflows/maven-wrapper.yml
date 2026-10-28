@@ -1,0 +1,43 @@
+# Generates or upgrades the Maven Wrapper (mvnw, mvnw.cmd, .mvn/wrapper/maven-wrapper.properties)
+# using the official maven-wrapper-plugin, then commits the result.
+# Run manually from the Actions tab when the pinned Maven version should change.
+name: Update Maven Wrapper
+
+on:
+  workflow_dispatch:
+    inputs:
+      maven-version:
+        description: "Apache Maven version for the wrapper to use"
+        required: true
+        default: "3.9.11"
+
+permissions:
+  contents: write
+
+jobs:
+  wrapper:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Generate wrapper (script-only, no binary jar committed)
+        run: |
+          mvn -B -N org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper \
+            -Dmaven=${{ inputs.maven-version }} -Dtype=only-script
+          chmod +x mvnw
+          git update-index --add --chmod=+x mvnw || true
+      - name: Commit wrapper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mvnw mvnw.cmd .mvn/wrapper/maven-wrapper.properties
+          git update-index --chmod=+x mvnw
+          if git diff --cached --quiet; then
+            echo "Wrapper already up to date."
+          else
+            git commit -m "Update Maven Wrapper to Maven ${{ inputs.maven-version }}"
+            git push
+          fi
