@@ -1,0 +1,86 @@
+# Phase 0 cross-platform CI: the SAME test suite on native Windows and Linux runners, against the
+# minimum supported PostgreSQL (16) and the current release (18). Nothing is skipped by platform.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / PostgreSQL ${{ matrix.postgres }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+        postgres: ["16", "18"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Install PostgreSQL ${{ matrix.postgres }} (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/ci/setup-postgres-linux.sh ${{ matrix.postgres }}
+
+      - name: Install PostgreSQL ${{ matrix.postgres }} (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/setup-postgres-windows.ps1 -Version ${{ matrix.postgres }}
+
+      - name: Unit + PostgreSQL integration tests (documented procedure, Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/test.sh
+
+      - name: Unit + PostgreSQL integration tests (documented procedure, Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test.ps1
+
+      - name: Packaged application smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/smoke-test.sh
+
+      - name: Packaged application smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke-test.ps1
+
+      - name: Native service manager test (systemd)
+        if: runner.os == 'Linux'
+        run: sudo -E bash scripts/ci/service-test-linux.sh
+
+      - name: Native service manager test (Windows service via WinSW)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/service-test-windows.ps1
+
+      - name: Test report summary
+        if: always()
+        shell: bash
+        run: $(command -v python3 || command -v python) scripts/ci/test-summary.py "${{ matrix.os }} / PostgreSQL ${{ matrix.postgres }}"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.os }}-pg${{ matrix.postgres }}
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          if-no-files-found: warn

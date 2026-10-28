@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Genealogy Archive System</title>
+    <!-- All assets are local: the application never needs the Internet (UP-001). -->
+    <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+<body>
+<header>
+    <h1>Genealogy Archive System</h1>
+    <p class="subtitle">Foundation (Phase 0). Research features are not yet available.</p>
+</header>
+<main>
+    <section th:class="${status.ready()} ? 'status ok' : 'status problem'">
+        <h2 th:text="${status.ready()} ? 'Archive instance is ready' : 'Archive instance is not ready'">Status</h2>
+        <ul class="messages">
+            <li th:each="m : ${status.schema().messages()}" th:text="${m}">message</li>
+        </ul>
+    </section>
+    <section>
+        <h2>Foundation status</h2>
+        <table>
+            <tr><th>Application version</th><td th:text="${status.applicationVersion()}">-</td></tr>
+            <tr><th>Host platform</th><td th:text="${status.host()} + ' (' + ${status.host().serviceManager()} + ')'">-</td></tr>
+            <tr><th>Database</th>
+                <td th:text="${status.databaseReachable()} ? 'PostgreSQL ' + ${status.databaseVersion()} : 'Unavailable'">-</td></tr>
+            <tr><th>Schema</th>
+                <td th:text="${status.schema().state()} + (${status.schema().currentVersion()} != null ? ' at version ' + ${status.schema().currentVersion()} : '')">-</td></tr>
+            <tr><th>Checked</th><td th:text="${status.checkedAt()}">-</td></tr>
+        </table>
+    </section>
+</main>
+</body>
+</html>

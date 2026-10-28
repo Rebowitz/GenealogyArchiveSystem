@@ -1,0 +1,25 @@
+# Genealogy Archive System - background worker (systemd).
+# Installed by deploy/linux/install.sh, which replaces @JAVA@ and @APP_DIR@.
+[Unit]
+Description=Genealogy Archive System - background worker
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=genealogy-archive
+Group=genealogy-archive
+Environment=GAS_CONFIG=/etc/genealogy-archive/installation.yml
+ExecStart=@JAVA@ -jar @APP_DIR@/genealogy-archive.jar worker
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=45
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
