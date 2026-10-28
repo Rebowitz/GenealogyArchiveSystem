@@ -25,6 +25,9 @@ Installation loading checks lexical root overlap and resolves the nearest existi
 Path.toRealPath, appending any nonexistent suffix. This detects observable aliased/nested roots through
 Linux symlinks and Windows junctions, even when final root directories have not yet been created.
 Permission errors and unresolved existing links fail configuration validation; absent roots are allowed.
+An unavailable Windows drive with no resolvable ancestor also remains valid configuration: its physical
+check is unavailable, not a successful validation. VolumeRoots resolution refuses when that snapshot
+cannot be obtained. A native-host regression protects this offline/unmounted configuration distinction.
 Absolute real paths are temporary validation observations, not persisted archival identities.
 
 VolumeRoots.resolve checks lexical and observable physical containment, including existing links in

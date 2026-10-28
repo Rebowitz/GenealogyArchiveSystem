@@ -233,7 +233,8 @@ public final class InstallationConfigLoader {
         Map<UUID, Path> physical = new LinkedHashMap<>();
         for (Map.Entry<UUID, Path> entry : result.entrySet()) {
             try {
-                physical.put(entry.getKey(), PhysicalPaths.existingAncestorPath(entry.getValue()));
+                PhysicalPaths.existingAncestorPath(entry.getValue())
+                        .ifPresent(observed -> physical.put(entry.getKey(), observed));
             } catch (IOException e) {
                 p.add("storageRoots." + entry.getKey() + ": physical root could not be validated");
             }

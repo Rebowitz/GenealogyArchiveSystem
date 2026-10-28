@@ -269,4 +269,22 @@ class InstallationConfigValidationTest {
             Files.delete(alias);
         }
     }
+
+    @Test
+    void unavailableRootRetainsItsHostLocalConfigurationMeaning() {
+        Path unavailable = temp.resolve("not-yet-mounted/root");
+        if (HostPlatform.current() == HostPlatform.WINDOWS) {
+            unavailable = null;
+            for (char drive = 'Z'; drive >= 'A'; drive--) {
+                Path candidate = Path.of(drive + ":\\");
+                if (Files.notExists(candidate)) { unavailable = candidate.resolve("archive"); break; }
+            }
+            assertThat(unavailable).as("test needs an unused drive letter").isNotNull();
+        }
+        Map<String, Object> config = root(minimalDatabase());
+        UUID id = UUID.fromString("0192f0c4-1111-7000-8000-000000000001");
+        config.put("storageRoots", Map.of(id.toString(), unavailable.toString()));
+        assertThat(InstallationConfigLoader.parse(SOURCE, config, ENV_WITH_PASSWORD).storageRoots())
+                .containsEntry(id, unavailable.normalize());
+    }
 }

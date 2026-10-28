@@ -19,7 +19,7 @@ class PhysicalPathsTest {
         PhysicalPaths.requireContained(root, existing);
         PhysicalPaths.requireContained(root, root.resolve("future/nested/file"));
         assertThat(PhysicalPaths.existingAncestorPath(root.resolve("future")))
-                .isEqualTo(root.toRealPath().resolve("future"));
+                .contains(root.toRealPath().resolve("future"));
     }
 
     @Test
