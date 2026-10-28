@@ -4,7 +4,7 @@ A lightweight, durable archive for genealogical research and the historical evid
 One application codebase runs as independent Archive Instances on **Windows** and **Linux** hosts, with
 **PostgreSQL** as the authoritative database and an ordinary **web browser** as the client.
 
-> **Status: Phase 0 - Foundation.** The technical foundation exists: build, configuration, database
+> **Status: Phase 0 - Foundation, ACCEPTED 2026-10-28 at `f326366` (see [`docs/PHASE-0-ACCEPTANCE.md`](docs/PHASE-0-ACCEPTANCE.md)).** The technical foundation exists: build, configuration, database
 > migrations, web and worker processes, health/readiness, logging, cross-platform path handling, service
 > definitions and CI on both operating systems. **No genealogy or historical research features exist yet**;
 > they arrive in later phases (see [`docs/BUILD-SPEC.md`](docs/BUILD-SPEC.md) s.62).
