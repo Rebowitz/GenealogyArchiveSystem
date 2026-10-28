@@ -27,10 +27,15 @@ jobs:
         postgres: ["16", "18"]
     env:
       LABEL: ${{ matrix.os }} / PostgreSQL ${{ matrix.postgres }}
+    defaults:
+      run:
+        # Explicit bash => 'bash --noprofile --norc -eo pipefail', so a failure piped through tee
+        # still fails the step. (The implicit default shell has no pipefail.)
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
@@ -47,6 +52,7 @@ jobs:
         run: |
           ./scripts/ci/setup-postgres-windows.ps1 -Version ${{ matrix.postgres }} *>&1 | Tee-Object -FilePath ci-postgres.log
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path ci-postgres.log -SimpleMatch 'ready on port' -Quiet)) { exit 1 }
 
       # ---- Fast + Phase-Gate suites via the documented test procedure ---------------------------
       - name: Unit + PostgreSQL integration tests (Linux)
@@ -59,6 +65,7 @@ jobs:
         run: |
           ./scripts/test.ps1 *>&1 | Tee-Object -FilePath ci-build.log
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path ci-build.log -SimpleMatch 'BUILD SUCCESS' -Quiet)) { exit 1 }
 
       # ---- Packaged jar, exactly as an administrator runs it ------------------------------------
       - name: Packaged application smoke test (Linux)
@@ -71,6 +78,7 @@ jobs:
         run: |
           ./scripts/smoke-test.ps1 *>&1 | Tee-Object -FilePath ci-smoke.log
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path ci-smoke.log -SimpleMatch 'SMOKE TEST PASSED' -Quiet)) { exit 1 }
 
       # ---- Native service managers -------------------------------------------------------------
       - name: Native service manager test (systemd)
@@ -83,6 +91,7 @@ jobs:
         run: |
           ./scripts/ci/service-test-windows.ps1 *>&1 | Tee-Object -FilePath ci-service.log
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path ci-service.log -SimpleMatch 'WINDOWS SERVICE TEST PASSED' -Quiet)) { exit 1 }
 
       # ---- Reporting ---------------------------------------------------------------------------
       - name: Annotate failure output

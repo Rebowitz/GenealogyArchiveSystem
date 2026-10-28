@@ -49,5 +49,10 @@ def escape(s: str) -> str:
 
 for name, kind, detail in problems:
     print(f"::error title={escape(label + ' ' + kind + ': ' + name)}::{escape(detail[:3000])}")
+print(f"::notice title={escape(label + ' test totals')}::tests={totals['tests']} failures={totals['failures']} "
+      f"errors={totals['errors']} skipped={totals['skipped']}")
 if totals["tests"] == 0:
-    print(f"::warning title={escape(label)}::No test reports found (build may have failed before tests ran)")
+    print(f"::error title={escape(label)}::No test reports found - the test suite did not run")
+    sys.exit(1)
+if problems or skipped:
+    sys.exit(1)
