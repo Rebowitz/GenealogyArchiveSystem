@@ -191,7 +191,9 @@ class ArchiveIdentityIT {
         }
     }
 
-    private static Actor adminActor() {
-        return Actor.user(GlobalIds.newId(), "admin", Role.ADMINISTRATOR);
+    /** A real Administrator account, so history attribution references an existing user. */
+    private Actor adminActor() {
+        return core.users().create(Actor.commandLine(), "admin", "Admin (test)", Role.ADMINISTRATOR,
+                ArchiveFixtures.PASSWORD).asActor();
     }
 }
