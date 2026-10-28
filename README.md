@@ -92,8 +92,16 @@ Edit it. Rules (all enforced by `check-config`):
   backslashes literal). Linux: `/srv/genealogy-archive/primary`. A path in the other host's style is
   rejected with an explanation.
 - `server.bindAddress` defaults to `127.0.0.1` (this computer only). Password sign-in over plain HTTP on a
-  LAN is **not supported**: built-in TLS arrives in a later phase. To reach the archive from other
-  computers now, keep the loopback binding and put a TLS reverse proxy in front of it (ADR-0007).
+  network is **refused**: with any non-loopback address (including `0.0.0.0` or `::`) `check-config`
+  and `serve` fail, unless a TLS reverse proxy is declared. Built-in TLS arrives in a later phase. To
+  reach the archive from other computers now, put a TLS reverse proxy in front and declare its exact IP
+  address(es); the archive then accepts sign-in only through that proxy over HTTPS (ADR-0007):
+  ```yaml
+  server:
+    bindAddress: 127.0.0.1        # proxy on this computer; use a LAN address only if the proxy is elsewhere
+    tlsReverseProxy:
+      addresses: ['127.0.0.1']    # exact IP literals; the proxy must send X-Forwarded-Proto: https
+  ```
 
 `installation.yml` is git-ignored. Validate it:
 

@@ -21,8 +21,18 @@ Status: Accepted for Phase 1 implementation (owner decision P1-C). Phase 1.
 - **Authorization is enforced in services**, not only in controllers: every service operation takes an
   explicit `Actor` and calls `AccessPolicy.require`. Spring Security is confined to `security`, `web` and
   `boot` (ArchUnit rule). Denials carry no detail.
-- **Exposure**: the default bind address stays loopback. Password sign-in over unprotected HTTP on a LAN is
-  not supported; built-in TLS is a later phase, and a TLS reverse proxy may be used independently.
+- **Exposure (enforced, correction GAS-P1-002)**: `TransportSecurity` decides.
+  - *Deployment*: a loopback bind (`127.0.0.0/8`, `::1`, `localhost`) is accepted. Any other bind -
+    LAN address, host name, `0.0.0.0`, `::`, or no address - makes `check-config` and `serve` fail
+    (exit 2) unless `server.tlsReverseProxy.addresses` lists the proxy's exact IP addresses (literals
+    only: no host names, ranges or wildcards; no DNS).
+  - *Requests* (`TransportSecurityFilter`, before sign-in and sessions): accepted only directly from a
+    loopback address that is not a declared proxy, or from a declared proxy address carrying exactly
+    one `X-Forwarded-Proto: https`. Forwarding headers from any other address are ignored. Only
+    `GET /actuator/health/**` is exempt. The servlet container's own forwarded-header handling is off
+    (`server.forward-headers-strategy=none`), so the peer address cannot be rewritten by headers.
+  - Behind a declared proxy the session cookie is marked `Secure`.
+  - Built-in TLS remains a later phase.
 
 ## Consequences
 - The public home page shows operational readiness only, never archive identity or data.

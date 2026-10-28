@@ -26,10 +26,19 @@ Mutable rows carry `row_version`. Updates use `WHERE row_version = :expected`; a
 
 ## Background jobs
 - `gas.background_job` is a lightweight persistent PostgreSQL job queue (BUILD-SPEC s.47): claimed with
-  `FOR UPDATE SKIP LOCKED`, leased to a worker, retried with exponential backoff (10 s · 2^n, capped at
-  1 h) up to `max_attempts`, then **FAILED visibly** with a bounded error; an Administrator may retry a
-  failed job. Expired leases are recovered. `gas.worker_presence` lets the status view show whether a
-  worker is alive.
+  `FOR UPDATE SKIP LOCKED`, retried with exponential backoff (10 s · 2^n, capped at 1 h) up to
+  `max_attempts`, then **FAILED visibly** with a bounded error; an Administrator may retry a failed job.
+- **Lease ownership (correction GAS-P1-001, V0008)**: each claim issues a fresh `lease_token` for that
+  attempt. While the handler runs, a separate renewal thread in the owning worker extends the lease
+  every third of its duration (production lease 5 min), so a healthy worker keeps a long-running job and
+  no competing worker can reclaim it. `renew`, `succeed` and `fail` require the current token **and** an
+  unexpired lease; lease times use the database clock (`clock_timestamp()`). If renewals stop (crash,
+  kill, lost database connection) the lease expires and another worker reclaims the job with a new
+  token; the stale attempt can then neither renew nor record an outcome, and its handler sees
+  `JobExecution.leaseHeld() == false` (handlers call `requireLease()` before consequential side
+  effects). Jobs with no attempts left are failed only when their lease has genuinely expired.
+  A genuine crash may replay a job; Phase 1 promises no universal exactly-once side effects.
+- `gas.worker_presence` lets the status view show whether a worker is alive.
 - Phase 1 registers **no production job kinds**; unknown kinds wait QUEUED and are counted.
 - The job table is operational plumbing. It is **not** the complete Archival Operation History (P1-E);
   that is designed in a later phase and may reference jobs, but not the reverse.

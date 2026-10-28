@@ -3,6 +3,10 @@
 Prepared by the implementation agent for independent review. **Phase 1 is not accepted** until the
 project owner says so after review. The Phase 1 PR has not been merged.
 
+> **Corrections:** review findings GAS-P1-001 (job lease ownership) and GAS-P1-002 (transport-security
+> boundary) and two evidence-strengthening tests are addressed in [`PHASE-1-CORRECTIONS.md`](PHASE-1-CORRECTIONS.md)
+> (migration V0008; 337 tests per CI job). Figures below describe the originally reviewed head.
+
 ## Baseline and head
 | | |
 |---|---|

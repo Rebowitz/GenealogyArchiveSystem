@@ -20,10 +20,14 @@ database:
   maxPoolSize: 10
 
 server:
-  # 127.0.0.1 = this computer only (default). Use 0.0.0.0 or a LAN address to serve browsers on
-  # the local network (UP-002) - do that deliberately, behind your firewall.
+  # 127.0.0.1 = this computer only (default). Password sign-in over plain HTTP on a network is refused:
+  # a non-loopback address (including 0.0.0.0 or ::) is accepted only with a declared TLS reverse proxy.
   bindAddress: 127.0.0.1
   port: 8080
+  # To serve other computers, put a TLS reverse proxy in front and list its exact IP address(es). The
+  # proxy must send X-Forwarded-Proto: https; requests from any other address cannot claim HTTPS.
+  # tlsReverseProxy:
+  #   addresses: ['127.0.0.1']
 
 logging:
   # json (default, one JSON object per line) or text.
