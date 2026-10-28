@@ -118,3 +118,11 @@ configuration leaking into the worker process; a test assuming flat ECS log keys
   marker table; a `status` command; `storageRoots` in installation configuration keyed by Storage Volume
   UUID before the Storage Volume model exists (needed to prove the path abstraction).
 - No deviations from archival invariants. No later-phase historical semantics were implemented.
+
+## Subsequent audit corrections
+
+This report above records the original implementation run, not acceptance of the corrected head.
+See PHASE-0-CORRECTIONS.md. The two former owner questions are resolved: manual dump plus
+appropriate Storage Volume copy is acceptable until Phase 8; LocalSystem is a Phase 0 dev/CI
+limitation and low-privilege execution must be resolved before Phase 2. The previous no-checksum
+limitation is corrected. Current test names and narrower guarantees are described in the correction notes.

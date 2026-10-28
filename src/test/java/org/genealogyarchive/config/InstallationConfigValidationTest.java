@@ -252,4 +252,21 @@ class InstallationConfigValidationTest {
                 .isInstanceOf(ConfigValidationException.class)
                 .hasMessageContaining("not valid YAML");
     }
+
+    @Test
+    void distinctLexicalRootsAliasingTheSamePhysicalTreeAreRejected() throws Exception {
+        Path actual = Files.createDirectory(temp.resolve("actual"));
+        Path alias = org.genealogyarchive.testsupport.DirectoryLinks.create(temp.resolve("alias"), actual);
+        try {
+            Map<String, Object> roots = new LinkedHashMap<>();
+            roots.put("0192f0c4-1111-7000-8000-000000000001", actual.resolve("future").toString());
+            roots.put("0192f0c4-1111-7000-8000-000000000002", alias.resolve("future/nested").toString());
+            Map<String, Object> config = root(minimalDatabase());
+            config.put("storageRoots", roots);
+            assertThatThrownBy(() -> InstallationConfigLoader.parse(SOURCE, config, ENV_WITH_PASSWORD))
+                    .hasMessageContaining("overlapping roots");
+        } finally {
+            Files.delete(alias);
+        }
+    }
 }

@@ -118,8 +118,10 @@ public final class PortableRelativePath implements Comparable<PortableRelativePa
 
     /**
      * Resolves this path onto a native volume root, segment by segment, using the host's own path
-     * rules (never string concatenation with a separator). The result is guaranteed to lie inside
-     * {@code root}.
+     * rules (never string concatenation with a separator). The result is lexically inside
+     * {@code root}; this pure conversion does not inspect symlinks, junctions or mounts.
+     * VolumeRoots additionally checks existing objects as a snapshot. Phase 2 must also enforce
+     * containment at file access time, including replacement races.
      */
     public Path toNative(Path root) {
         Path normalizedRoot = root.toAbsolutePath().normalize();

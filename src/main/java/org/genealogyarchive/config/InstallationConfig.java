@@ -35,6 +35,15 @@ public record InstallationConfig(
 
     /** PostgreSQL connection settings. The password is held as a masked {@link Secret}. */
     public record DatabaseSettings(String jdbcUrl, String username, Secret password, int maxPoolSize) {
+        public DatabaseSettings {
+            JdbcUrls.requireSafe(jdbcUrl);
+        }
+
+        @Override
+        public String toString() {
+            return "DatabaseSettings[jdbcUrl=" + JdbcUrls.diagnostic(jdbcUrl)
+                    + ", username=" + username + ", password=******, maxPoolSize=" + maxPoolSize + "]";
+        }
     }
 
     /** HTTP listener settings. Default binding is loopback-only; LAN exposure is a deliberate choice. */

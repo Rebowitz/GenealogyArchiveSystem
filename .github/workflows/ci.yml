@@ -41,6 +41,14 @@ jobs:
           java-version: "21"
           cache: maven
 
+      - name: CI evidence guard regression tests
+        run: $(command -v python3 || command -v python) scripts/ci/test-summary-test.py
+
+      - name: Windows XML and artifact-integrity regression tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/service-config-test.ps1
+
       # ---- PostgreSQL --------------------------------------------------------------------------
       - name: Install PostgreSQL ${{ matrix.postgres }} (Linux)
         if: runner.os == 'Linux'

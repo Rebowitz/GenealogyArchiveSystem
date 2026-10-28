@@ -17,4 +17,4 @@ for v in GAS_TEST_DB_URL GAS_TEST_DB_USER GAS_TEST_DB_PASSWORD; do
 done
 [ "$missing" -eq 0 ] || exit 2
 
-exec ./mvnw -B -ntp verify "$@"
+exec ./mvnw -B -ntp clean verify "$@"

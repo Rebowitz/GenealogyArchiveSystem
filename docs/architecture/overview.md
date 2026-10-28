@@ -20,7 +20,7 @@ service. Instances are independent; nothing synchronises between them.
 | Package | Responsibility | May depend on |
 |---|---|---|
 | `domain` | Historical domain model (empty in Phase 0) | nothing application-level, no frameworks |
-| `files` | Portable storage references (`PortableRelativePath`, `StorageLocation`, `VolumeRoots`) | JDK only |
+| `files` | Portable storage references (`PortableRelativePath`, `StorageLocation`, `VolumeRoots`) | JDK; platform snapshot check in VolumeRoots |
 | `platform` | The only OS-aware code: `HostPlatform`, `NativePaths`, `FilesystemCapabilities` | JDK only |
 | `config` | Installation configuration loading/validation, `Secret` | `platform`, SnakeYAML |
 | `data` | All SQL/JDBC: `DataSources`, `PostgresServer`, repositories, `SchemaCatalog` | Spring JDBC, driver |
@@ -61,3 +61,9 @@ Problems are reported, never hidden or auto-repaired (BUILD-SPEC s.2 "fail visib
 - `WorkerProcess` is where the PostgreSQL-backed job loop (`FOR UPDATE SKIP LOCKED`) attaches.
 - `PostMigrationValidator` gains invariant checks for each new table.
 - Local authentication (Spring Security, Argon2/bcrypt) is added within the existing stack.
+
+## Correction boundary
+
+Readiness additionally requires the expected foundation identity marker. The files/platform
+boundary now includes a physical containment snapshot; it does not authorize later file access.
+See ../PHASE-0-CORRECTIONS.md for the required Phase 2 race/containment work and evidence limits.

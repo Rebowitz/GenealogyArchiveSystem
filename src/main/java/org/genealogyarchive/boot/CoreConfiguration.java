@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import org.genealogyarchive.config.InstallationConfig;
 import org.genealogyarchive.data.DataSources;
 import org.genealogyarchive.data.PostgresServer;
+import org.genealogyarchive.data.SchemaIdentityRepository;
 import org.genealogyarchive.files.VolumeRoots;
 import org.genealogyarchive.migration.SchemaMigrator;
 import org.genealogyarchive.service.SystemStatusService;
@@ -45,8 +46,8 @@ public class CoreConfiguration {
     }
 
     @Bean
-    SystemStatusService systemStatusService(PostgresServer postgres, SchemaMigrator migrator, Clock clock) {
-        return new SystemStatusService(postgres, migrator, clock);
+    SystemStatusService systemStatusService(PostgresServer postgres, SchemaMigrator migrator, Clock clock, DataSource dataSource) {
+        return new SystemStatusService(postgres, migrator, clock, new SchemaIdentityRepository(dataSource));
     }
 
     @Bean

@@ -33,7 +33,7 @@ public final class PostMigrationValidator {
         if (markers.size() != 1) {
             problems.add("Expected exactly one schema identity marker, found " + markers.size());
         } else if (!SchemaIdentityRepository.EXPECTED_APPLICATION.equals(markers.get(0))) {
-            problems.add("Database belongs to a different application: '" + markers.get(0) + "'");
+            problems.add("Database foundation identity is incorrect");
         }
         return problems;
     }

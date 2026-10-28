@@ -33,3 +33,10 @@ the installation file. Installation values reach Spring only through `ProcessLau
 ### Validation
 `check-config` reports every problem at once with an explanation; startup of any process fails visibly
 (exit code 2) on invalid configuration instead of falling back to defaults.
+
+## Phase 0 audit correction
+
+DatabaseSettings validates URL options at construction, including decoded keys. Credentials and
+arbitrary driver-extension parameters cannot be supplied through the URL; diagnostics omit query
+values and YAML parser excerpts. Runtime readiness also verifies the foundation identity marker.
+See ../PHASE-0-CORRECTIONS.md for supported options and regression evidence.

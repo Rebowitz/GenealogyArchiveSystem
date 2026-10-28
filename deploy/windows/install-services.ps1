@@ -24,6 +24,7 @@ param(
     [string]$JavaExe = ""
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'service-config.ps1')
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -34,6 +35,7 @@ if (-not $JavaExe) {
     else { $JavaExe = (Get-Command java.exe -ErrorAction Stop).Source }
 }
 foreach ($p in $JarPath, $WinSWPath, $JavaExe) { if (-not (Test-Path $p)) { throw "Not found: $p" } }
+Assert-WinSWIntegrity -Path $WinSWPath
 
 New-Item -ItemType Directory -Force -Path $AppDir, $DataDir, "$DataDir\logs", "$DataDir\logs\service", "$DataDir\secrets" | Out-Null
 Copy-Item -Force $JarPath "$AppDir\genealogy-archive.jar"
@@ -52,10 +54,9 @@ foreach ($name in 'GenealogyArchive-Web', 'GenealogyArchive-Worker') {
     $xml = Join-Path $AppDir "$name.xml"
     if (Test-Path $exe) { & $exe stop 2>$null | Out-Null; & $exe uninstall 2>$null | Out-Null }
     Copy-Item -Force $WinSWPath $exe
-    # Literal (non-regex) substitution: paths contain backslashes.
-    $content = Get-Content (Join-Path $PSScriptRoot "$name.xml") -Raw
-    $content = $content.Replace('@JAVA@', $JavaExe).Replace('@APP_DIR@', $AppDir).Replace('@DATA_DIR@', $DataDir)
-    Set-Content -Path $xml -Value $content -Encoding UTF8
+    $template = Get-Content -LiteralPath (Join-Path $PSScriptRoot "$name.xml") -Raw
+    $content = ConvertTo-WinSWXml -Template $template -JavaExe $JavaExe -AppDir $AppDir -DataDir $DataDir
+    Set-Content -LiteralPath $xml -Value $content -Encoding UTF8
     & $exe install
     if ($LASTEXITCODE -ne 0) { throw "WinSW install failed for $name ($LASTEXITCODE)" }
 }

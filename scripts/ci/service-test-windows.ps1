@@ -8,8 +8,8 @@ foreach ($v in 'JAVA_HOME', 'GAS_PG_BIN', 'GAS_PG_PORT', 'GAS_TEST_DB_USER', 'GA
     if (-not [Environment]::GetEnvironmentVariable($v)) { throw "Missing environment variable $v" }
 }
 $Port = 18082
-$AppDir = Join-Path $env:RUNNER_TEMP 'GenealogyArchiveApp'
-$DataDir = Join-Path $env:RUNNER_TEMP 'GenealogyArchiveData'
+$AppDir = Join-Path $env:RUNNER_TEMP 'Genealogy & Family App'
+$DataDir = Join-Path $env:RUNNER_TEMP 'Genealogy & Family Data'
 $Java = Join-Path $env:JAVA_HOME 'bin\java.exe'
 $WinSW = Join-Path $env:RUNNER_TEMP 'WinSW-x64.exe'
 

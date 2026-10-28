@@ -5,9 +5,11 @@ import org.flywaydb.core.api.FlywayException;
 import org.genealogyarchive.boot.ProcessLauncher;
 import org.genealogyarchive.config.ConfigValidationException;
 import org.genealogyarchive.config.InstallationConfig;
+import org.genealogyarchive.config.JdbcUrls;
 import org.genealogyarchive.config.InstallationConfigLoader;
 import org.genealogyarchive.data.DataSources;
 import org.genealogyarchive.data.PostgresServer;
+import org.genealogyarchive.data.SchemaIdentityRepository;
 import org.genealogyarchive.migration.PostMigrationValidator;
 import org.genealogyarchive.migration.SchemaMigrator;
 import org.genealogyarchive.migration.SchemaStatus;
@@ -131,7 +133,7 @@ public final class Cli {
 
     private Outcome checkConfig(InstallationConfig config) {
         out.println("Installation configuration is valid: " + config.sourceFile());
-        out.println("  database.url      " + config.database().jdbcUrl());
+        out.println("  database.url      " + JdbcUrls.diagnostic(config.database().jdbcUrl()));
         out.println("  database.username " + config.database().username());
         out.println("  database.password " + config.database().password()); // masked by Secret.toString()
         out.println("  server            " + config.server().bindAddress() + ":" + config.server().port());
@@ -177,7 +179,7 @@ public final class Cli {
 
     private Outcome status(InstallationConfig config) {
         try (HikariDataSource ds = DataSources.create(config.database(), "status", 2)) {
-            SystemStatus s = new SystemStatusService(new PostgresServer(ds), new SchemaMigrator(ds), Clock.systemUTC()).check();
+            SystemStatus s = new SystemStatusService(new PostgresServer(ds), new SchemaMigrator(ds), Clock.systemUTC(), new SchemaIdentityRepository(ds)).check();
             out.println("Application : " + s.applicationVersion());
             out.println("Host        : " + s.host() + " (" + s.host().serviceManager() + ")");
             out.println("Database    : " + (s.databaseReachable() ? "PostgreSQL " + s.databaseVersion() : "UNAVAILABLE")

@@ -102,7 +102,7 @@ class PortableRelativePathTest {
     }
 
     @Test
-    void persistedFormIsIndependentOfVolumeRoot(@TempDir Path otherRoot) {
+    void portableValueRoundTripIsIndependentOfNativeRoot(@TempDir Path otherRoot) {
         PortableRelativePath p = PortableRelativePath.of("originals/01/file.tif");
         PortableRelativePath fromFirst = PortableRelativePath.fromNative(volumeRoot, p.toNative(volumeRoot));
         PortableRelativePath fromSecond = PortableRelativePath.fromNative(otherRoot, p.toNative(otherRoot));
@@ -117,7 +117,7 @@ class PortableRelativePathTest {
     }
 
     @Test
-    void caseFoldKeyDetectsNamesThatCollideOnCaseInsensitiveFilesystems() {
+    void caseFoldKeyDetectsTheTestedAsciiCaseVariants() {
         PortableRelativePath a = PortableRelativePath.of("originals/Deed-227.tif");
         PortableRelativePath b = PortableRelativePath.of("originals/deed-227.TIF");
         assertThat(a).as("distinct portable paths").isNotEqualTo(b);

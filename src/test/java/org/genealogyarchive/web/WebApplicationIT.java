@@ -44,7 +44,7 @@ class WebApplicationIT {
     }
 
     @Test
-    void startsAndReportsReadyAgainstMigratedDatabaseWithoutNetworkAccess() {
+    void startsAndReportsReadyWithoutRecordedNonLoopbackProxyConsultations() {
         migrate();
         try (NetworkAttemptRecorder network = NetworkAttemptRecorder.install();
              ConfigurableApplicationContext app = ProcessLauncher.startWeb(db.installationConfig(), Map.of())) {
@@ -102,5 +102,32 @@ class WebApplicationIT {
             assertThat(Http.get(app, "/actuator/configprops").statusCode()).isEqualTo(404);
             assertThat(Http.get(app, "/actuator/beans").statusCode()).isEqualTo(404);
         }
+    }
+
+    /** GAS-P0-005: history alone is insufficient; both web and worker use the identity gate. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"missing-row", "incorrect-value", "missing-table"})
+    void foundationIdentityDamageMakesWebNotReadyAndWorkerRefuseStartup(String damage) throws Exception {
+        migrate();
+        try (var connection = db.connect(); var statement = connection.createStatement()) {
+            switch (damage) {
+                case "missing-row" -> statement.execute("DELETE FROM gas.schema_identity");
+                case "incorrect-value" -> {
+                    // Deliberately corrupt this throwaway fixture; do not alter an applied migration.
+                    statement.execute("ALTER TABLE gas.schema_identity DROP CONSTRAINT schema_identity_application_check");
+                    statement.execute("UPDATE gas.schema_identity SET application = 'unexpected-identity'");
+                }
+                case "missing-table" -> statement.execute("DROP TABLE gas.schema_identity");
+                default -> throw new IllegalArgumentException(damage);
+            }
+        }
+        try (ConfigurableApplicationContext app = ProcessLauncher.startWeb(db.installationConfig(), Map.of())) {
+            assertThat(Http.get(app, "/actuator/health/liveness").statusCode()).isEqualTo(200);
+            assertThat(Http.get(app, "/actuator/health/readiness").statusCode()).isEqualTo(503);
+            assertThat(Http.get(app, "/").body()).contains("Archive instance is not ready");
+        }
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> ProcessLauncher.startWorker(db.installationConfig(), Map.of()))
+                .hasStackTraceContaining("Worker cannot start");
     }
 }

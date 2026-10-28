@@ -46,4 +46,18 @@ class VolumeRootsTest {
                 .isInstanceOf(VolumeRoots.VolumeNotConfiguredException.class)
                 .hasMessageContaining(PRIMARY.toString());
     }
+
+    @Test
+    void resolveRejectsObservableJunctionOrSymlinkEscape(@TempDir Path temp) throws Exception {
+        Path root = java.nio.file.Files.createDirectory(temp.resolve("volume"));
+        Path outside = java.nio.file.Files.createDirectory(temp.resolve("outside"));
+        Path link = org.genealogyarchive.testsupport.DirectoryLinks.create(root.resolve("alias"), outside);
+        try {
+            StorageLocation location = new StorageLocation(PRIMARY, PortableRelativePath.of("alias/future/file"));
+            assertThatThrownBy(() -> new VolumeRoots(Map.of(PRIMARY, root)).resolve(location))
+                    .isInstanceOf(java.io.UncheckedIOException.class);
+        } finally {
+            java.nio.file.Files.delete(link);
+        }
+    }
 }

@@ -40,7 +40,7 @@ class MigrationFailureIT {
     }
 
     @Test
-    void failedMigrationRollsBackCompletelyAndIsReported() {
+    void failingTransactionalDdlLeavesNoPartialSchemaStructure() {
         new SchemaMigrator(dataSource).migrate();
         List<String> before = new SchemaCatalog(dataSource).snapshot(DataSources.APPLICATION_SCHEMA);
 

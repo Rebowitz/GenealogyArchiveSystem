@@ -258,3 +258,12 @@ Read [`docs/architecture/overview.md`](docs/architecture/overview.md) first, the
   Never persist a native path. Never build paths with string separators.
 - **Do not branch on operating system** outside `platform/`.
 - Name tests after Acceptance Specification IDs where practical; never weaken a test to make code pass.
+
+## Phase 0 audit corrections
+
+See [correction notes](docs/PHASE-0-CORRECTIONS.md) for the URL option/secret boundary,
+configuration-time lexical and physical-snapshot checks, Phase 2 containment invariant,
+WinSW XML rendering/integrity verification, runtime identity readiness, and CI evidence limits.
+Phase-Gate scripts now run clean verify and require both report suites.
+WinSW 2.12.0 x64 is digest-verified by the installer before execution.
+Phase 0 acceptance remains pending independent evaluation.

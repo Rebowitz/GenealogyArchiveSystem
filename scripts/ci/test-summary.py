@@ -14,11 +14,14 @@ label = sys.argv[1] if len(sys.argv) > 1 else "tests"
 totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
 problems = []
 skipped = []
+suite_counts = {"unit": 0, "integration": 0}
 
 for path in sorted(glob.glob("target/surefire-reports/TEST-*.xml") + glob.glob("target/failsafe-reports/TEST-*.xml")):
+    suite_kind = "integration" if "failsafe-reports" in path else "unit"
     root = ET.parse(path).getroot()
     suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
     for suite in suites:
+        suite_counts[suite_kind] += len(suite.findall("testcase"))
         for key in totals:
             totals[key] += int(suite.get(key, 0))
         for case in suite.findall("testcase"):
@@ -51,8 +54,12 @@ for name, kind, detail in problems:
     print(f"::error title={escape(label + ' ' + kind + ': ' + name)}::{escape(detail[:3000])}")
 print(f"::notice title={escape(label + ' test totals')}::tests={totals['tests']} failures={totals['failures']} "
       f"errors={totals['errors']} skipped={totals['skipped']}")
+missing_suites = [name for name, count in suite_counts.items() if count == 0]
+if missing_suites:
+    print(f"::error title={escape(label)}::Missing required test evidence: {', '.join(missing_suites)}")
+    sys.exit(1)
 if totals["tests"] == 0:
     print(f"::error title={escape(label)}::No test reports found - the test suite did not run")
     sys.exit(1)
-if problems or skipped:
+if problems or skipped or totals["failures"] or totals["errors"] or totals["skipped"]:
     sys.exit(1)

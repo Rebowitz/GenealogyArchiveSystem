@@ -16,5 +16,5 @@ foreach ($v in 'GAS_TEST_DB_URL', 'GAS_TEST_DB_USER', 'GAS_TEST_DB_PASSWORD') {
 }
 if ($missing) { exit 2 }
 
-& .\mvnw.cmd -B -ntp verify @args
+& .\mvnw.cmd -B -ntp clean verify @args
 exit $LASTEXITCODE

@@ -60,3 +60,12 @@ and configuration are UTF-8; the configuration loader tolerates a UTF-8 BOM writ
 - Persisted data and interchange formats never contain host paths (UP-010, EX-010).
 - Windows and Linux CI must both pass for any change; the matrix runs identical tests.
 - Long Windows paths: the JDK handles paths beyond 260 characters; storage roots should still be kept short.
+
+## Phase 0 audit correction
+
+Portable path conversion guarantees lexical containment only. VolumeRoots invokes the platform
+PhysicalPaths snapshot check; installation loading also detects observable physical root aliases.
+Missing paths are resolved through their nearest existing ancestor; no resolved native path is
+persisted as archival identity. File-access-time races and mount/link changes remain a mandatory
+Phase 2 invariant; see ../PHASE-0-CORRECTIONS.md. WinSW rendering uses an XML DOM.
+LocalSystem is limited to Phase 0 development/CI; resolve low-privilege execution before Phase 2.

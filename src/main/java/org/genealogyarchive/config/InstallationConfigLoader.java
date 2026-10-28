@@ -5,6 +5,7 @@ import org.genealogyarchive.config.InstallationConfig.LogFormat;
 import org.genealogyarchive.config.InstallationConfig.LoggingSettings;
 import org.genealogyarchive.config.InstallationConfig.ServerSettings;
 import org.genealogyarchive.platform.NativePaths;
+import org.genealogyarchive.platform.PhysicalPaths;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
@@ -81,7 +82,8 @@ public final class InstallationConfigLoader {
                     "Installation configuration file could not be read: " + absolute + " (" + e.getMessage() + ")"));
         } catch (YAMLException e) {
             throw new ConfigValidationException(List.of(
-                    "Installation configuration file is not valid YAML: " + absolute + " (" + e.getMessage() + ")"));
+                    "Installation configuration file is not valid YAML: " + absolute
+                            + " (parser detail omitted because it may contain secret values)"));
         }
         if (document == null) {
             document = Map.of();
@@ -113,8 +115,13 @@ public final class InstallationConfigLoader {
         }
         p.rejectUnknown(db, "database", DATABASE_KEYS);
         String url = p.string(db, "url", "database.url", true);
-        if (url != null && !url.startsWith("jdbc:postgresql://")) {
-            p.add("database.url must be a PostgreSQL JDBC URL starting with 'jdbc:postgresql://'");
+        if (url != null) {
+            try {
+                JdbcUrls.requireSafe(url);
+            } catch (IllegalArgumentException e) {
+                p.add(e.getMessage());
+                url = null;
+            }
         }
         String username = p.string(db, "username", "database.username", true);
         int maxPool = p.integer(db, "maxPoolSize", "database.maxPoolSize", DEFAULT_MAX_POOL_SIZE, 1, 100);
@@ -124,7 +131,8 @@ public final class InstallationConfigLoader {
                     + "Use the " + DEFAULT_PASSWORD_ENV + " environment variable or database.passwordFile.");
         }
         Secret password = resolvePassword(db, env, p);
-        return new DatabaseSettings(url, username, password, maxPool);
+        return url == null || username == null || password == null ? null
+                : new DatabaseSettings(url, username, password, maxPool);
     }
 
     private static Secret resolvePassword(Map<String, Object> db, Map<String, String> env, Problems p) {
@@ -220,14 +228,25 @@ public final class InstallationConfigLoader {
             }
             p.absoluteNativePath(text, where).ifPresent(path -> result.put(volumeId, path));
         }
-        // Two volumes must never share or nest physical roots, or one volume's files could be
-        // mistaken for another's (Path.startsWith honours host case rules).
+        // Check lexical overlap always and observable physical aliases through existing ancestors.
+        // Absent roots remain configurable, not certified for later I/O.
+        Map<UUID, Path> physical = new LinkedHashMap<>();
+        for (Map.Entry<UUID, Path> entry : result.entrySet()) {
+            try {
+                physical.put(entry.getKey(), PhysicalPaths.existingAncestorPath(entry.getValue()));
+            } catch (IOException e) {
+                p.add("storageRoots." + entry.getKey() + ": physical root could not be validated");
+            }
+        }
         List<Map.Entry<UUID, Path>> entries = new ArrayList<>(result.entrySet());
         for (int i = 0; i < entries.size(); i++) {
             for (int j = i + 1; j < entries.size(); j++) {
                 Path a = entries.get(i).getValue();
                 Path b = entries.get(j).getValue();
-                if (a.startsWith(b) || b.startsWith(a)) {
+                Path pa = physical.get(entries.get(i).getKey());
+                Path pb = physical.get(entries.get(j).getKey());
+                if (a.startsWith(b) || b.startsWith(a)
+                        || (pa != null && pb != null && (pa.startsWith(pb) || pb.startsWith(pa)))) {
                     p.add("storageRoots: volumes " + entries.get(i).getKey() + " and " + entries.get(j).getKey()
                             + " have overlapping roots (" + a + ", " + b + ")");
                 }

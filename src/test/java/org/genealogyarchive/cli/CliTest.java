@@ -103,4 +103,26 @@ class CliTest {
         assertThat(stderr()).contains("database.url", "database.username", "database.password is not allowed");
         assertThat(stderr()).doesNotContain("inline-secret");
     }
+
+    @Test
+    void secretBearingUrlIsRejectedWithoutDiagnosticDisclosure() throws IOException {
+        Path config = writeConfig("""
+                database:
+                  url: jdbc:postgresql://localhost/gas?%70assword=URL_SECRET
+                  username: gas
+                """);
+        Cli.Outcome result = cli(Map.of("GAS_DB_PASSWORD", "ENV_SECRET"))
+                .run(new String[]{"check-config", "--config=" + config});
+        assertThat(result.exitCode()).isEqualTo(Cli.EXIT_CONFIG_INVALID);
+        assertThat(stderr()).contains("database.url").doesNotContain("URL_SECRET", "ENV_SECRET");
+        assertThat(stdout()).doesNotContain("URL_SECRET", "ENV_SECRET");
+    }
+
+    @Test
+    void malformedYamlCannotEchoInlineSecretInParserExcerpt() throws IOException {
+        Path config = writeConfig("database: [password: YAML_SECRET");
+        Cli.Outcome result = cli(Map.of()).run(new String[]{"check-config", "--config=" + config});
+        assertThat(result.exitCode()).isEqualTo(Cli.EXIT_CONFIG_INVALID);
+        assertThat(stderr()).contains("not valid YAML").doesNotContain("YAML_SECRET");
+    }
 }

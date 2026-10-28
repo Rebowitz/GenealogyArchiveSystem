@@ -24,6 +24,12 @@ public final class SchemaIdentityRepository {
         this.jdbc = JdbcClient.create(dataSource);
     }
 
+    /** Read-only foundation check. Do not echo an unexpected database value. */
+    public boolean hasExpectedIdentity() {
+        List<String> markers = applicationMarkers();
+        return markers.size() == 1 && EXPECTED_APPLICATION.equals(markers.get(0));
+    }
+
     /** Every application marker row (exactly one is expected). */
     public List<String> applicationMarkers() {
         return jdbc.sql(SELECT_APPLICATIONS).query(String.class).list();

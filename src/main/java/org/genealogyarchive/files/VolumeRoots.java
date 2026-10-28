@@ -1,6 +1,9 @@
 package org.genealogyarchive.files;
 
 import java.nio.file.Path;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import org.genealogyarchive.platform.PhysicalPaths;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,7 +36,13 @@ public final class VolumeRoots {
         if (root == null) {
             throw new VolumeNotConfiguredException(location.volumeId());
         }
-        return location.path().toNative(root);
+        Path candidate = location.path().toNative(root);
+        try {
+            PhysicalPaths.requireContained(root, candidate);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Storage path containment could not be validated", e);
+        }
+        return candidate;
     }
 
     /** No root configured for the requested Storage Volume on this installation. */

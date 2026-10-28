@@ -1,6 +1,8 @@
 package org.genealogyarchive.service;
 
 import org.genealogyarchive.data.PostgresServer;
+import org.genealogyarchive.data.SchemaIdentityRepository;
+import java.util.List;
 import org.genealogyarchive.migration.SchemaMigrator;
 import org.genealogyarchive.migration.SchemaStatus;
 import org.genealogyarchive.platform.HostPlatform;
@@ -20,11 +22,14 @@ public class SystemStatusService {
     private final PostgresServer postgres;
     private final SchemaMigrator migrator;
     private final Clock clock;
+    private final SchemaIdentityRepository identity;
 
-    public SystemStatusService(PostgresServer postgres, SchemaMigrator migrator, Clock clock) {
+    public SystemStatusService(PostgresServer postgres, SchemaMigrator migrator, Clock clock,
+                               SchemaIdentityRepository identity) {
         this.postgres = postgres;
         this.migrator = migrator;
         this.clock = clock;
+        this.identity = identity;
     }
 
     public SystemStatus check() {
@@ -46,6 +51,10 @@ public class SystemStatusService {
         } else {
             try {
                 schema = migrator.status();
+                if (schema.isCurrent() && !identity.hasExpectedIdentity()) {
+                    schema = new SchemaStatus(SchemaStatus.State.INVALID, schema.currentVersion(),
+                            schema.pendingVersions(), List.of("Genealogy Archive System foundation identity is absent or incorrect."));
+                }
             } catch (RuntimeException e) {
                 log.warn("Schema status could not be determined: {}", rootMessage(e));
                 schema = SchemaStatus.unavailable("Schema status could not be determined: " + rootMessage(e));
