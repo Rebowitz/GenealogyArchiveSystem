@@ -29,7 +29,9 @@ Mutable rows carry `row_version`. Updates use `WHERE row_version = :expected`; a
   `FOR UPDATE SKIP LOCKED`, retried with exponential backoff (10 s · 2^n, capped at 1 h) up to
   `max_attempts`, then **FAILED visibly** with a bounded error; an Administrator may retry a failed job.
 - **Lease ownership (correction GAS-P1-001, V0008)**: each claim issues a fresh `lease_token` for that
-  attempt. While the handler runs, a separate renewal thread in the owning worker extends the lease
+  attempt, and the claim result is that attempt's own row snapshot from the claiming
+  `UPDATE ... RETURNING` (GAS-P1-R01) — never a separate re-read. A claim delivered after its local lease
+  end does not start its handler. While the handler runs, a separate renewal thread in the owning worker extends the lease
   every third of its duration (production lease 5 min), so a healthy worker keeps a long-running job and
   no competing worker can reclaim it. `renew`, `succeed` and `fail` require the current token **and** an
   unexpired lease; lease times use the database clock (`clock_timestamp()`). If renewals stop (crash,

@@ -133,7 +133,7 @@ public final class BackgroundJobRepository {
                        updated_at = :now
                   FROM next
                  WHERE j.job_id = next.job_id
-                RETURNING """ + CLAIMED_COLUMNS)
+                RETURNING""" + " " + CLAIMED_COLUMNS)
                 .param("kinds", List.copyOf(kinds)).param("now", Rows.param(now)).param("worker", workerId)
                 .param("token", token).param("leaseMillis", lease.toMillis())
                 .query(JOB).optional();
