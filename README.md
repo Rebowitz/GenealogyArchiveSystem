@@ -4,13 +4,16 @@ A lightweight, durable archive for genealogical research and the historical evid
 One application codebase runs as independent Archive Instances on **Windows** and **Linux** hosts, with
 **PostgreSQL** as the authoritative database and an ordinary **web browser** as the client.
 
-> **Status: Phase 0 - Foundation, ACCEPTED 2026-10-28 at `f326366` (see [`docs/PHASE-0-ACCEPTANCE.md`](docs/PHASE-0-ACCEPTANCE.md)).** The technical foundation exists: build, configuration, database
-> migrations, web and worker processes, health/readiness, logging, cross-platform path handling, service
-> definitions and CI on both operating systems. **No genealogy or historical research features exist yet**;
-> they arrive in later phases (see [`docs/BUILD-SPEC.md`](docs/BUILD-SPEC.md) s.62).
+> **Status: Phase 1 - Archive Identity / Core, IN REVIEW (not accepted).** Phase 0 (Foundation) was
+> accepted 2026-10-28 at `f326366` ([`docs/PHASE-0-ACCEPTANCE.md`](docs/PHASE-0-ACCEPTANCE.md)). Phase 1 adds
+> the permanent Archive ID, global and friendly identifier infrastructure, archive configuration, change
+> history, local accounts with sign-in, Storage Volume registration and the background-job foundation.
+> **No genealogy or historical research features exist yet**; they arrive in later phases (see
+> [`docs/BUILD-SPEC.md`](docs/BUILD-SPEC.md) s.62).
 
 Governing documents, in authority order: archival invariants -> [`docs/ACCEPTANCE-SPEC.md`](docs/ACCEPTANCE-SPEC.md)
--> [`docs/BUILD-SPEC.md`](docs/BUILD-SPEC.md) -> current phase brief [`docs/PHASE-0.md`](docs/PHASE-0.md).
+-> [`docs/BUILD-SPEC.md`](docs/BUILD-SPEC.md) -> current phase brief [`docs/PHASE-1.md`](docs/PHASE-1.md)
+(owner decisions: [`docs/PHASE-1-DECISIONS.md`](docs/PHASE-1-DECISIONS.md)).
 Agent/developer operating rules: [`CLAUDE.md`](CLAUDE.md). Architecture and decisions: [`docs/architecture/`](docs/architecture/).
 
 ---
@@ -44,7 +47,7 @@ Both supported hosts are first-class. Everything below is given for **Windows (P
 ## 2. Get the source
 
 ```
-git clone https://github.com/Rebowitz/GenealogyResearchArchive.git genealogy-archive
+git clone https://github.com/Rebowitz/GenealogyArchiveSystem.git genealogy-archive
 cd genealogy-archive
 ```
 
@@ -73,7 +76,7 @@ Both create role `genealogy_archive` and database `genealogy_archive` (override 
 The **installation configuration** is a YAML file holding everything specific to *this host*: database
 connection, HTTP binding, log location, and the native root folder of each Storage Volume. It is never
 part of the archive. (Archive configuration - Archive ID, vocabularies, classifications - lives in the
-database and travels with the archive; it arrives in Phase 1.)
+database and travels with the archive; see ADR-0006.)
 
 ```
 cp config/installation.example.yml installation.yml          # Linux
@@ -88,7 +91,17 @@ Edit it. Rules (all enforced by `check-config`):
 - **Paths are absolute for this host.** Windows: `'D:\GenealogyArchive\primary'` (single quotes keep
   backslashes literal). Linux: `/srv/genealogy-archive/primary`. A path in the other host's style is
   rejected with an explanation.
-- `server.bindAddress` defaults to `127.0.0.1` (this computer only). Serving the LAN is a deliberate change.
+- `server.bindAddress` defaults to `127.0.0.1` (this computer only). Password sign-in over plain HTTP on a
+  network is **refused**: with any non-loopback address (including `0.0.0.0` or `::`) `check-config`
+  and `serve` fail, unless a TLS reverse proxy is declared. Built-in TLS arrives in a later phase. To
+  reach the archive from other computers now, put a TLS reverse proxy in front and declare its exact IP
+  address(es); the archive then accepts sign-in only through that proxy over HTTPS (ADR-0007):
+  ```yaml
+  server:
+    bindAddress: 127.0.0.1        # proxy on this computer; use a LAN address only if the proxy is elsewhere
+    tlsReverseProxy:
+      addresses: ['127.0.0.1']    # exact IP literals; the proxy must send X-Forwarded-Proto: https
+  ```
 
 `installation.yml` is git-ignored. Validate it:
 
@@ -115,13 +128,35 @@ $env:GAS_DB_PASSWORD = '...'
 | Run web application | `scripts/run.sh serve --config=installation.yml` | `.\scripts\run.ps1 serve --config=installation.yml` |
 | Run worker | `scripts/run.sh worker --config=installation.yml` | `.\scripts\run.ps1 worker --config=installation.yml` |
 
-Then open `http://127.0.0.1:8080/` (or your configured address/port).
+### First-time setup of an archive
+
+After the first `migrate`, create the archive and its first administrator account (once per archive):
+
+| Step | Linux | Windows |
+|---|---|---|
+| Create the archive (assigns the permanent Archive ID) | `scripts/run.sh init-archive --name="Smith Family Archive" --config=installation.yml` | `.\scripts\run.ps1 init-archive '--name=Smith Family Archive' --config=installation.yml` |
+| Create the first administrator | `scripts/run.sh create-admin --username=alice --config=installation.yml` | `.\scripts\run.ps1 create-admin --username=alice --config=installation.yml` |
+
+`create-admin` prompts for the password (twice), or reads it from `GAS_NEW_ADMIN_PASSWORD` for
+unattended setup; it is never accepted as a command-line argument. Passwords need at least 12 characters.
+Further accounts (Administrator, Editor, Viewer) are created by an administrator in the browser.
+
+- **The Archive ID is permanent.** It is stored in the database, so restoring a backup of this archive keeps
+  it. **Copying an initialized database to start a different, unrelated archive is unsupported**: both
+  copies would carry the same Archive ID. Start a new archive from an empty database instead.
+- `init-archive` refuses to run twice, and no migration ever creates an archive.
+
+Then open `http://127.0.0.1:8080/` (or your configured address/port) and sign in.
 
 - **Migrations never run automatically.** Until `migrate` has been run, the web application starts but
   reports itself *not ready* (home page, and HTTP 503 from `/actuator/health/readiness`), and the worker
   refuses to start. This is deliberate: an upgrade is an explicit administrative act (ADR-0005).
 - Health endpoints: `/actuator/health/liveness` (process alive) and `/actuator/health/readiness`
-  (database reachable, supported version, schema current).
+  (database reachable, supported version, schema current, archive initialized).
+- A database migrated from Phase 0 (or freshly migrated) reports *not ready - archive not initialized*
+  until `init-archive` has run; the worker refuses to start until then.
+- An unavailable *required* Storage Volume is shown prominently on the Operations page and in `status`,
+  but does not make the instance unready (an offline backup volume is normal).
 
 ## 6. Running the tests
 
@@ -174,7 +209,8 @@ Creates the `genealogy-archive` system account, `/opt/genealogy-archive`, `/etc/
 (0750, root:genealogy-archive), `/var/log/genealogy-archive`, and the units
 `genealogy-archive-web.service` / `genealogy-archive-worker.service`. Follow the printed next steps:
 edit `/etc/genealogy-archive/installation.yml`, create the password file, run `migrate` as the service
-account, then `systemctl enable --now genealogy-archive-web genealogy-archive-worker`.
+account, then (first install only) `init-archive` and `create-admin` as the service account, then
+`systemctl enable --now genealogy-archive-web genealogy-archive-worker`.
 Remove with `sudo deploy/linux/uninstall.sh` (configuration, logs, database and volumes are left untouched).
 
 **Windows (Windows services via WinSW)** - elevated PowerShell:
@@ -187,7 +223,8 @@ Remove with `sudo deploy/linux/uninstall.sh` (configuration, logs, database and 
    Creates `C:\Program Files\GenealogyArchive` (jar + service wrappers), `C:\ProgramData\GenealogyArchive`
    (`installation.yml`, `logs\`, `secrets\` restricted to SYSTEM and Administrators) and the services
    `GenealogyArchiveWeb` / `GenealogyArchiveWorker` (automatic, delayed start, restart on failure).
-3. Follow the printed next steps (edit config, put the password in `secrets\db-password`, `migrate`),
+3. Follow the printed next steps (edit config, put the password in `secrets\db-password`, `migrate`,
+   and on first install `init-archive` and `create-admin`),
    then `Start-Service GenealogyArchiveWeb, GenealogyArchiveWorker`.
 Remove with `.\deploy\windows\uninstall-services.ps1`.
 
@@ -210,13 +247,16 @@ java -jar genealogy-archive.jar <command> [--config=<installation.yml>]
 | Command | Purpose | Exit codes |
 |---|---|---|
 | `serve` | Web application (browser entry point) | runs until stopped |
-| `worker` | Background worker (refuses to start unless schema is current) | runs until stopped; 1 if not ready |
+| `worker` | Background worker (refuses to start unless the archive is ready) | runs until stopped; 1 if not ready |
 | `migrate` | Apply pending migrations, then post-migration validation | 0 ok, 3 database problem, 4 migration failed/refused |
-| `status` | Database and schema status | 0 ready, 3 not ready |
+| `init-archive --name=<name>` | Create the archive and its permanent Archive ID (once) | 0 ok, 3 schema not current, 5 already initialized, 64 no name |
+| `create-admin --username=<u> [--display-name=<d>]` | Create an administrator account (password from prompt or `GAS_NEW_ADMIN_PASSWORD`) | 0 ok, 3 archive not ready, 5 refused (e.g. weak password, name taken), 64 no password source |
+| `status` | Database, schema, archive, worker, job and Storage Volume status | 0 ready, 3 not ready |
 | `check-config` | Validate installation configuration (password shown masked) | 0 valid, 2 invalid |
 | `version`, `help` | | 0 |
 
-`--config` may be replaced by the `GAS_CONFIG` environment variable. Exit code 64 = usage error.
+`--config` may be replaced by the `GAS_CONFIG` environment variable. Exit code 64 = usage error;
+5 = refused by an archive rule.
 
 ## 9. Repository layout
 
@@ -233,8 +273,15 @@ src/main/java/org/genealogyarchive/
   files/      Portable storage references: PortableRelativePath, StorageLocation, VolumeRoots
   data/       All SQL/JDBC: connection pool, repositories, catalog inspection
   migration/  Flyway migration runner, schema status, post-migration validation
-  service/    Application services (transactions and orchestration live here)
-  domain/     Historical domain model - intentionally empty in Phase 0
+  service/    Application services (transactions and orchestration live here), system/operational status
+  identity/   UUIDv7 global identifiers, friendly identifier format (plain Java)
+  access/     Roles, permissions, Actor, AccessPolicy (plain Java)
+  archive/    Archive ID, archive name, archive configuration (ArchiveService)
+  security/   Local accounts, password policy/hashing (UserService, Spring Security adapters)
+  history/    Field classes and append-only change history (ChangeRecorder, HistoryService)
+  storage/    Storage Volume registration and availability (no file writes in Phase 1)
+  jobs/       PostgreSQL-backed background job queue and runner
+  domain/     Historical domain model - intentionally empty until Phase 2
   web/        Browser controllers + Thymeleaf templates (talk to services only)
   ops/        Health/readiness contributors
   worker/     Worker process lifecycle
@@ -248,8 +295,10 @@ docs/                            Governing specifications and architecture/ADRs
 ## 10. Continuing development
 
 Read [`docs/architecture/overview.md`](docs/architecture/overview.md) first, then the ADRs. Key conventions:
-- **Implement only the approved phase.** Phase 1 (Archive Identity and Core Infrastructure) is next and
-  has not been started.
+- **Implement only the approved phase.** Phase 1 (Archive Identity / Core) is in review; Phase 2 has not
+  been started.
+- **Every service operation takes an explicit `Actor`** and checks `AccessPolicy`; record changes with
+  `ChangeRecorder` in the same transaction; use `row_version` optimistic concurrency for mutable rows.
 - **New schema = new migration file** `V000N__description.sql`; never edit an applied migration
   (checksums are validated). Add post-migration checks to `PostMigrationValidator`.
 - **SQL lives in `data/`** (enforced by `ArchitectureTest`). Short statements as text blocks in the
@@ -266,4 +315,4 @@ configuration-time lexical and physical-snapshot checks, Phase 2 containment inv
 WinSW XML rendering/integrity verification, runtime identity readiness, and CI evidence limits.
 Phase-Gate scripts now run clean verify and require both report suites.
 WinSW 2.12.0 x64 is digest-verified by the installer before execution.
-Phase 0 acceptance remains pending independent evaluation.
+Phase 0 was accepted on 2026-10-28 at `f326366` (tag `phase-0-accepted`).

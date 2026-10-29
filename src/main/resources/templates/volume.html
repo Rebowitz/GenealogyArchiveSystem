@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head(${volume.name()})}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1 th:text="${volume.name()}">volume</h1>
+    <table>
+        <tr><th>Volume ID</th><td><code th:text="${volume.volumeId()}">id</code>
+            <span class="muted">use this as the key under storageRoots in installation configuration</span></td></tr>
+        <tr><th>Purpose</th><td th:text="${volume.purpose()}">p</td></tr>
+        <tr><th>Required</th><td th:text="${volume.required()} ? 'Yes' : 'No'">r</td></tr>
+        <tr><th>Status</th><td th:text="${volume.active()} ? 'Active' : 'Retired'">s</td></tr>
+        <tr th:if="${volume.description() != null}"><th>Description</th><td th:text="${volume.description()}">d</td></tr>
+    </table>
+    <section th:if="${canManage and volume.active()}">
+        <h2>Correct</h2>
+        <form th:action="@{/volumes/{id}(id=${volume.volumeId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${volume.version()}">
+            <label>Name <input type="text" name="name" th:value="${volume.name()}" maxlength="100" required></label>
+            <label>Purpose <input type="text" name="purpose" th:value="${volume.purpose()}" maxlength="64" required></label>
+            <label>Description <input type="text" name="description" th:value="${volume.description()}" maxlength="2000"></label>
+            <label><input type="checkbox" name="required" value="true" th:checked="${volume.required()}"> Required</label>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Save</button>
+        </form>
+        <form th:action="@{/volumes/{id}/retire(id=${volume.volumeId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${volume.version()}">
+            <label>Reason for retiring (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Retire volume</button>
+        </form>
+    </section>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

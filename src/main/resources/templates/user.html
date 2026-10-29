@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head(${user.username()})}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1 th:text="${user.username()}">user</h1>
+    <form th:action="@{/users/{id}(id=${user.userId()})}" method="post" class="form">
+        <input type="hidden" name="version" th:value="${user.version()}">
+        <label>Display name <input type="text" name="displayName" th:value="${user.displayName()}" maxlength="200" required></label>
+        <label>Role <select name="role"><option th:each="r : ${roles}" th:value="${r}" th:text="${r}" th:selected="${r == user.role()}">role</option></select></label>
+        <label><input type="checkbox" name="enabled" value="true" th:checked="${user.enabled()}"> Enabled</label>
+        <button type="submit">Save</button>
+    </form>
+    <h2>Set a new password</h2>
+    <form th:action="@{/users/{id}/password(id=${user.userId()})}" method="post" class="form">
+        <input type="hidden" name="version" th:value="${user.version()}">
+        <label>New password <input type="password" name="password" autocomplete="new-password" required></label>
+        <button type="submit">Set password</button>
+    </form>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

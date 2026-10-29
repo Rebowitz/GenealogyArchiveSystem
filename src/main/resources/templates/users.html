@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Users')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Users</h1>
+    <table class="list">
+        <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Status</th></tr></thead>
+        <tbody>
+        <tr th:each="u : ${users}">
+            <td><a th:href="@{/users/{id}(id=${u.userId()})}" th:text="${u.username()}">user</a></td>
+            <td th:text="${u.displayName()}">name</td>
+            <td th:text="${u.role()}">role</td>
+            <td th:text="${u.enabled()} ? 'Enabled' : 'Disabled'">status</td>
+        </tr>
+        </tbody>
+    </table>
+    <h2>Add a user</h2>
+    <form th:action="@{/users}" method="post" class="form">
+        <label>Username <input type="text" name="username" maxlength="64" required></label>
+        <label>Display name <input type="text" name="displayName" maxlength="200" required></label>
+        <label>Role <select name="role"><option th:each="r : ${roles}" th:value="${r}" th:text="${r}">role</option></select></label>
+        <label>Initial password (at least 12 characters) <input type="password" name="password" autocomplete="new-password" required></label>
+        <button type="submit">Add user</button>
+    </form>
+</main>
+</body>
+</html>

@@ -53,6 +53,16 @@ storageRoots:
 if ($LASTEXITCODE -ne 0) { Fail "check-config" }
 & $Java -jar "$AppDir\genealogy-archive.jar" migrate "--config=$DataDir\installation.yml"
 if ($LASTEXITCODE -ne 0) { Fail "migrate" }
+# Phase 1: the archive is created explicitly (never as a migration side effect); the worker and
+# readiness require it. The administrator password is passed through the environment, never argv.
+& $Java -jar "$AppDir\genealogy-archive.jar" init-archive "--name=Service Test Archive" "--config=$DataDir\installation.yml"
+if ($LASTEXITCODE -ne 0) { Fail "init-archive" }
+$SvcAdminPw = 'svc-' + (-join ((1..24) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) }))
+$env:GAS_NEW_ADMIN_PASSWORD = $SvcAdminPw
+& $Java -jar "$AppDir\genealogy-archive.jar" create-admin "--username=service-admin" "--config=$DataDir\installation.yml"
+$createAdminExit = $LASTEXITCODE
+Remove-Item Env:GAS_NEW_ADMIN_PASSWORD
+if ($createAdminExit -ne 0) { Fail "create-admin" }
 
 Start-Service GenealogyArchiveWeb
 $ready = $false
@@ -81,6 +91,10 @@ Start-Sleep -Seconds 2
 if (-not (Select-String -Path "$DataDir\logs\genealogy-archive-worker.log" -Pattern 'Worker stopped' -Quiet)) {
     Fail "worker stop was not graceful"
 }
+if (-not (Select-String -Path "$DataDir\logs\genealogy-archive-worker.log" -Pattern 'started for archive' -Quiet)) {
+    Fail "worker did not start for the archive"
+}
+if (Select-String -Path "$DataDir\logs\*.log" -SimpleMatch -Pattern $SvcAdminPw -Quiet) { Fail "administrator password found in service logs" }
 Write-Output "ok: Windows worker service started and stopped gracefully"
 
 & .\deploy\windows\uninstall-services.ps1 -AppDir $AppDir

@@ -38,7 +38,27 @@ public final class SchemaMigrator {
 
     /** Additional locations are used by tests only (for example deliberately failing migrations). */
     public SchemaMigrator(DataSource dataSource, String... locations) {
-        this.flyway = Flyway.configure()
+        this(configure(dataSource, null, locations));
+    }
+
+    /**
+     * A migrator that applies migrations only up to {@code targetVersion}. Used to reproduce an
+     * earlier accepted schema state (for example Phase 0 = version 0001) when testing upgrades.
+     */
+    public static SchemaMigrator upTo(DataSource dataSource, String targetVersion) {
+        return new SchemaMigrator(configure(dataSource, targetVersion, DEFAULT_LOCATION));
+    }
+
+    private SchemaMigrator(Flyway flyway) {
+        this.flyway = flyway;
+    }
+
+    private static Flyway configure(DataSource dataSource, String targetVersion, String... locations) {
+        var configuration = Flyway.configure();
+        if (targetVersion != null) {
+            configuration = configuration.target(targetVersion);
+        }
+        return configuration
                 .dataSource(dataSource)
                 .schemas(DataSources.APPLICATION_SCHEMA)
                 .defaultSchema(DataSources.APPLICATION_SCHEMA)

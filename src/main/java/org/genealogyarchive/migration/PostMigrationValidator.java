@@ -1,5 +1,7 @@
 package org.genealogyarchive.migration;
 
+import org.genealogyarchive.data.ArchiveInstanceRepository;
+import org.genealogyarchive.data.FriendlyIdSeriesRepository;
 import org.genealogyarchive.data.SchemaIdentityRepository;
 
 import javax.sql.DataSource;
@@ -14,10 +16,14 @@ public final class PostMigrationValidator {
 
     private final SchemaMigrator migrator;
     private final SchemaIdentityRepository identity;
+    private final ArchiveInstanceRepository archives;
+    private final FriendlyIdSeriesRepository friendlyIds;
 
     public PostMigrationValidator(DataSource dataSource, SchemaMigrator migrator) {
         this.migrator = migrator;
         this.identity = new SchemaIdentityRepository(dataSource);
+        this.archives = new ArchiveInstanceRepository(dataSource);
+        this.friendlyIds = new FriendlyIdSeriesRepository(dataSource);
     }
 
     /** @return problems found; empty means the migrated schema is valid */
@@ -34,6 +40,13 @@ public final class PostMigrationValidator {
             problems.add("Expected exactly one schema identity marker, found " + markers.size());
         } else if (!SchemaIdentityRepository.EXPECTED_APPLICATION.equals(markers.get(0))) {
             problems.add("Database foundation identity is incorrect");
+        }
+        // Phase 1 invariants. Read-only: inconsistent archival identity is reported, never repaired.
+        if (archives.findAll().size() > 1) {
+            problems.add("More than one Archive Instance record exists; archive identity is inconsistent");
+        }
+        for (String sequence : friendlyIds.unsafeSequences()) {
+            problems.add("Friendly identifier sequence " + sequence + " is missing or set to CYCLE (numbers could be reused)");
         }
         return problems;
     }

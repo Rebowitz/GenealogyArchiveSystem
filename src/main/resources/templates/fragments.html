@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:fragment="head(title)">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${title} + ' - Genealogy Archive System'">Genealogy Archive System</title>
+    <!-- All assets are local: the application never needs the Internet (UP-001). -->
+    <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+<body>
+<header th:fragment="nav">
+    <p class="brand"><a th:href="@{/}">Genealogy Archive System</a></p>
+    <nav th:if="${currentUser != null}">
+        <a th:href="@{/archive}">Archive</a>
+        <a th:href="@{/volumes}">Storage volumes</a>
+        <a th:href="@{/history}">Change history</a>
+        <a th:if="${currentUser.role().name() == 'ADMINISTRATOR'}" th:href="@{/users}">Users</a>
+        <a th:if="${currentUser.role().name() == 'ADMINISTRATOR'}" th:href="@{/operations}">Operations</a>
+        <a th:href="@{/account/password}">My password</a>
+        <form class="inline" th:action="@{/logout}" method="post">
+            <span class="who" th:text="${currentUser.displayName()} + ' (' + ${currentUser.role()} + ')'">user</span>
+            <button type="submit">Sign out</button>
+        </form>
+    </nav>
+    <nav th:if="${currentUser == null}"><a th:href="@{/login}">Sign in</a></nav>
+</header>
+
+<section th:fragment="history(entries)">
+    <h2>Change history</h2>
+    <p class="muted" th:if="${#lists.isEmpty(entries)}">No changes recorded.</p>
+    <table th:unless="${#lists.isEmpty(entries)}" class="list">
+        <thead><tr><th>When</th><th>Who</th><th>Change</th><th>Details</th></tr></thead>
+        <tbody>
+        <tr th:each="c : ${entries}">
+            <td th:text="${c.occurredAt()}">time</td>
+            <td th:text="${c.actorLabel()}">who</td>
+            <td><span th:text="${c.changeKind()}">kind</span> <span class="muted" th:text="${c.objectType()}">type</span></td>
+            <td>
+                <ul class="fields">
+                    <li th:each="f : ${c.fieldChanges()}">
+                        <span th:text="${f.field()}">field</span>:
+                        <span th:text="${f.before() == null ? '(none)' : f.before()}">before</span> &rarr;
+                        <span th:text="${f.after() == null ? '(none)' : f.after()}">after</span>
+                    </li>
+                </ul>
+                <p class="muted" th:if="${c.reason() != null}" th:text="'Reason: ' + ${c.reason()}">reason</p>
+            </td>
+        </tr>
+        </tbody>
+    </table>
+</section>
+</body>
+</html>

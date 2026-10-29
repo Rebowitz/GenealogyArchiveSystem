@@ -68,6 +68,13 @@ class CliDatabaseIT {
         assertThat(again.exitCode()).as(again.all()).isEqualTo(Cli.EXIT_OK);
         assertThat(again.out()).contains("Applied 0 migration(s)");
 
+        // Phase 1 (owner decision B): a migrated database is not ready until the archive is initialized.
+        Run migratedOnly = run(db.cliEnvironment(), "status", "--config=" + configFile);
+        assertThat(migratedOnly.exitCode()).isEqualTo(Cli.EXIT_DATABASE_PROBLEM);
+        assertThat(migratedOnly.out()).contains("CURRENT", "NOT_INITIALIZED", "Ready       : NO");
+        Run init = run(db.cliEnvironment(), "init-archive", "--name=CLI Test Archive", "--config=" + configFile);
+        assertThat(init.exitCode()).as(init.all()).isEqualTo(Cli.EXIT_OK);
+
         Run after = run(db.cliEnvironment(), "status", "--config=" + configFile);
         assertThat(after.exitCode()).as(after.all()).isEqualTo(Cli.EXIT_OK);
         assertThat(after.out()).contains("CURRENT", "Ready       : yes");

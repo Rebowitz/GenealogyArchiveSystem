@@ -20,3 +20,16 @@ h1 { margin: 0; font-weight: normal; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
 th { width: 14rem; font-weight: normal; color: var(--muted); }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem; border-bottom: 1px solid var(--rule); padding-bottom: .5rem; }
+header .brand { margin: 0; font-size: 1.1rem; }
+header a { color: var(--fg); }
+nav { display: flex; flex-wrap: wrap; gap: .75rem; align-items: baseline; }
+form.inline { display: inline-flex; gap: .5rem; align-items: baseline; margin: 0; }
+.who, .muted { color: var(--muted); }
+.form { display: grid; gap: .6rem; max-width: 32rem; margin: 1rem 0; }
+.form label { display: grid; gap: .2rem; }
+input, select, button { font: inherit; padding: .35rem .5rem; }
+table.list th { width: auto; }
+tr.problem td { color: var(--problem); }
+ul.fields { margin: 0; padding-left: 1rem; }
+code { overflow-wrap: anywhere; }

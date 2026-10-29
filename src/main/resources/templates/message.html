@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head(${title})}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1 th:text="${title}">Message</h1>
+    <p th:text="${text}">text</p>
+    <p><a href="javascript:history.back()">Go back</a> &middot; <a th:href="@{/}">Home</a></p>
+</main>
+</body>
+</html>

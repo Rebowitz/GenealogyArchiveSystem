@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Storage volumes')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Storage volumes</h1>
+    <p class="muted">A volume's identity and description belong to the archive. Where it is mounted on this
+        computer belongs to the installation configuration (<code>storageRoots</code>, keyed by Volume ID).</p>
+    <table class="list">
+        <thead><tr><th>Name</th><th>Purpose</th><th>Required</th><th>Status</th></tr></thead>
+        <tbody>
+        <tr th:each="v : ${volumes}">
+            <td><a th:href="@{/volumes/{id}(id=${v.volumeId()})}" th:text="${v.name()}">name</a></td>
+            <td th:text="${v.purpose()}">purpose</td>
+            <td th:text="${v.required()} ? 'Yes' : 'No'">req</td>
+            <td th:text="${v.active()} ? 'Active' : 'Retired'">status</td>
+        </tr>
+        </tbody>
+    </table>
+    <section th:if="${canManage}">
+        <h2>Register a volume</h2>
+        <form th:action="@{/volumes}" method="post" class="form">
+            <label>Name <input type="text" name="name" maxlength="100" required></label>
+            <label>Purpose (e.g. primary, backup, removable-backup) <input type="text" name="purpose" maxlength="64" required></label>
+            <label>Description (optional) <input type="text" name="description" maxlength="2000"></label>
+            <label><input type="checkbox" name="required" value="true"> Required for normal archival operation</label>
+            <button type="submit">Register</button>
+        </form>
+    </section>
+</main>
+</body>
+</html>

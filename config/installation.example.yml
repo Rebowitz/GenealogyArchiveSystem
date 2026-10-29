@@ -20,10 +20,14 @@ database:
   maxPoolSize: 10
 
 server:
-  # 127.0.0.1 = this computer only (default). Use 0.0.0.0 or a LAN address to serve browsers on
-  # the local network (UP-002) - do that deliberately, behind your firewall.
+  # 127.0.0.1 = this computer only (default). Password sign-in over plain HTTP on a network is refused:
+  # a non-loopback address (including 0.0.0.0 or ::) is accepted only with a declared TLS reverse proxy.
   bindAddress: 127.0.0.1
   port: 8080
+  # To serve other computers, put a TLS reverse proxy in front and list its exact IP address(es). The
+  # proxy must send X-Forwarded-Proto: https; requests from any other address cannot claim HTTPS.
+  # tlsReverseProxy:
+  #   addresses: ['127.0.0.1']
 
 logging:
   # json (default, one JSON object per line) or text.
@@ -34,7 +38,7 @@ logging:
 
 # Storage Volume ID (UUID) -> absolute native root on this host. The ID is the portable identity
 # used in archival data; the path is local. The same volume may be D:\... on a Windows host and
-# /srv/... on a Linux host. The Storage Volume model itself arrives in Phase 1.
+# /srv/... on a Linux host. Register the volume in the browser (Storage Volumes) to obtain its ID.
 storageRoots: {}
 #  '0192f0c4-1111-7000-8000-000000000001': '/srv/genealogy-archive/primary'     # Linux
 #  '0192f0c4-1111-7000-8000-000000000001': 'D:\GenealogyArchive\primary'        # Windows

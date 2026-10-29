@@ -1,6 +1,7 @@
 package org.genealogyarchive.config;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -46,8 +47,22 @@ public record InstallationConfig(
         }
     }
 
-    /** HTTP listener settings. Default binding is loopback-only; LAN exposure is a deliberate choice. */
-    public record ServerSettings(String bindAddress, int port) {
+    /**
+     * HTTP listener settings. Default binding is loopback-only. A non-loopback binding is accepted only
+     * with a declared TLS reverse proxy (see {@link TransportSecurity}).
+     *
+     * @param tlsReverseProxyAddresses exact IP addresses of the TLS reverse proxy; empty when none
+     */
+    public record ServerSettings(String bindAddress, int port, List<String> tlsReverseProxyAddresses) {
+
+        public ServerSettings {
+            tlsReverseProxyAddresses = tlsReverseProxyAddresses == null ? List.of() : List.copyOf(tlsReverseProxyAddresses);
+        }
+
+        /** Settings without a TLS reverse proxy. */
+        public ServerSettings(String bindAddress, int port) {
+            this(bindAddress, port, List.of());
+        }
     }
 
     /** Diagnostic logging: console always; optional rolling file in {@code directory}. */

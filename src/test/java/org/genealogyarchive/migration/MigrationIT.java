@@ -116,7 +116,8 @@ class MigrationIT {
 
     @Test
     void phaseZeroCreatesNoHistoricalDomainTables() {
-        new SchemaMigrator(dataSource).migrate();
+        // Pinned to the accepted Phase 0 schema (V0001); Phase 1 tables are checked in Phase1SchemaIT.
+        SchemaMigrator.upTo(dataSource, "0001").migrate();
         List<String> relations = new SchemaCatalog(dataSource).snapshot(DataSources.APPLICATION_SCHEMA).stream()
                 .filter(line -> line.startsWith("relation ") && line.endsWith("kind=r"))
                 .toList();

@@ -21,6 +21,11 @@ public final class VolumeRoots {
         this.roots = Map.copyOf(roots);
     }
 
+    /** Volume IDs that this installation maps to a native root. */
+    public java.util.Set<UUID> configuredVolumeIds() {
+        return roots.keySet();
+    }
+
     public Optional<Path> rootOf(UUID volumeId) {
         return Optional.ofNullable(roots.get(volumeId));
     }

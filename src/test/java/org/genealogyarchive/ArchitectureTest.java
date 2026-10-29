@@ -46,7 +46,9 @@ class ArchitectureTest {
     @ArchTest
     static final ArchRule layersPointInward = noClasses()
             .that().resideInAnyPackage(BASE + ".service..", BASE + ".data..", BASE + ".migration..",
-                    BASE + ".files..", BASE + ".platform..", BASE + ".config..", BASE + ".domain..")
+                    BASE + ".files..", BASE + ".platform..", BASE + ".config..", BASE + ".domain..",
+                    BASE + ".identity..", BASE + ".access..", BASE + ".history..", BASE + ".archive..",
+                    BASE + ".security..", BASE + ".storage..", BASE + ".jobs..")
             .should().dependOnClassesThat().resideInAnyPackage(
                     BASE + ".web..", BASE + ".ops..", BASE + ".boot..", BASE + ".cli..", BASE + ".worker..");
 
@@ -55,6 +57,25 @@ class ArchitectureTest {
     static final ArchRule portableCoreHasNoFramework = noClasses()
             .that().resideInAnyPackage(BASE + ".files..", BASE + ".platform..", BASE + ".config..")
             .should().dependOnClassesThat().resideInAnyPackage("org.springframework..");
+
+    /** Phase 1: identity and access rules are plain Java, independent of frameworks and persistence. */
+    @ArchTest
+    static final ArchRule identityAndAccessArePlainJava = noClasses()
+            .that().resideInAnyPackage(BASE + ".identity..", BASE + ".access..")
+            .should().dependOnClassesThat().resideInAnyPackage("org.springframework..", "java.sql..", "javax.sql..",
+                    BASE + ".data..", BASE + ".web..", BASE + ".platform..");
+
+    /** Phase 1: Spring Security is confined to the account adapter, web sign-in and process wiring. */
+    @ArchTest
+    static final ArchRule springSecurityConfined = noClasses()
+            .that().resideOutsideOfPackages(BASE + ".security..", BASE + ".web..", BASE + ".boot..")
+            .should().dependOnClassesThat().resideInAnyPackage("org.springframework.security..");
+
+    /** Phase 1: archive identity never depends on host facts (platform adapter, native paths, configuration). */
+    @ArchTest
+    static final ArchRule archiveIdentityIndependentOfHost = noClasses()
+            .that().resideInAnyPackage(BASE + ".archive..", BASE + ".identity..")
+            .should().dependOnClassesThat().resideInAnyPackage(BASE + ".platform..", BASE + ".config..", "java.net..");
 
     /** Only the platform adapter may inspect host properties such as os.name. */
     @ArchTest

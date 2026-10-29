@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Archive')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1 th:text="${archive.archiveName()}">Archive</h1>
+    <table>
+        <tr><th>Archive ID</th><td><code th:text="${archive.archiveId()}">id</code>
+            <span class="muted">permanent; identifies this archive wherever its material travels</span></td></tr>
+        <tr><th>Initialized</th><td th:text="${archive.createdAt()}">-</td></tr>
+        <tr><th>Storage volumes</th><td th:text="${#lists.size(configuration.storageVolumes())}">0</td></tr>
+        <tr><th>Identifier series</th>
+            <td><span th:if="${#lists.isEmpty(configuration.identifierSeries())}" class="muted">none registered yet</span>
+                <span th:each="s : ${configuration.identifierSeries()}" th:text="${s.prefix()} + ' (' + ${s.objectType()} + ') '">P</span></td></tr>
+    </table>
+    <section th:if="${canConfigure}">
+        <h2>Correct archive name</h2>
+        <form th:action="@{/archive}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${archive.version()}">
+            <label>Archive name <input type="text" name="archiveName" th:value="${archive.archiveName()}" maxlength="200" required></label>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Save</button>
+        </form>
+    </section>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

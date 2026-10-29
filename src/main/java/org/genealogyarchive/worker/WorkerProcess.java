@@ -1,23 +1,31 @@
 package org.genealogyarchive.worker;
 
+import org.genealogyarchive.boot.CoreServices;
+import org.genealogyarchive.identity.GlobalIds;
+import org.genealogyarchive.jobs.JobHandler;
+import org.genealogyarchive.jobs.JobRunner;
 import org.genealogyarchive.service.SystemStatus;
 import org.genealogyarchive.service.SystemStatusService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Phase 0 worker: refuses to start unless the foundation is ready (fail visibly), then keeps the
- * process alive under the service manager with a periodic heartbeat check, and stops cleanly on
- * service stop (SIGTERM on Linux, console Ctrl+C from WinSW on Windows).
+ * The background worker process: refuses to start unless the archive is ready (fail visibly), then
+ * runs persistent PostgreSQL-backed jobs (BUILD-SPEC s.47), reports its presence for the status view,
+ * and stops cleanly on service stop (SIGTERM on Linux, console Ctrl+C from WinSW on Windows).
  * <p>
- * It deliberately performs no jobs: the persistent PostgreSQL-backed job mechanism is Phase 1.
+ * Phase 1 registers no production job kinds; queued jobs of kinds no handler serves simply wait.
  */
 @Component
 public class WorkerProcess implements SmartLifecycle {
@@ -25,45 +33,100 @@ public class WorkerProcess implements SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(WorkerProcess.class);
 
     private final SystemStatusService statusService;
+    private final CoreServices core;
+    private final List<JobHandler> handlers;
     private final Duration heartbeat;
+    private final Duration pollInterval;
+    private final Duration lease;
+    private final UUID workerId = GlobalIds.newId();
     private final CountDownLatch stopSignal = new CountDownLatch(1);
     private volatile Thread thread;
+    private Instant startedAt;
 
-    public WorkerProcess(SystemStatusService statusService,
-                         @Value("${gas.worker.heartbeat:PT60S}") Duration heartbeat) {
+    public WorkerProcess(SystemStatusService statusService, CoreServices core, ObjectProvider<JobHandler> handlers,
+                         @Value("${gas.worker.heartbeat:PT60S}") Duration heartbeat,
+                         @Value("${gas.worker.poll-interval:PT5S}") Duration pollInterval,
+                         @Value("${gas.worker.job-lease:PT5M}") Duration lease) {
         this.statusService = statusService;
+        this.core = core;
+        this.handlers = handlers.orderedStream().toList();
         this.heartbeat = heartbeat;
+        this.pollInterval = pollInterval.compareTo(heartbeat) > 0 ? heartbeat : pollInterval;
+        this.lease = lease;
     }
 
     @Override
     public void start() {
         SystemStatus status = statusService.check();
         if (!status.ready()) {
-            throw new IllegalStateException("Worker cannot start: the archive foundation is not ready ("
-                    + status.schema().state() + "). " + String.join(" ", status.schema().messages()));
+            throw new IllegalStateException("Worker cannot start: the archive is not ready ("
+                    + status.schema().state() + ", archive " + status.archive().state() + "). "
+                    + String.join(" ", status.messages()));
         }
-        log.info("Worker started; schema version {}. No job processing in Phase 0.", status.schema().currentVersion());
-        Thread t = new Thread(this::loop, "gas-worker");
+        startedAt = core.clock().instant();
+        reportPresence();
+        // The lease is renewed every third of its duration while a handler runs (GAS-P1-001); a worker
+        // that stops renewing (crash, kill, lost database) loses the job after one lease interval.
+        JobRunner runner = new JobRunner(core.jobRepository(), core.clock(), workerId, lease, handlers);
+        log.info("Worker {} started for archive {}; schema version {}; job kinds: {}", workerId,
+                status.archive().archiveId(), status.schema().currentVersion(),
+                handlers.isEmpty() ? "none" : handlers.stream().map(JobHandler::kind).toList());
+        Thread t = new Thread(() -> loop(runner), "gas-worker");
         t.setDaemon(false); // keeps the JVM (and therefore the service) running
         thread = t;
         t.start();
     }
 
-    private void loop() {
+    private void loop(JobRunner runner) {
+        Instant nextHeartbeat = Instant.MIN;
+        boolean ready = true;
         try {
-            while (!stopSignal.await(heartbeat.toMillis(), TimeUnit.MILLISECONDS)) {
-                SystemStatus status = statusService.check();
-                if (status.ready()) {
-                    log.debug("Worker heartbeat: foundation ready");
-                } else {
-                    log.error("Worker heartbeat: foundation NOT ready ({}): {}", status.schema().state(),
-                            String.join(" ", status.schema().messages()));
+            do {
+                Instant now = core.clock().instant();
+                if (!now.isBefore(nextHeartbeat)) {
+                    nextHeartbeat = now.plus(heartbeat);
+                    ready = heartbeatCheck();
                 }
-            }
+                if (ready) {
+                    try {
+                        runner.runAvailable(50);
+                    } catch (RuntimeException e) {
+                        log.error("Worker could not process jobs: {}", e.getMessage());
+                    }
+                }
+            } while (!stopSignal.await(pollInterval.toMillis(), TimeUnit.MILLISECONDS));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } finally {
+            runner.close();
+        }
+        try {
+            core.workerPresence().remove(workerId);
+        } catch (RuntimeException e) {
+            log.warn("Worker presence could not be removed: {}", e.getMessage());
         }
         log.info("Worker stopped");
+    }
+
+    private boolean heartbeatCheck() {
+        SystemStatus status = statusService.check();
+        if (status.ready()) {
+            reportPresence();
+            log.debug("Worker heartbeat: archive ready");
+            return true;
+        }
+        log.error("Worker heartbeat: archive NOT ready ({}): {}", status.schema().state(),
+                String.join(" ", status.messages()));
+        return false;
+    }
+
+    private void reportPresence() {
+        try {
+            core.workerPresence().heartbeat(workerId, startedAt, core.clock().instant(),
+                    SystemStatusService.applicationVersion());
+        } catch (RuntimeException e) {
+            log.warn("Worker presence could not be recorded: {}", e.getMessage());
+        }
     }
 
     @Override
@@ -84,5 +147,9 @@ public class WorkerProcess implements SmartLifecycle {
     public boolean isRunning() {
         Thread t = thread;
         return t != null && t.isAlive();
+    }
+
+    public UUID workerId() {
+        return workerId;
     }
 }
