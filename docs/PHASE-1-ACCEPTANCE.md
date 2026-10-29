@@ -26,7 +26,19 @@ owner on 2026-10-28.**
   | ubuntu-24.04 / PostgreSQL 16 | 339 | 0 | 0 | 0 | passed | systemd passed |
   | ubuntu-24.04 / PostgreSQL 18 | 339 | 0 | 0 | 0 | passed | systemd passed |
 
-- Post-merge `main` (merge commit `77d6ee0`, run 40791489878): **PENDING** — GitHub did not start the jobs (account billing block); to be re-run and recorded before this record is merged.
+- Post-merge `main` CI on merge commit `77d6ee0` (run 40791489878), all four combinations passing:
+
+  | Job | Tests | Failures | Errors | Skipped | Smoke | Service manager |
+  |---|---|---|---|---|---|---|
+  | windows-2025 / PostgreSQL 16 | 339 | 0 | 0 | 0 | passed | WinSW passed |
+  | windows-2025 / PostgreSQL 18 | 339 | 0 | 0 | 0 | passed | WinSW passed |
+  | ubuntu-24.04 / PostgreSQL 16 | 339 | 0 | 0 | 0 | passed | systemd passed |
+  | ubuntu-24.04 / PostgreSQL 18 | 339 | 0 | 0 | 0 | passed | systemd passed |
+
+  Run history: attempt 1 did not start (GitHub account billing block, since cleared). In attempt 2 the
+  Linux jobs passed, but both Windows jobs failed while installing PostgreSQL, because the Chocolatey
+  community feed returned HTTP 504/406 (no tests ran). Attempt 3 re-ran only the two Windows jobs, and
+  both passed. No code or configuration changed between attempts.
 - Schema: migrations V0002–V0008 added on top of the accepted Phase 0 V0001 (unchanged).
 - Phase 2 functionality: none.
 
