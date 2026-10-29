@@ -4,7 +4,7 @@ A lightweight, durable archive for genealogical research and the historical evid
 One application codebase runs as independent Archive Instances on **Windows** and **Linux** hosts, with
 **PostgreSQL** as the authoritative database and an ordinary **web browser** as the client.
 
-> **Status: Phase 1 - Archive Identity / Core, IN REVIEW (not accepted).** Phase 0 (Foundation) was
+> **Status: Phase 1 - Archive Identity / Core, ACCEPTED 2026-10-28 at `1dff0fa` (see [`docs/PHASE-1-ACCEPTANCE.md`](docs/PHASE-1-ACCEPTANCE.md)).** Phase 0 (Foundation) was
 > accepted 2026-10-28 at `f326366` ([`docs/PHASE-0-ACCEPTANCE.md`](docs/PHASE-0-ACCEPTANCE.md)). Phase 1 adds
 > the permanent Archive ID, global and friendly identifier infrastructure, archive configuration, change
 > history, local accounts with sign-in, Storage Volume registration and the background-job foundation.
@@ -295,8 +295,8 @@ docs/                            Governing specifications and architecture/ADRs
 ## 10. Continuing development
 
 Read [`docs/architecture/overview.md`](docs/architecture/overview.md) first, then the ADRs. Key conventions:
-- **Implement only the approved phase.** Phase 1 (Archive Identity / Core) is in review; Phase 2 has not
-  been started.
+- **Implement only the approved phase.** Phase 1 (Archive Identity / Core) is accepted; Phase 2 has not
+  been started and begins only on the owner's separate authorization.
 - **Every service operation takes an explicit `Actor`** and checks `AccessPolicy`; record changes with
   `ChangeRecorder` in the same transaction; use `row_version` optimistic concurrency for mutable rows.
 - **New schema = new migration file** `V000N__description.sql`; never edit an applied migration

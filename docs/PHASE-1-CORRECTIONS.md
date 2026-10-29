@@ -1,5 +1,8 @@
 # Phase 1 corrections — GAS-P1-001, GAS-P1-002, GAS-P1-R01 and evidence strengthening
 
+> **Historical record.** Phase 1 was accepted on 2026-10-28 at `1dff0fa`; see [`PHASE-1-ACCEPTANCE.md`](PHASE-1-ACCEPTANCE.md).
+> Status statements below describe the state at the time of writing.
+
 Response to the independent review of Phase 1 head `70c3b954437647f736273bee83f82fadc539b018`.
 Scope is limited to the two MAJOR findings and the two authorized test-strengthening items.
 **Phase 1 is not accepted; PR #3 remains open and unmerged; Phase 2 was not started.**

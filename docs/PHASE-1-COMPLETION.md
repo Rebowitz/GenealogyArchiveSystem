@@ -1,5 +1,8 @@
 # Phase 1 completion report — Archive Identity / Core
 
+> **Historical record.** Phase 1 was accepted on 2026-10-28 at `1dff0fa`; see [`PHASE-1-ACCEPTANCE.md`](PHASE-1-ACCEPTANCE.md).
+> Status statements below describe the state at the time of writing.
+
 Prepared by the implementation agent for independent review. **Phase 1 is not accepted** until the
 project owner says so after review. The Phase 1 PR has not been merged.
 
