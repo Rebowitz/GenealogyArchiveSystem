@@ -272,7 +272,7 @@ public class FileController {
         return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(sb.toString());
     }
 
-    private static String quote(String s) {
+    static String quote(String s) {
         StringBuilder sb = new StringBuilder("\"");
         for (char c : s.toCharArray()) {
             switch (c) {
