@@ -88,12 +88,23 @@
                 var cell = row(table, file.name);
                 if (file.size > max) { cell.textContent = 'Not uploaded: larger than the limit of ' + max + ' bytes'; return; }
                 chain = chain.then(function () {
-                    var url = base + '/files/batches/' + uploader.dataset.batch + '/items/' + itemKey(file);
-                    return send(url, uploader, file, headers, cell).then(function (r) {
-                        if (r.status !== 200) { cell.textContent = 'Not archived: ' + (r.body.error || ('HTTP ' + r.status)); return; }
-                        show(cell, r.body);
-                        return poll(base + '/files/operations/' + r.body.operationId + '/status', cell);
-                    });
+                    // The same file keeps the same key, so a resend after a lost response never archives it
+                    // twice. If an earlier attempt ended without archiving (abandoned, cancelled, rejected),
+                    // a fresh attempt uses the next key.
+                    function attempt(n) {
+                        var key = itemKey(file) + (n > 1 ? '-a' + n : '');
+                        var url = base + '/files/batches/' + uploader.dataset.batch + '/items/' + key;
+                        return send(url, uploader, file, headers, cell).then(function (r) {
+                            if (r.status !== 200) { cell.textContent = 'Not archived: ' + (r.body.error || ('HTTP ' + r.status)); return; }
+                            var ended = ['ABANDONED', 'CANCELLED', 'REJECTED'].indexOf(r.body.state) >= 0;
+                            if (ended && r.body.fresh !== true && n < 20) {
+                                return attempt(n + 1);
+                            }
+                            show(cell, r.body);
+                            return poll(base + '/files/operations/' + r.body.operationId + '/status', cell);
+                        });
+                    }
+                    return attempt(1);
                 });
             });
         });

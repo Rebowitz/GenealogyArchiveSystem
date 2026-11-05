@@ -139,8 +139,10 @@ class FileWebIT {
         assertThat(page.statusCode()).isEqualTo(200);
         assertThat(page.body()).contains("Pfarrbuch 1803 Seite 12.tif");
 
+        assertThat(put.body()).contains("\"fresh\":true");
         HttpResponse<String> again = upload(editor, batch, "k1", "Pfarrbuch 1803 Seite 12.tif", body, Map.of(), false);
         assertThat(group(OP, again.body())).as("a resent item is the same operation").isEqualTo(op.toString());
+        assertThat(again.body()).contains("\"fresh\":false");
     }
 
     @Test

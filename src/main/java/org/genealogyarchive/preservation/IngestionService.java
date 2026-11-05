@@ -97,6 +97,12 @@ public final class IngestionService {
         return ctx.operations().byBatch(batchId);
     }
 
+    /** True if this batch already has an operation for the item key (a resent or repeated item). */
+    public boolean itemExists(Actor actor, UUID batchId, String itemKey) {
+        batch(actor, batchId);
+        return ctx.operations().findByBatchItem(batchId, itemKey).isPresent();
+    }
+
     /** The operation, if the actor started it (or may manage preservation). */
     public FileOperation operation(Actor actor, UUID operationId) {
         AccessPolicy.require(actor, Permission.INGEST_FILES);

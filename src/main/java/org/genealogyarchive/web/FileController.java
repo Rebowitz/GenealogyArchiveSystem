@@ -208,8 +208,12 @@ public class FileController {
                     "RESTRICTED".equals(request.getHeader("X-Restriction")) ? Restriction.RESTRICTED : Restriction.NORMAL,
                     decode(request.getHeader("X-Source-Note")), uuid(request.getHeader("X-Parent-File")),
                     decode(request.getHeader("X-Derivation-Method")));
+            boolean existed = preservation.ingestion().itemExists(actor, batchId, itemKey);
             FileOperation op = preservation.ingestion().receive(actor, upload, request.getContentLengthLong(), request.getInputStream());
-            return json(HttpStatus.OK, status(op));
+            Map<String, Object> body = status(op);
+            // false: this item key was already used in the batch and the earlier attempt is returned unchanged
+            body.put("fresh", !existed);
+            return json(HttpStatus.OK, body);
         } catch (IngestionService.UploadTooLargeException e) {
             return error(HttpStatus.PAYLOAD_TOO_LARGE, e.getMessage());
         } catch (NotFoundException e) {
