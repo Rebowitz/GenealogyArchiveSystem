@@ -37,5 +37,32 @@ $web = Get-ServiceSid -ServiceId 'GenealogyArchiveWeb'
 $worker = Get-ServiceSid -ServiceId 'GenealogyArchiveWorker'
 Invoke-Icacls $VolumeRoot /grant "*${worker}:(OI)(CI)M"
 Invoke-Icacls $VolumeRoot /grant "*${web}:(OI)(CI)RX"
-Invoke-Icacls $VolumeRoot /deny "*${web}:(OI)(CI)(WD,AD,WEA,WA,D,DC,WDAC,WO)"
+# The DENY entry is written through the .NET ACL API with explicit rights. It must not contain
+# SYNCHRONIZE or READ_CONTROL: Windows needs SYNCHRONIZE to open any file, even for reading, and an
+# icacls generic "W" deny includes it, which would also block the web service's reads.
+$webSid = New-Object System.Security.Principal.SecurityIdentifier($web)
+$denied = [System.Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($webSid, $denied,
+    [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit',
+    [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Deny)
+$acl = (Get-Item -LiteralPath $VolumeRoot -Force).GetAccessControl('Access')
+$acl.AddAccessRule($rule)
+(Get-Item -LiteralPath $VolumeRoot -Force).SetAccessControl($acl)
+
+$check = (Get-Item -LiteralPath $VolumeRoot -Force).GetAccessControl('Access').GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
+    Where-Object { $_.IdentityReference.Value -eq $web -and $_.AccessControlType -eq 'Deny' -and -not $_.IsInherited }
+if (-not $check) { throw "The DENY entry for the web service was not recorded on $VolumeRoot" }
+foreach ($r in $check) {
+    if ($r.FileSystemRights -band ([System.Security.AccessControl.FileSystemRights]::Synchronize -bor [System.Security.AccessControl.FileSystemRights]::ReadPermissions)) {
+        throw "The DENY entry for the web service would also block reading ($($r.FileSystemRights))"
+    }
+}
+
+# Advisory only: broad write access for ordinary users on a volume root is poor practice.
+$broad = (Get-Item -LiteralPath $VolumeRoot -Force).GetAccessControl('Access').GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
+    Where-Object { $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -in @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11') -and
+        ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]'WriteData, AppendData, Delete, DeleteSubdirectoriesAndFiles') }
+if ($broad) {
+    Write-Warning "Everyone, Users or Authenticated Users may write in $VolumeRoot (inherited from its parent). Consider removing inheritance so only administrators and the worker service can change preservation originals."
+}
 Write-Output "Granted $VolumeRoot : worker modify; web read-only (write rights denied)."

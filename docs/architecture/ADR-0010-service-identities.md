@@ -22,7 +22,10 @@ Phase 0 LocalSystem limitation (D-0002). Not yet accepted.
 - `grant-volume-access.ps1 -VolumeRoot <dir>` gives the worker Modify and the web service Read & execute
   **plus an explicit DENY** of write data, append, write (extended) attributes, delete, delete child,
   change permissions and take ownership. A DENY entry overrides any allow the web service could receive
-  through a group.
+  through a group. The DENY entry deliberately excludes SYNCHRONIZE and READ_CONTROL: Windows requires
+  SYNCHRONIZE to open any file, so a generic `icacls ... /deny (W)` entry (which includes it) would also
+  stop the web service from reading. The script writes the entry through the .NET ACL API, verifies it,
+  and warns when ordinary users may write in the volume root through inherited permissions.
 - **Workgroup NAS fallback (B4, documented only, not CI-tested):** a NAS share in a workgroup cannot
   authorize a virtual account. Create a dedicated local low-privilege account per service with the same
   user name and password on the NAS, run the services under those accounts, give the worker account
