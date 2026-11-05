@@ -165,9 +165,13 @@ class FileWebIT {
         start(FileSettings.DEFAULT_MAX_UPLOAD_BYTES);
         WebSession editor = signedIn("editor1");
         String batch = batch(editor);
-        HttpResponse<String> noToken = editor.put("/files/upload", "/files/batches/" + batch + "/items/x",
-                Map.of("X-CSRF-TOKEN", "forged", "X-File-Name", "a.tif"), HttpRequest.BodyPublishers.ofString("a"));
+        HttpResponse<String> noToken = editor.putRaw("/files/batches/" + batch + "/items/x",
+                Map.of("X-File-Name", "a.tif"), HttpRequest.BodyPublishers.ofString("a"));
         assertThat(noToken.statusCode()).isEqualTo(403);
+        HttpResponse<String> forged = editor.putRaw("/files/batches/" + batch + "/items/y",
+                Map.of("X-CSRF-TOKEN", "forged", "X-File-Name", "a.tif"), HttpRequest.BodyPublishers.ofString("a"));
+        assertThat(forged.statusCode()).isEqualTo(403);
+        assertThat(fx.preservation().context().operations().byBatch(UUID.fromString(batch))).isEmpty();
 
         WebSession viewer = signedIn("viewer1");
         assertThat(viewer.get("/files/upload").statusCode()).isEqualTo(403);

@@ -68,6 +68,14 @@ public final class WebSession {
         return send(b.PUT(body).build());
     }
 
+    /** PUT without adding a CSRF token (to prove CSRF protection). */
+    public HttpResponse<String> putRaw(String path, Map<String, String> headers, HttpRequest.BodyPublisher body) {
+        HttpRequest.Builder b = HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(120))
+                .header("Content-Type", "application/octet-stream");
+        headers.forEach(b::header);
+        return send(b.PUT(body).build());
+    }
+
     /** Submits a form found on {@code formPage} to {@code action}, adding the page's CSRF token. */
     public HttpResponse<String> submit(String formPage, String action, Map<String, String> fields) {
         String token = csrfToken(get(formPage).body());

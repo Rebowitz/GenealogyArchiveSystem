@@ -167,9 +167,10 @@ class IntegrityRepairIT {
     void repairOfHealthyContentIsRefused() {
         byte[] bytes = b("fine");
         ArchivalFile f = fx.ingest(fx.editor, "f.tif", bytes);
-        FileOperation op = repair(f, bytes);
-        assertThat(op.state()).isIn(OperationState.REJECTED);
+        assertThatThrownBy(() -> repair(f, bytes)).isInstanceOf(RuleViolationException.class)
+                .hasMessageContaining("missing or damaged");
         assertThat(content(f).currentGeneration()).isEqualTo(1);
+        assertThat(fx.preservation().operations().recent(fx.admin, 10)).noneMatch(o -> o.kind() == OperationKind.REPAIR);
     }
 
     @Test
