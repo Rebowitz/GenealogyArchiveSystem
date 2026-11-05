@@ -85,6 +85,9 @@ files:
 & .\deploy\windows\grant-volume-access.ps1 -VolumeRoot $Volume
 & $Java -jar "$AppDir\genealogy-archive.jar" init-volume "--volume-id=$VolumeId" "--config=$DataDir\installation.yml"
 if ($LASTEXITCODE -ne 0) { Fail "init-volume" }
+Write-Output "Volume permissions after grant-volume-access.ps1 and init-volume:"
+& icacls $Volume
+& icacls (Join-Path $Volume '.genealogy-archive-volume')
 & $Java -jar "$AppDir\genealogy-archive.jar" set-ingestion-volume "--volume-id=$VolumeId" "--config=$DataDir\installation.yml"
 if ($LASTEXITCODE -ne 0) { Fail "set-ingestion-volume" }
 
@@ -148,6 +151,9 @@ $page = Invoke-WebRequest -Uri "$base/files/upload" -WebSession $browser -UseBas
 if ($page.Content -notmatch 'Uploads are stored on volume') {
     $why = [regex]::Match($page.Content, '<section class="status problem">\s*<p>([^<]*)</p>').Groups[1].Value
     & icacls "$DataDir\staging"
+    & icacls $Volume
+    & icacls (Join-Path $Volume '.genealogy-archive-volume')
+    & icacls (Split-Path $Volume -Parent)
     Fail "uploads are not ready under the service accounts: $why"
 }
 $t = [regex]::Match($page.Content, 'name="_csrf" value="([^"]+)"').Groups[1].Value

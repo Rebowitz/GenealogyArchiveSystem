@@ -63,6 +63,8 @@ public final class ManagedVolume {
             throw new VolumeUnavailableException(volumeId, VolumeUnavailableException.Reason.NOT_INITIALIZED);
         } catch (VolumeMarker.InvalidMarkerException e) {
             throw new VolumeUnavailableException(volumeId, VolumeUnavailableException.Reason.MARKER_INVALID);
+        } catch (java.nio.file.AccessDeniedException e) {
+            throw new VolumeUnavailableException(volumeId, VolumeUnavailableException.Reason.MARKER_ACCESS_DENIED);
         } catch (IOException e) {
             throw new VolumeUnavailableException(volumeId, VolumeUnavailableException.Reason.ROOT_UNAVAILABLE);
         }
@@ -180,6 +182,7 @@ public final class ManagedVolume {
             ROOT_UNAVAILABLE("its root directory is not available (disconnected, unmounted or inaccessible)"),
             NOT_INITIALIZED("it has not been initialized (no volume marker)"),
             MARKER_INVALID("its volume marker is unreadable or malformed"),
+            MARKER_ACCESS_DENIED("this service is not permitted to read its volume marker (check the folder's permissions)"),
             MARKER_MISMATCH("its marker belongs to a different archive or volume");
 
             private final String explanation;

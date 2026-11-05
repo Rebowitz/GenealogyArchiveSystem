@@ -147,6 +147,11 @@ public final class VolumePreservationService {
         List<String> problems = new ArrayList<>();
         for (VolumePreservation v : status()) {
             if (!v.usable()) {
+                if (ctx.roots().rootOf(v.volume().volumeId()).isPresent() && v.initializedInArchive()) {
+                    // Never report "denied" for a volume this process could not even open.
+                    problems.add("Write access to volume '" + v.volume().name() + "' could not be checked: "
+                            + v.markerStatus());
+                }
                 continue;
             }
             try {
