@@ -77,13 +77,10 @@ public class PreservationController {
     }
 
     @PostMapping("/preservation/contents/{contentId}/reverify")
-    public String reverify(@PathVariable UUID contentId, Model model, Authentication authentication) {
-        boolean ok = preservation.integrity().reverify(actors.require(authentication), contentId);
-        if (!ok) {
-            throw new RuleViolationException("The stored original does not match its authoritative size and SHA-256 "
-                    + "(or is missing). It stays recorded as a problem; use verified repair with a good copy.");
-        }
-        return "redirect:/preservation";
+    public String reverify(@PathVariable UUID contentId, Authentication authentication) {
+        // Runs in the worker: restoring lost protection changes managed storage, which the web process cannot do.
+        preservation.integrity().requestReverify(actors.require(authentication), contentId);
+        return "redirect:/preservation?reverifyRequested";
     }
 
     @GetMapping("/preservation/operations/{operationId}")

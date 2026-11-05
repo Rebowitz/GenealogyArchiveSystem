@@ -250,17 +250,31 @@ public final class IntegrityService {
     }
 
     /**
-     * Administrator re-verification of one content: re-applies read-only protection if it was lost,
-     * re-hashes the stored original and, only if it matches the authoritative SHA-256, returns the
-     * content to ACTIVE and resolves its open findings. Never changes the authoritative hash.
-     *
-     * @return true if the content verified
+     * Administrator request to re-verify one content. The check runs in the worker, because restoring
+     * lost read-only protection is a change to managed storage and the web process has no write access
+     * to archival volumes.
      */
-    public boolean reverify(Actor actor, UUID contentId) {
+    public void requestReverify(Actor actor, UUID contentId) {
         AccessPolicy.require(actor, Permission.MANAGE_PRESERVATION);
         FileContent content = ctx.contents().find(contentId).orElseThrow(() -> new NotFoundException("The content"));
         if (content.state() == ContentState.DESTROYED || content.state() == ContentState.DESTROY_PENDING) {
             throw new RuleViolationException("Destroyed content cannot be verified.");
+        }
+        ctx.jobs().enqueue(PreservationContext.JOB_REVERIFY, "{\"id\":\"" + contentId + "\",\"by\":\""
+                + PreservationContext.jsonSafe(actor.label()) + "\"}", 5);
+    }
+
+    /**
+     * Worker side of re-verification: re-applies read-only protection if it was lost, re-hashes the
+     * stored original and, only if it matches the authoritative SHA-256, returns the content to ACTIVE
+     * and resolves its open findings. Never changes the authoritative hash.
+     *
+     * @return true if the content verified
+     */
+    public boolean reverify(UUID contentId, String requestedBy) {
+        FileContent content = ctx.contents().find(contentId).orElseThrow(() -> new NotFoundException("The content"));
+        if (content.state() == ContentState.DESTROYED || content.state() == ContentState.DESTROY_PENDING) {
+            return false;
         }
         ManagedVolume volume;
         try {
@@ -279,7 +293,8 @@ public final class IntegrityService {
             }
             m = ContentIo.measure(path);
         } catch (IOException e) {
-            throw new RuleViolationException("The stored original could not be read (" + e.getClass().getSimpleName() + ").");
+            log.warn("Re-verification of content {} could not read the stored original: {}", contentId, e.getClass().getSimpleName());
+            return false;
         }
         if (m.size() != content.byteSize() || !m.sha256().equals(content.sha256())) {
             return false;
@@ -290,7 +305,7 @@ public final class IntegrityService {
             }
             ctx.contents().markVerified(contentId, ctx.clock().instant());
             for (IntegrityFinding f : ctx.integrity().openFindingsFor(contentId)) {
-                ctx.integrity().resolve(f.findingId(), "Re-verified by " + actor.label()
+                ctx.integrity().resolve(f.findingId(), "Re-verified at the request of " + requestedBy
                         + ": the stored original matches its authoritative size and SHA-256 and is protected.", null);
             }
         });

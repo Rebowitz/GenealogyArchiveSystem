@@ -5,6 +5,7 @@
 <header th:replace="~{fragments :: nav}"></header>
 <main>
     <h1>File preservation</h1>
+    <p class="status ok" th:if="${param.reverifyRequested != null}">Re-verification requested; the worker runs it shortly and the findings below update.</p>
     <section th:class="${status.attentionNeeded()} ? 'status problem' : 'status ok'">
         <p th:text="${status.ingestion()}">ingestion</p>
         <p>Blocked: <span th:text="${status.blocked()}">0</span> &middot; Waiting for volume: <span th:text="${status.waiting()}">0</span>

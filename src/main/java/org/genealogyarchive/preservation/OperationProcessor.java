@@ -253,7 +253,9 @@ public final class OperationProcessor {
 
     private boolean tryShare(FileOperation op, Path staged, Runnable guard) {
         for (FileContent candidate : ctx.contents().duplicateCandidates(op.expectedSize(), op.expectedSha256())) {
-            if (candidate.currentPath() == null) {
+            if (candidate.currentPath() == null || usedByRestrictedFile(candidate.contentId())) {
+                // Never share with content a restricted File uses: the "identical bytes already stored"
+                // outcome would otherwise reveal to the uploader that the restricted File exists.
                 continue;
             }
             try {
@@ -279,7 +281,7 @@ public final class OperationProcessor {
         String mediaType = mediaTypeOf(staged);
         Boolean done = ctx.tx().execute(status -> {
             Optional<FileContent> locked = ctx.contents().lock(contentId);
-            if (locked.isEmpty() || locked.get().state() != ContentState.ACTIVE) {
+            if (locked.isEmpty() || locked.get().state() != ContentState.ACTIVE || usedByRestrictedFile(contentId)) {
                 return false;
             }
             UUID fileId = GlobalIds.newId();
@@ -296,6 +298,11 @@ public final class OperationProcessor {
             return true;
         });
         return Boolean.TRUE.equals(done);
+    }
+
+    private boolean usedByRestrictedFile(UUID contentId) {
+        return ctx.files().byContent(contentId).stream()
+                .anyMatch(f -> f.lifecycle() != FileLifecycle.DESTROYED && f.restricted());
     }
 
     // ---- PROMOTED ---------------------------------------------------------------------------------
@@ -456,13 +463,21 @@ public final class OperationProcessor {
             try {
                 ctx.faults().reach(FaultPoints.Point.BEFORE_QUARANTINE_MOVE, op.operationId());
                 Path source = volume.resolveExisting(PortableRelativePath.of(g.storagePath()));
+                PortableRelativePath q = ManagedVolume.quarantinePath(op.operationId(), "damaged-g" + g.generation());
+                if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)
+                        && Files.exists(volume.prepare(q), LinkOption.NOFOLLOW_LINKS)) {
+                    // An earlier attempt moved it but stopped before recording the move: confirm and record it now.
+                    ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
+                            GenerationState.QUARANTINED, q.value());
+                    ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " confirmed in " + q.value());
+                    continue;
+                }
                 if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
                     ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
                             GenerationState.MISSING, null);
                     ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " was no longer present");
                     continue;
                 }
-                PortableRelativePath q = ManagedVolume.quarantinePath(op.operationId(), "damaged-g" + g.generation());
                 moveToQuarantine(volume, source, q);
                 ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
                         GenerationState.QUARANTINED, q.value());

@@ -3,6 +3,8 @@ package org.genealogyarchive.data;
 import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.preservation.BlockedReason;
 import org.genealogyarchive.preservation.FileOperation;
+import org.genealogyarchive.preservation.OperationEvent;
+import org.genealogyarchive.preservation.UploadBatch;
 import org.genealogyarchive.preservation.OperationKind;
 import org.genealogyarchive.preservation.OperationState;
 import org.genealogyarchive.preservation.Restriction;
@@ -82,9 +84,6 @@ public final class FileOperationRepository {
     }
 
     /** A batch row. */
-    public record Batch(UUID batchId, UUID createdBy, UUID volumeId, Instant createdAt, String note) {
-    }
-
     private final JdbcClient jdbc;
     private final TransactionTemplate tx;
 
@@ -98,10 +97,10 @@ public final class FileOperationRepository {
                 .param("id", batchId).param("by", createdBy).param("vol", volumeId).param("note", note).update();
     }
 
-    public Optional<Batch> findBatch(UUID batchId) {
+    public Optional<UploadBatch> findBatch(UUID batchId) {
         return jdbc.sql("SELECT batch_id, created_by, volume_id, created_at, note FROM gas.file_upload_batch WHERE batch_id = :id")
                 .param("id", batchId)
-                .query((rs, n) -> new Batch(Rows.uuid(rs, "batch_id"), Rows.uuid(rs, "created_by"),
+                .query((rs, n) -> new UploadBatch(Rows.uuid(rs, "batch_id"), Rows.uuid(rs, "created_by"),
                         Rows.uuid(rs, "volume_id"), Rows.instant(rs, "created_at"), rs.getString("note")))
                 .optional();
     }
@@ -175,13 +174,10 @@ public final class FileOperationRepository {
     }
 
     /** One history event of an operation. */
-    public record Event(int seq, Instant occurredAt, String fromState, String toState, String detail) {
-    }
-
-    public List<Event> events(UUID operationId) {
+    public List<OperationEvent> events(UUID operationId) {
         return jdbc.sql("SELECT seq, occurred_at, from_state, to_state, detail FROM gas.file_operation_event WHERE operation_id = :id ORDER BY seq")
                 .param("id", operationId)
-                .query((rs, n) -> new Event(rs.getInt("seq"), Rows.instant(rs, "occurred_at"), rs.getString("from_state"),
+                .query((rs, n) -> new OperationEvent(rs.getInt("seq"), Rows.instant(rs, "occurred_at"), rs.getString("from_state"),
                         rs.getString("to_state"), rs.getString("detail")))
                 .list();
     }

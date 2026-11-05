@@ -72,7 +72,7 @@ public final class IngestionService {
     }
 
     /** Starts an upload batch. Refuses visibly if ingestion is not possible. */
-    public FileOperationRepository.Batch startBatch(Actor actor, String note) {
+    public UploadBatch startBatch(Actor actor, String note) {
         Readiness r = readiness(actor);
         if (!r.ready()) {
             throw new RuleViolationException("Files cannot be uploaded right now: " + r.explanation());
@@ -82,9 +82,9 @@ public final class IngestionService {
         return ctx.operations().findBatch(batchId).orElseThrow();
     }
 
-    public FileOperationRepository.Batch batch(Actor actor, UUID batchId) {
+    public UploadBatch batch(Actor actor, UUID batchId) {
         AccessPolicy.require(actor, Permission.INGEST_FILES);
-        FileOperationRepository.Batch b = ctx.operations().findBatch(batchId)
+        UploadBatch b = ctx.operations().findBatch(batchId)
                 .orElseThrow(() -> new NotFoundException("The upload batch"));
         if (!b.createdBy().equals(actor.userId()) && !AccessPolicy.allows(actor, Permission.MANAGE_PRESERVATION)) {
             throw new NotFoundException("The upload batch");
@@ -116,7 +116,7 @@ public final class IngestionService {
      * @throws UploadTooLargeException if the declared or received size exceeds the limit
      */
     public FileOperation receive(Actor actor, Upload upload, long declaredLength, InputStream body) {
-        FileOperationRepository.Batch batch = batch(actor, upload.batchId());
+        UploadBatch batch = batch(actor, upload.batchId());
         if (upload.itemKey() == null || !ITEM_KEY.matcher(upload.itemKey()).matches()) {
             throw new RuleViolationException("Each uploaded file needs an item key of letters, digits, '-' or '_'.");
         }

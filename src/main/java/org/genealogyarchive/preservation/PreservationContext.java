@@ -47,6 +47,8 @@ public record PreservationContext(
     public static final String JOB_REPAIR = "file.repair";
     public static final String JOB_THUMBNAIL = "file.thumbnail";
     public static final String JOB_INTEGRITY_SCAN = "file.integrity-scan";
+    public static final String JOB_REVERIFY = "file.reverify";
+    public static final String JOB_CANCEL = "file.cancel";
 
     /** The staging area, if configured. */
     public Optional<StagingArea> staging() {
@@ -77,8 +79,28 @@ public record PreservationContext(
 
     /** Parses the ID from a job payload written by {@link #enqueue}. */
     public static UUID idFromPayload(String payloadJson) {
-        int i = payloadJson.indexOf("\"id\"");
+        return UUID.fromString(fieldFromPayload(payloadJson, "id"));
+    }
+
+    /** Reads a simple string field from a job payload written by this class (no nested objects). */
+    public static String fieldFromPayload(String payloadJson, String field) {
+        int i = payloadJson.indexOf("\"" + field + "\"");
+        if (i < 0) {
+            return null;
+        }
         int start = payloadJson.indexOf('"', payloadJson.indexOf(':', i) + 1) + 1;
-        return UUID.fromString(payloadJson.substring(start, start + 36));
+        int end = payloadJson.indexOf('"', start);
+        return payloadJson.substring(start, end);
+    }
+
+    /** Keeps a label safe to embed in a payload string: drops quotes, backslashes and control characters. */
+    public static String jsonSafe(String text) {
+        StringBuilder b = new StringBuilder();
+        for (char c : (text == null ? "" : text).toCharArray()) {
+            if (c >= 0x20 && c != '"' && c != '\\') {
+                b.append(c);
+            }
+        }
+        return b.toString();
     }
 }

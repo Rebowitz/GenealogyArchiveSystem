@@ -61,4 +61,16 @@ public class PreservationJobs {
     JobHandler integrityScanHandler(PreservationServices p) {
         return handler(PreservationContext.JOB_INTEGRITY_SCAN, (id, e) -> p.integrity().run(id));
     }
+
+    @Bean
+    JobHandler cancelHandler(PreservationServices p) {
+        return handler(PreservationContext.JOB_CANCEL, (id, e) -> p.operations().performCancel(id,
+                PreservationContext.fieldFromPayload(e.job().payloadJson(), "by")));
+    }
+
+    @Bean
+    JobHandler reverifyHandler(PreservationServices p) {
+        return handler(PreservationContext.JOB_REVERIFY, (id, e) -> p.integrity().reverify(id,
+                PreservationContext.fieldFromPayload(e.job().payloadJson(), "by")));
+    }
 }

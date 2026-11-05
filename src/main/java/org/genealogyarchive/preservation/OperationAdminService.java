@@ -3,7 +3,6 @@ package org.genealogyarchive.preservation;
 import org.genealogyarchive.access.AccessPolicy;
 import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.access.Permission;
-import org.genealogyarchive.data.FileOperationRepository;
 import org.genealogyarchive.files.ManagedVolume;
 import org.genealogyarchive.files.PortableRelativePath;
 import org.genealogyarchive.platform.SafeFiles;
@@ -86,7 +85,7 @@ public final class OperationAdminService {
         return ctx.operations().find(operationId).orElseThrow(() -> new NotFoundException("The operation"));
     }
 
-    public List<FileOperationRepository.Event> events(Actor actor, UUID operationId) {
+    public List<OperationEvent> events(Actor actor, UUID operationId) {
         get(actor, operationId);
         return ctx.operations().events(operationId);
     }
@@ -127,15 +126,54 @@ public final class OperationAdminService {
         return ctx.operations().find(operationId).orElseThrow();
     }
 
-    /** Cancels a BLOCKED or waiting ingest/repair. Nothing is committed; an uncommitted copy goes to quarantine. */
+    /**
+     * Requests cancellation of a BLOCKED or waiting ingest/repair. Nothing is committed; an uncommitted
+     * copy is moved to quarantine. The move is done by the worker (the only writer to archival
+     * volumes); this records the request and queues it.
+     */
     public FileOperation cancel(Actor actor, UUID operationId) {
         FileOperation op = get(actor, operationId);
+        requireCancellable(op);
+        ctx.operations().note(operationId, "cancellation requested by " + actor.label());
+        ctx.jobs().enqueue(PreservationContext.JOB_CANCEL, "{\"id\":\"" + operationId + "\",\"by\":\""
+                + PreservationContext.jsonSafe(actor.label()) + "\"}", 5);
+        return ctx.operations().find(operationId).orElseThrow();
+    }
+
+    private static void requireCancellable(FileOperation op) {
         if (op.kind() == OperationKind.DESTROY) {
             throw new RuleViolationException("A destruction has already retired its File and cannot be cancelled; retry it instead.");
         }
         if (op.state() != OperationState.BLOCKED && op.state() != OperationState.WAITING_FOR_VOLUME) {
             throw new RuleViolationException("Only a blocked or waiting operation can be cancelled.");
         }
+    }
+
+    /**
+     * Worker side of cancellation, under the operation's lock. If the operation has meanwhile moved on
+     * (for example a waiting operation resumed and completed), the request is recorded and ignored.
+     *
+     * @return true if the operation is now CANCELLED
+     */
+    public boolean performCancel(UUID operationId, String requestedBy) {
+        var held = ctx.locks().tryLock("file-operation", operationId);
+        if (held.isEmpty()) {
+            throw new IllegalStateException("file operation " + operationId + " is busy; the cancellation will be retried");
+        }
+        try (var lock = held.get()) {
+            FileOperation op = ctx.operations().find(operationId).orElseThrow();
+            if (op.kind() == OperationKind.DESTROY
+                    || (op.state() != OperationState.BLOCKED && op.state() != OperationState.WAITING_FOR_VOLUME)) {
+                ctx.operations().note(operationId, "cancellation by " + requestedBy + " not applied: the operation is now "
+                        + op.state());
+                return false;
+            }
+            return applyCancel(op, requestedBy);
+        }
+    }
+
+    private boolean applyCancel(FileOperation op, String requestedBy) {
+        UUID operationId = op.operationId();
         String quarantine = null;
         if (op.targetPath() != null && op.blockedReason() != BlockedReason.COLLISION) {
             try {
@@ -148,18 +186,19 @@ public final class OperationAdminService {
                     quarantine = q.value();
                 }
             } catch (ManagedVolume.VolumeUnavailableException | IOException e) {
-                throw new RuleViolationException("The uncommitted copy could not be moved to quarantine yet ("
-                        + e.getClass().getSimpleName() + "); try again when the volume is available.");
+                ctx.operations().note(operationId, "cancellation by " + requestedBy + " is waiting: the uncommitted copy "
+                        + "could not be moved to quarantine yet (" + e.getClass().getSimpleName() + ")");
+                throw new IllegalStateException("uncommitted copy of " + operationId + " could not be quarantined yet", e);
             }
         }
         Map<String, Object> set = new HashMap<>();
-        set.put("message", "cancelled by " + actor.label());
+        set.put("message", "cancelled by " + requestedBy);
         if (quarantine != null) {
             set.put("quarantine_path", quarantine);
         }
         if (!ctx.operations().transition(operationId, op.state(), OperationState.CANCELLED,
-                "cancelled by " + actor.label() + (quarantine == null ? "" : "; uncommitted copy moved to " + quarantine), set)) {
-            throw new RuleViolationException("The operation changed meanwhile; reload and try again.");
+                "cancelled by " + requestedBy + (quarantine == null ? "" : "; uncommitted copy moved to " + quarantine), set)) {
+            return false;
         }
         ctx.staging().ifPresent(staging -> {
             try {
@@ -170,6 +209,6 @@ public final class OperationAdminService {
                 // recovery retries the clean-up
             }
         });
-        return ctx.operations().find(operationId).orElseThrow();
+        return true;
     }
 }
