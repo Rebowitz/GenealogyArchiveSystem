@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Packaged-application smoke test (Linux): drives the built jar exactly as an administrator would -
 # check-config, status, migrate (twice), serve with readiness polling, worker start/stop - using a
-# Storage Volume root given as a native host path. Requires:
+# Storage Volume root given as a native host path. Phase 2: registers and initializes the volume,
+# uploads a file through the browser upload API, lets the worker archive it, and downloads it again
+# byte for byte. Requires:
 #   target/genealogy-archive.jar      (./mvnw package or verify)
 #   GAS_SMOKE_DB_URL                  JDBC URL of an EMPTY database
 #   GAS_TEST_DB_USER, GAS_TEST_DB_PASSWORD
@@ -52,6 +54,34 @@ expect_exit 0 create-admin --username=smoke-admin
 unset GAS_NEW_ADMIN_PASSWORD
 expect_exit 0 status
 
+# ---- Phase 2: Storage Volume registration and initialization (P2-C, P2-D) ----------------------
+VOLUME_ID="$(java -jar "$JAR" register-volume --name=Primary --purpose=primary "$CONFIG" | sed -n 's/^ *Volume ID *: *//p')"
+[ -n "$VOLUME_ID" ] || fail "register-volume printed no Volume ID"
+mkdir -p "$WORK/staging" "$WORK/cache"
+chmod 0700 "$WORK/staging"
+cat > "$WORK/installation.yml" <<YAML
+database:
+  url: '${GAS_SMOKE_DB_URL}'
+  username: '${GAS_TEST_DB_USER}'
+server:
+  bindAddress: 127.0.0.1
+  port: ${PORT}
+logging:
+  format: json
+  directory: '${WORK}/logs'
+storageRoots:
+  '${VOLUME_ID}': '${WORK}/volume-primary'
+files:
+  stagingDirectory: '${WORK}/staging'
+  cacheDirectory: '${WORK}/cache'
+YAML
+expect_exit 0 check-config
+expect_exit 0 init-volume --volume-id="$VOLUME_ID"
+expect_exit 5 init-volume --volume-id="$VOLUME_ID"     # a marker is never written twice
+[ -f "$WORK/volume-primary/.genealogy-archive-volume" ] || fail "volume marker not written"
+expect_exit 0 set-ingestion-volume --volume-id="$VOLUME_ID"
+java -jar "$JAR" status "$CONFIG" | grep -q "Ingestion" || fail "status does not report the ingestion volume"
+
 java -jar "$JAR" serve "$CONFIG" &
 WEB=$!
 code=000
@@ -75,6 +105,44 @@ case "$location" in *error*|"") fail "sign-in failed (redirect: $location)";; es
 curl -fsS -b "$COOKIES" "http://127.0.0.1:${PORT}/archive" | grep -q "Smoke Test Archive" || fail "signed-in archive page not shown"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/archive")" = "302" ] || fail "archive page reachable without sign-in"
 echo "ok: local sign-in works and protects archive pages"
+
+# ---- Phase 2: browser upload -> worker -> verified, protected original -> download --------------
+java -jar "$JAR" worker "$CONFIG" &
+WORKER=$!
+head -c 3145731 /dev/urandom > "$WORK/scan.bin"
+upload_page="$(curl -fsS -b "$COOKIES" -c "$COOKIES" "http://127.0.0.1:${PORT}/files/upload")"
+printf '%s' "$upload_page" | grep -q "Uploads are stored on volume" || fail "upload page does not report readiness"
+token="$(printf '%s' "$upload_page" | sed -n 's/.*name="_csrf" value="\([^"]*\)".*/\1/p' | head -1)"
+batch_location="$(curl -s -o /dev/null -w '%{redirect_url}' -b "$COOKIES" -c "$COOKIES" \
+  --data-urlencode "_csrf=$token" --data-urlencode "note=smoke test" "http://127.0.0.1:${PORT}/files/batches")"
+BATCH="$(printf '%s' "$batch_location" | sed -n 's|.*/files/batches/\([0-9a-f-]\{36\}\).*|\1|p')"
+[ -n "$BATCH" ] || fail "no upload batch created (redirect: $batch_location)"
+put="$(curl -sS -b "$COOKIES" -X PUT -H "X-CSRF-TOKEN: $token" -H "Content-Type: application/octet-stream" \
+  -H "X-File-Name: smoke%20scan%201.tif" -H "X-File-Last-Modified: 1577934245000" \
+  --data-binary @"$WORK/scan.bin" "http://127.0.0.1:${PORT}/files/batches/${BATCH}/items/smoke-1")"
+OP="$(printf '%s' "$put" | sed -n 's/.*"operationId":"\([0-9a-f-]*\)".*/\1/p')"
+[ -n "$OP" ] || fail "upload not accepted: $put"
+FILE_ID=""
+st=""
+for _ in $(seq 1 60); do
+  st="$(curl -fsS -b "$COOKIES" "http://127.0.0.1:${PORT}/files/operations/${OP}/status")"
+  if printf '%s' "$st" | grep -q '"archived":true'; then
+    FILE_ID="$(printf '%s' "$st" | sed -n 's/.*"fileId":"\([0-9a-f-]*\)".*/\1/p')"
+    break
+  fi
+  sleep 1
+done
+[ -n "$FILE_ID" ] || fail "upload was not archived by the worker (last status: $st)"
+curl -fsS -b "$COOKIES" -o "$WORK/downloaded.bin" "http://127.0.0.1:${PORT}/files/${FILE_ID}/download"
+cmp -s "$WORK/scan.bin" "$WORK/downloaded.bin" || fail "downloaded original differs from the uploaded bytes"
+stored="$(find "$WORK/volume-primary/originals" -type f | head -1)"
+{ [ -n "$stored" ] && [ ! -w "$stored" ]; } || fail "stored original is not read-only"
+case "$stored" in *smoke*) fail "stored filename derived from the uploaded name";; esac
+for _ in $(seq 1 20); do [ -z "$(ls -A "$WORK/staging")" ] && break; sleep 1; done
+[ -z "$(ls -A "$WORK/staging")" ] || fail "staging not cleaned after archiving"
+kill -TERM "$WORKER"
+wait "$WORKER" || true
+echo "ok: browser upload archived by the worker, protected, downloaded byte for byte"
 kill -TERM "$WEB"
 wait "$WEB" || true
 echo "ok: web application started, ready, stopped"
