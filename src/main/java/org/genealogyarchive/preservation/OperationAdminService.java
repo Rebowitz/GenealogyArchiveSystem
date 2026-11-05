@@ -179,10 +179,13 @@ public final class OperationAdminService {
             try {
                 ManagedVolume volume = ctx.openVolume(op.volumeId());
                 Path target = volume.resolveExisting(PortableRelativePath.of(op.targetPath()));
+                PortableRelativePath q = ManagedVolume.quarantinePath(operationId, "cancelled");
+                Path destination = volume.prepare(q);
                 if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-                    PortableRelativePath q = ManagedVolume.quarantinePath(operationId, "cancelled");
-                    Path destination = volume.prepare(q);
                     SafeFiles.withSharingRetry(() -> Files.move(target, destination, LinkOption.NOFOLLOW_LINKS));
+                    quarantine = q.value();
+                } else if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
+                    // An earlier attempt moved the copy but stopped before recording it: record it now.
                     quarantine = q.value();
                 }
             } catch (ManagedVolume.VolumeUnavailableException | IOException e) {
