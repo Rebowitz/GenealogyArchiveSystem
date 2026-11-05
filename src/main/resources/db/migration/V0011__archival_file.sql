@@ -81,5 +81,8 @@ CREATE TRIGGER file_derivation_no_truncate
     BEFORE TRUNCATE ON file_derivation FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();
 
 ALTER TABLE file_operation
-    ADD CONSTRAINT file_operation_file_fk FOREIGN KEY (file_id) REFERENCES archival_file (file_id),
+    -- Deferred: the compare-and-set that commits an operation records its new File ID, and the File
+    -- row is inserted later in the same transaction (both or neither are committed).
+    ADD CONSTRAINT file_operation_file_fk FOREIGN KEY (file_id) REFERENCES archival_file (file_id)
+        DEFERRABLE INITIALLY DEFERRED,
     ADD CONSTRAINT file_operation_parent_fk FOREIGN KEY (parent_file_id) REFERENCES archival_file (file_id);
