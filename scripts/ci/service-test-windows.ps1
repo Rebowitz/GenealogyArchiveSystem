@@ -145,11 +145,16 @@ if ($ops -notmatch 'Web service write access to archival originals: denied') {
 }
 Write-Output "ok: web service account is denied write access to the archival volume (requirement 5)"
 $page = Invoke-WebRequest -Uri "$base/files/upload" -WebSession $browser -UseBasicParsing
+if ($page.Content -notmatch 'Uploads are stored on volume') {
+    $why = [regex]::Match($page.Content, '<section class="status problem">\s*<p>([^<]*)</p>').Groups[1].Value
+    & icacls "$DataDir\staging"
+    Fail "uploads are not ready under the service accounts: $why"
+}
 $t = [regex]::Match($page.Content, 'name="_csrf" value="([^"]+)"').Groups[1].Value
 $b = Invoke-WebRequest -Uri "$base/files/batches" -Method Post -WebSession $browser -UseBasicParsing -Body @{ _csrf = $t } `
     -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction SilentlyContinue
 $batch = [regex]::Match([string]$b.Headers.Location, '/files/batches/([0-9a-f-]{36})').Groups[1].Value
-if (-not $batch) { Fail "no upload batch (redirect: $($b.Headers.Location))" }
+if (-not $batch) { Fail "no upload batch (HTTP $($b.StatusCode), redirect: $($b.Headers.Location))" }
 $scan = Join-Path $env:RUNNER_TEMP 'gas-svc-scan.bin'
 $bytes = New-Object byte[] 2097155
 [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
