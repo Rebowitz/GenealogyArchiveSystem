@@ -116,8 +116,15 @@ public final class StorageVolumeService {
                 return current;
             }
             var now = clock.instant();
-            if (!volumes.update(volumeId, expectedVersion, current.name(), current.purpose(), current.description(), false, now)) {
-                throw new ConflictException("The storage volume");
+            try {
+                if (!volumes.update(volumeId, expectedVersion, current.name(), current.purpose(), current.description(), false, now)) {
+                    throw new ConflictException("The storage volume");
+                }
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                // Phase 2 guard (V0013): the database refuses to retire a volume holding archival content
+                // or chosen as the ingestion destination.
+                throw new RuleViolationException("This volume still holds archival content or is the ingestion destination, "
+                        + "so it cannot be retired.");
             }
             recorder.record(actor, OBJECT_TYPE, volumeId, ChangeKinds.RETIRED, List.of(
                     FieldChange.of("required", FieldClass.CORRECTABLE, current.required(), false),

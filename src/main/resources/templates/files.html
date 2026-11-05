@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Files')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Files</h1>
+    <p>
+        <a th:if="${canIngest}" th:href="@{/files/upload}" class="button">Upload files</a>
+        <a th:if="${canEdit and !showingDeleted}" th:href="@{/files(deleted=true)}">Include deleted files</a>
+        <a th:if="${showingDeleted}" th:href="@{/files}">Hide deleted files</a>
+    </p>
+    <form th:action="@{/files/find}" method="get" class="inline">
+        <label>Go to File ID <input type="text" name="id" placeholder="F00042" maxlength="20"></label>
+        <button type="submit">Open</button>
+    </form>
+    <p class="muted" th:if="${#lists.isEmpty(files)}">No files yet.</p>
+    <table class="list" th:unless="${#lists.isEmpty(files)}">
+        <thead><tr><th></th><th>File</th><th>Name</th><th>Type</th><th>Ingested</th><th>Status</th></tr></thead>
+        <tbody>
+        <tr th:each="f : ${files}">
+            <td class="thumb"><img th:src="@{/files/{id}/thumbnail(id=${f.fileId()})}" alt="" loading="lazy"
+                                   th:style="'transform: rotate(' + ${f.displayRotation()} + 'deg)'"
+                                   onerror="this.style.display='none'"></td>
+            <td><a th:href="@{/files/{id}(id=${f.fileId()})}" th:text="${f.friendlyId()}">F00001</a></td>
+            <td th:text="${f.managedFilename()}">name</td>
+            <td th:text="${f.mediaType()}">type</td>
+            <td><span th:text="${f.ingestedAt()}">when</span> <span class="muted" th:text="${f.ingestedByLabel()}">who</span></td>
+            <td><span th:text="${f.lifecycle()}">ACTIVE</span> <strong th:if="${f.restricted()}">Restricted</strong></td>
+        </tr>
+        </tbody>
+    </table>
+</main>
+</body>
+</html>

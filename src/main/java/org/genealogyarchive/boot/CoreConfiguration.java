@@ -7,12 +7,15 @@ import org.genealogyarchive.data.DataSources;
 import org.genealogyarchive.files.VolumeRoots;
 import org.genealogyarchive.history.HistoryService;
 import org.genealogyarchive.jobs.JobQueue;
+import org.genealogyarchive.preservation.FaultPoints;
+import org.genealogyarchive.preservation.PreservationServices;
 import org.genealogyarchive.security.AppUserDetailsService;
 import org.genealogyarchive.security.PasswordHasher;
 import org.genealogyarchive.security.UserService;
 import org.genealogyarchive.service.OperationalStatusService;
 import org.genealogyarchive.service.SystemStatusService;
 import org.genealogyarchive.storage.StorageVolumeService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -52,9 +55,19 @@ public class CoreConfiguration {
         return new PasswordHasher();
     }
 
+    /**
+     * Fault points are {@link FaultPoints#NONE} in production; a test may contribute a
+     * {@link FaultPoints} bean to a launched process (for example to stop a real worker mid-copy).
+     */
     @Bean
-    CoreServices coreServices(DataSource dataSource, VolumeRoots roots, Clock clock, PasswordHasher hasher) {
-        return CoreServices.create(dataSource, roots, clock, hasher);
+    CoreServices coreServices(DataSource dataSource, VolumeRoots roots, Clock clock, PasswordHasher hasher,
+                              InstallationConfig config, ObjectProvider<FaultPoints> faults) {
+        return CoreServices.create(dataSource, roots, clock, hasher, config.files(), faults.getIfAvailable(() -> FaultPoints.NONE));
+    }
+
+    @Bean
+    PreservationServices preservationServices(CoreServices core) {
+        return core.preservation();
     }
 
     @Bean

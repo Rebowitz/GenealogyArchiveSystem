@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Preservation')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>File preservation</h1>
+    <section th:class="${status.attentionNeeded()} ? 'status problem' : 'status ok'">
+        <p th:text="${status.ingestion()}">ingestion</p>
+        <p>Blocked: <span th:text="${status.blocked()}">0</span> &middot; Waiting for volume: <span th:text="${status.waiting()}">0</span>
+            &middot; Cleanup incomplete: <span th:text="${status.cleanupIncomplete()}">0</span>
+            &middot; Open integrity findings: <span th:text="${status.openFindings()}">0</span></p>
+    </section>
+    <section>
+        <h2>Storage volumes</h2>
+        <table class="list">
+            <thead><tr><th>Name</th><th>Volume ID</th><th>Marker</th><th>Free space</th><th>Ingestion destination</th></tr></thead>
+            <tbody>
+            <tr th:each="v : ${status.volumes()}">
+                <td th:text="${v.volume().name()}">name</td>
+                <td><code th:text="${v.volume().volumeId()}">id</code></td>
+                <td th:text="${v.markerStatus()}">status</td>
+                <td th:text="${v.usableBytes() == null} ? '-' : ${v.usableBytes()} + ' bytes'">-</td>
+                <td><strong th:if="${v.ingestionTarget()}">Yes</strong></td>
+            </tr>
+            </tbody>
+        </table>
+        <form th:action="@{/preservation/ingestion-volume}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${archive.version()}">
+            <label>New uploads go to
+                <select name="volumeId" required>
+                    <option th:each="v : ${status.volumes()}" th:if="${v.usable()}" th:value="${v.volume().volumeId()}"
+                            th:text="${v.volume().name()}" th:selected="${v.ingestionTarget()}">volume</option>
+                </select></label>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Set ingestion volume</button>
+        </form>
+        <p class="muted">Volumes are initialized from the command line (<code>init-volume</code>), which writes the volume marker.</p>
+    </section>
+    <section>
+        <h2>Integrity scans</h2>
+        <form th:action="@{/preservation/scans}" method="post" class="inline">
+            <input type="hidden" name="kind" value="QUICK"><button type="submit">Quick scan (presence, size, protection)</button>
+        </form>
+        <form th:action="@{/preservation/scans}" method="post" class="inline">
+            <input type="hidden" name="kind" value="FULL"><button type="submit">Full scan (also re-hashes every original)</button>
+        </form>
+        <ul><li th:each="s : ${scans}"><a th:href="@{/preservation/scans/{id}(id=${s.scanId()})}"
+                th:text="${s.kind()} + ' ' + ${s.state()} + ' ' + ${s.requestedAt()}">scan</a>
+            <span class="muted" th:text="${s.contentsChecked()} + ' checked, ' + ${s.findingsCount()} + ' findings'">-</span></li></ul>
+    </section>
+    <section>
+        <h2>Open findings</h2>
+        <p class="muted" th:if="${#lists.isEmpty(findings)}">None.</p>
+        <table class="list" th:unless="${#lists.isEmpty(findings)}">
+            <thead><tr><th>Found</th><th>Kind</th><th>Detail</th><th></th></tr></thead>
+            <tbody>
+            <tr th:each="x : ${findings}">
+                <td th:text="${x.foundAt()}">when</td><td th:text="${x.kind()}">kind</td><td th:text="${x.detail()}">detail</td>
+                <td th:if="${x.contentId() != null}">
+                    <form th:action="@{/preservation/contents/{c}/reverify(c=${x.contentId()})}" method="post" class="inline">
+                        <button type="submit">Re-verify</button></form>
+                    <a th:href="@{/preservation/contents/{c}/repair(c=${x.contentId()})}">Repair</a></td>
+                <td th:if="${x.contentId() == null and x.operationId() != null}">
+                    <a th:href="@{/preservation/operations/{o}(o=${x.operationId()})}">Operation</a></td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+    <section>
+        <h2>Recent file operations</h2>
+        <table class="list">
+            <thead><tr><th>Started</th><th>Kind</th><th>State</th><th>File</th><th>By</th></tr></thead>
+            <tbody>
+            <tr th:each="o : ${operations}">
+                <td><a th:href="@{/preservation/operations/{id}(id=${o.operationId()})}" th:text="${o.createdAt()}">when</a></td>
+                <td th:text="${o.kind()}">k</td><td th:text="${o.state()}">s</td>
+                <td th:text="${o.originalFilename()}">name</td><td th:text="${o.actorLabel()}">who</td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+</main>
+</body>
+</html>

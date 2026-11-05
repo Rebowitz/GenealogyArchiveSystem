@@ -71,4 +71,19 @@ public final class StorageVolumeRepository {
                 .param("id", volumeId).param("expected", expectedVersion)
                 .update() == 1;
     }
+
+    /** When this archive's marker was written to the volume by init-volume, if ever. */
+    public Optional<Instant> markerInitializedAt(UUID volumeId) {
+        return jdbc.sql("SELECT marker_initialized_at FROM gas.storage_volume WHERE volume_id = :id")
+                .param("id", volumeId).query((rs, n) -> Optional.ofNullable(Rows.instant(rs, "marker_initialized_at")))
+                .list().stream().flatMap(Optional::stream).findFirst();
+    }
+
+    /** Records marker initialization (set once; the database refuses a second value). */
+    public boolean markInitialized(UUID volumeId, Instant at) {
+        return jdbc.sql("""
+                UPDATE gas.storage_volume SET marker_initialized_at = :at
+                 WHERE volume_id = :id AND marker_initialized_at IS NULL
+                """).param("at", Rows.param(at)).param("id", volumeId).update() == 1;
+    }
 }

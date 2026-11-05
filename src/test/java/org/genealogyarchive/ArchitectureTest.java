@@ -48,7 +48,7 @@ class ArchitectureTest {
             .that().resideInAnyPackage(BASE + ".service..", BASE + ".data..", BASE + ".migration..",
                     BASE + ".files..", BASE + ".platform..", BASE + ".config..", BASE + ".domain..",
                     BASE + ".identity..", BASE + ".access..", BASE + ".history..", BASE + ".archive..",
-                    BASE + ".security..", BASE + ".storage..", BASE + ".jobs..")
+                    BASE + ".security..", BASE + ".storage..", BASE + ".jobs..", BASE + ".preservation..")
             .should().dependOnClassesThat().resideInAnyPackage(
                     BASE + ".web..", BASE + ".ops..", BASE + ".boot..", BASE + ".cli..", BASE + ".worker..");
 

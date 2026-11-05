@@ -38,6 +38,7 @@ public class WorkerProcess implements SmartLifecycle {
     private final Duration heartbeat;
     private final Duration pollInterval;
     private final Duration lease;
+    private final Duration recoveryInterval;
     private final UUID workerId = GlobalIds.newId();
     private final CountDownLatch stopSignal = new CountDownLatch(1);
     private volatile Thread thread;
@@ -46,13 +47,15 @@ public class WorkerProcess implements SmartLifecycle {
     public WorkerProcess(SystemStatusService statusService, CoreServices core, ObjectProvider<JobHandler> handlers,
                          @Value("${gas.worker.heartbeat:PT60S}") Duration heartbeat,
                          @Value("${gas.worker.poll-interval:PT5S}") Duration pollInterval,
-                         @Value("${gas.worker.job-lease:PT5M}") Duration lease) {
+                         @Value("${gas.worker.job-lease:PT5M}") Duration lease,
+                         @Value("${gas.worker.recovery-interval:PT2M}") Duration recoveryInterval) {
         this.statusService = statusService;
         this.core = core;
         this.handlers = handlers.orderedStream().toList();
         this.heartbeat = heartbeat;
         this.pollInterval = pollInterval.compareTo(heartbeat) > 0 ? heartbeat : pollInterval;
         this.lease = lease;
+        this.recoveryInterval = recoveryInterval;
     }
 
     @Override
@@ -79,6 +82,7 @@ public class WorkerProcess implements SmartLifecycle {
 
     private void loop(JobRunner runner) {
         Instant nextHeartbeat = Instant.MIN;
+        Instant nextRecovery = Instant.MIN;
         boolean ready = true;
         try {
             do {
@@ -86,6 +90,11 @@ public class WorkerProcess implements SmartLifecycle {
                 if (!now.isBefore(nextHeartbeat)) {
                     nextHeartbeat = now.plus(heartbeat);
                     ready = heartbeatCheck();
+                }
+                if (ready && !now.isBefore(nextRecovery)) {
+                    // Phase 2: restart and periodic recovery of archival file operations (BUILD-SPEC s.36).
+                    nextRecovery = now.plus(recoveryInterval);
+                    recover();
                 }
                 if (ready) {
                     try {
@@ -106,6 +115,18 @@ public class WorkerProcess implements SmartLifecycle {
             log.warn("Worker presence could not be removed: {}", e.getMessage());
         }
         log.info("Worker stopped");
+    }
+
+    private void recover() {
+        try {
+            var result = core.preservation().recovery().runOnce();
+            if (result.abandoned() > 0 || result.failed() > 0) {
+                log.warn("File-operation recovery: {} abandoned upload(s), {} operation(s) examined, {} could not be advanced",
+                        result.abandoned(), result.examined(), result.failed());
+            }
+        } catch (RuntimeException e) {
+            log.error("File-operation recovery failed: {}", e.getMessage());
+        }
     }
 
     private boolean heartbeatCheck() {
