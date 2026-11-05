@@ -45,11 +45,12 @@ $denied = [System.Security.AccessControl.FileSystemRights]'WriteData, AppendData
 $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($webSid, $denied,
     [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit',
     [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Deny)
-$acl = (Get-Item -LiteralPath $VolumeRoot -Force).GetAccessControl('Access')
+# Get-Acl/Set-Acl work in both Windows PowerShell 5.1 and PowerShell 7.
+$acl = Get-Acl -LiteralPath $VolumeRoot
 $acl.AddAccessRule($rule)
-(Get-Item -LiteralPath $VolumeRoot -Force).SetAccessControl($acl)
+Set-Acl -LiteralPath $VolumeRoot -AclObject $acl
 
-$check = (Get-Item -LiteralPath $VolumeRoot -Force).GetAccessControl('Access').GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
+$check = (Get-Acl -LiteralPath $VolumeRoot).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
     Where-Object { $_.IdentityReference.Value -eq $web -and $_.AccessControlType -eq 'Deny' -and -not $_.IsInherited }
 if (-not $check) { throw "The DENY entry for the web service was not recorded on $VolumeRoot" }
 foreach ($r in $check) {
@@ -59,7 +60,7 @@ foreach ($r in $check) {
 }
 
 # Advisory only: broad write access for ordinary users on a volume root is poor practice.
-$broad = (Get-Item -LiteralPath $VolumeRoot -Force).GetAccessControl('Access').GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
+$broad = (Get-Acl -LiteralPath $VolumeRoot).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
     Where-Object { $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -in @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11') -and
         ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]'WriteData, AppendData, Delete, DeleteSubdirectoriesAndFiles') }
 if ($broad) {
