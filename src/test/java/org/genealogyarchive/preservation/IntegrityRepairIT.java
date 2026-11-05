@@ -2,13 +2,12 @@ package org.genealogyarchive.preservation;
 
 import org.genealogyarchive.data.FileContentRepository;
 import org.genealogyarchive.files.PortableRelativePath;
-import org.genealogyarchive.platform.HostPlatform;
 import org.genealogyarchive.platform.SafeFiles;
 import org.genealogyarchive.service.RuleViolationException;
+import org.genealogyarchive.testsupport.DirectoryLinks;
 import org.genealogyarchive.testsupport.PreservationFixture;
 import org.genealogyarchive.testsupport.ScriptedFaults;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -210,13 +209,17 @@ class IntegrityRepairIT {
     }
 
     @Test
-    void iv006_aSymbolicLinkInManagedStorageIsReportedAndNotFollowed() throws Exception {
-        Assumptions.assumeTrue(SafeFiles.host() != HostPlatform.WINDOWS,
-                "creating symbolic links on Windows needs a privilege CI accounts do not hold; reparse detection is unit-tested");
+    void iv006_aLinkOrJunctionInManagedStorageIsReportedAndNotFollowed() throws Exception {
+        // Windows: a directory junction (a reparse point; needs no privilege). Linux: a symbolic link.
         fx.ingest(fx.editor, "a.tif", b("a"));
-        Path outside = Files.writeString(temp.resolve("outside.txt"), "outside");
-        Files.createSymbolicLink(fx.volumeRoot.resolve("originals").resolve("link.txt"), outside);
-        assertThat(scan("QUICK")).extracting(IntegrityFinding::kind).containsExactly(FindingKind.LINK_OR_REPARSE);
+        Path outside = Files.createDirectories(temp.resolve("outside"));
+        Files.writeString(outside.resolve("secret.txt"), "outside the volume");
+        DirectoryLinks.create(fx.volumeRoot.resolve("originals").resolve("linked"), outside);
+        List<IntegrityFinding> findings = scan("QUICK");
+        assertThat(findings).extracting(IntegrityFinding::kind).containsExactly(FindingKind.LINK_OR_REPARSE);
+        assertThat(findings.get(0).storagePath()).isEqualTo("originals/linked");
+        assertThat(Files.readString(outside.resolve("secret.txt"))).as("nothing behind the link was touched")
+                .isEqualTo("outside the volume");
     }
 
     @Test
