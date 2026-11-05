@@ -151,7 +151,9 @@ public final class VolumePreservationService {
             }
             try {
                 ManagedVolume volume = ctx.openVolume(v.volume().volumeId());
-                Path probe = volume.root().resolve(ManagedVolume.ORIGINALS).resolve(".web-write-probe-" + GlobalIds.newId());
+                // The volume root always exists once the marker has been verified, so a refusal here
+                // is a permission refusal, not a missing directory.
+                Path probe = volume.root().resolve(".web-write-probe-" + GlobalIds.newId());
                 try (var channel = SafeFiles.createExclusive(probe)) {
                     // created: write access exists
                 }
@@ -159,11 +161,18 @@ public final class VolumePreservationService {
                 problems.add("This process can write archival originals on volume '" + v.volume().name()
                         + "'; the deployment's read-only protection for the web service is missing.");
             } catch (AccessDeniedException e) {
-                // expected
+                // expected (Windows: DENY write ACE for the web service SID; POSIX: no write permission)
+            } catch (java.nio.file.NoSuchFileException e) {
+                problems.add("Write access to volume '" + v.volume().name() + "' could not be checked: " + e.getMessage());
             } catch (FileSystemException e) {
-                // e.g. read-only file system (systemd ProtectSystem=strict): expected
+                if (e.getReason() == null || !e.getReason().toLowerCase(java.util.Locale.ROOT).contains("read-only")) {
+                    problems.add("Write access to volume '" + v.volume().name() + "' could not be confirmed as denied ("
+                            + e.getClass().getSimpleName() + (e.getReason() == null ? "" : ": " + e.getReason()) + ").");
+                }
+                // "Read-only file system" (systemd ProtectSystem=strict): expected
             } catch (IOException | RuntimeException e) {
-                // inconclusive; not reported as a write-access problem
+                problems.add("Write access to volume '" + v.volume().name() + "' could not be checked ("
+                        + e.getClass().getSimpleName() + ").");
             }
         }
         return problems;

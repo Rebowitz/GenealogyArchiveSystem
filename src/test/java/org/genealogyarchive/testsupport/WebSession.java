@@ -46,6 +46,28 @@ public final class WebSession {
         return send(HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(90)).GET().build());
     }
 
+    /** GET returning raw bytes (downloads). */
+    public HttpResponse<byte[]> getBytes(String path) {
+        try {
+            return client.send(HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(90)).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** PUT a raw body with the CSRF token of {@code tokenPage} in the X-CSRF-TOKEN header (as the uploader script does). */
+    public HttpResponse<String> put(String tokenPage, String path, Map<String, String> headers, HttpRequest.BodyPublisher body) {
+        String token = csrfToken(get(tokenPage).body());
+        HttpRequest.Builder b = HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(120))
+                .header("X-CSRF-TOKEN", token).header("Content-Type", "application/octet-stream");
+        headers.forEach(b::header);
+        return send(b.PUT(body).build());
+    }
+
     /** Submits a form found on {@code formPage} to {@code action}, adding the page's CSRF token. */
     public HttpResponse<String> submit(String formPage, String action, Map<String, String> fields) {
         String token = csrfToken(get(formPage).body());

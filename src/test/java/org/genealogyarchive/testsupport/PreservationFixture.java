@@ -53,23 +53,34 @@ public final class PreservationFixture implements AutoCloseable {
     private PreservationFixture(Path dir) throws IOException {
         this.dir = dir;
         db = TestDatabase.createFresh();
-        ds = DataSources.create(db.settings(), "test");
-        new SchemaMigrator(ds).migrate();
-        CoreServices bootstrap = ArchiveFixtures.services(ds);
-        bootstrap.archives().initialize(Actor.commandLine(), "Test Archive");
-        admin = actor(bootstrap, "admin1", Role.ADMINISTRATOR);
-        editor = actor(bootstrap, "editor1", Role.EDITOR);
-        viewer = actor(bootstrap, "viewer1", Role.VIEWER);
-        volumeId = bootstrap.volumes().register(Actor.commandLine(), "Primary", "Originals", null, true).volumeId();
-        volumeRoot = Files.createDirectories(dir.resolve("volume"));
-        staging = dir.resolve("staging");
-        cache = dir.resolve("cache");
-        settings = new FileSettings(Optional.of(staging), Optional.of(cache), FileSettings.DEFAULT_MAX_UPLOAD_BYTES,
-                Duration.ofMinutes(15));
-        rebuild();
-        preservation().volumes().initializeVolume(Actor.commandLine(), volumeId);
-        long version = services.archives().view(admin).version();
-        preservation().volumes().setIngestionVolume(admin, version, volumeId, null);
+        HikariDataSource opened = null;
+        try {
+            opened = DataSources.create(db.settings(), "test");
+            ds = opened;
+            new SchemaMigrator(ds).migrate();
+            CoreServices bootstrap = ArchiveFixtures.services(ds);
+            bootstrap.archives().initialize(Actor.commandLine(), "Test Archive");
+            admin = actor(bootstrap, "admin1", Role.ADMINISTRATOR);
+            editor = actor(bootstrap, "editor1", Role.EDITOR);
+            viewer = actor(bootstrap, "viewer1", Role.VIEWER);
+            volumeId = bootstrap.volumes().register(Actor.commandLine(), "Primary", "primary", null, true).volumeId();
+            volumeRoot = Files.createDirectories(dir.resolve("volume"));
+            staging = dir.resolve("staging");
+            cache = dir.resolve("cache");
+            settings = new FileSettings(Optional.of(staging), Optional.of(cache), FileSettings.DEFAULT_MAX_UPLOAD_BYTES,
+                    Duration.ofMinutes(15));
+            rebuild();
+            preservation().volumes().initializeVolume(Actor.commandLine(), volumeId);
+            long version = services.archives().view(admin).version();
+            preservation().volumes().setIngestionVolume(admin, version, volumeId, null);
+        } catch (IOException | RuntimeException e) {
+            // Never leak connections when set-up fails: one leaked pool per test exhausts the server.
+            if (opened != null) {
+                opened.close();
+            }
+            db.close();
+            throw e;
+        }
     }
 
     public static PreservationFixture create(Path tempDir) throws IOException {

@@ -9,7 +9,7 @@
   <name>Genealogy Archive System - Web</name>
   <description>Browser entry point of the Genealogy Archive System.</description>
   <executable>@JAVA@</executable>
-  <arguments>-jar "@APP_DIR@\genealogy-archive.jar" serve --config="@DATA_DIR@\installation.yml"</arguments>
+  <arguments>-Djava.io.tmpdir="@DATA_DIR@\tmp\web" -jar "@APP_DIR@\genealogy-archive.jar" serve --config="@DATA_DIR@\installation.yml"</arguments>
   <workingdirectory>@DATA_DIR@</workingdirectory>
   <startmode>Automatic</startmode>
   <delayedAutoStart>true</delayedAutoStart>

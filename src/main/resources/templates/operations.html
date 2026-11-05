@@ -30,7 +30,7 @@
             <code th:each="id : ${ops.unregisteredConfiguredVolumes()}" th:text="${id} + ' '">id</code></p>
     </section>
     <section th:class="${#lists.isEmpty(webWriteProblems)} ? 'status ok' : 'status problem'">
-        <h2 th:text="${#lists.isEmpty(webWriteProblems)} ? 'Web service write access to archival originals: denied' : 'Web service can write archival originals'">Write access</h2>
+        <h2 th:text="${#lists.isEmpty(webWriteProblems)} ? 'Web service write access to archival originals: denied' : 'Web service write access to archival originals: not confirmed as denied'">Write access</h2>
         <p th:if="${#lists.isEmpty(webWriteProblems)}" class="muted">Checked just now from the web service itself: it cannot
             create files among the preservation originals of any usable volume, as intended.</p>
         <ul th:unless="${#lists.isEmpty(webWriteProblems)}"><li th:each="p : ${webWriteProblems}" th:text="${p}">p</li></ul>
