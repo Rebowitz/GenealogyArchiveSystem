@@ -43,6 +43,21 @@ the PR description.
 - No other conflict with an approved requirement was found; no owner decision is needed for these
   corrections.
 
+## Re-audit corrections (audited revision `83031267c8c37394462c4cf8346cc5a1d8108cde`)
+
+The independent re-audit found GAS-P2-001 … GAS-P2-011 resolved and two remaining MAJOR findings. Only
+those were corrected; the nine accepted corrections and their tests are unchanged. No schema change (no
+new migration).
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **GAS-P2-R01** (MAJOR) destruction left an uncommitted repair copy | `DestructionProcessor` first locks every unfinished operation on the content and every owner of an unsettled quarantine move of it (busy → `CLEANUP_INCOMPLETE`, "waits for operation …", retried). It then stops each unfinished repair (`STAGED`, `PROMOTING`, `PROMOTED`, `WAITING_FOR_VOLUME`, `BLOCKED` → `CANCELLED`, reason recorded on both operations, staging cleaned) so none can write, commit or move bytes later. Known locations now include each copy an operation on the content created itself (`target_created`) and did not since move through the quarantine ledger; an object it did not create is never included. Stopping is committed before removal; a new fault point `DURING_PHYSICAL_DELETE` (after each removal) exercises interruption mid-cleanup. `BYTES_REMOVED` still only after every known location is re-checked. | `Phase2AuditCorrectionsIT.gasP2_R01_aRepairCopyVerifiedButNotCommittedIsRemovedByDestructionAndRecovery` (crash after verify, before commit; destruction via recovery; repeated recovery, destruction and repair passes change nothing); `…CleanupInterruptedBeforeAndDuringRemovalIsFinishedByRepeatedRecovery` (crash after the repair is stopped and before removal; crash after the first of two copies is removed — never `COMPLETED`/`BYTES_REMOVED` while a copy remains; repeated recovery finishes); `…RemovalWaitsWhileTheRepairIsBusyElsewhere`; `…AnObjectTheRepairNeverCreatedIsLeftUntouched` |
+| **GAS-P2-R02** (MAJOR) history authorization missed accepted File spellings | New `FileIdentifiers` is the single definition of File identifier spellings: the friendly-ID lookup (`FileService.getByFriendlyId`) now uses it, and `RestrictedFileHistory` uses the same rules to find references in history values and reasons — friendly IDs in any case and with any leading zeros (`F00001`, `f00001`, `F1`, `f1`, `F01`), UUIDs in every spelling `UUID.fromString` (the web layer's conversion) accepts (upper case, abbreviated groups), alone or embedded in text. The previous separate patterns (`F\d{5,}`, canonical lower-case UUID only) are removed. | `FileIdentifiersTest` (accepted and rejected spellings agree with the lookup; embedded references; ordinary text such as `F-1990`, `Fairfax` is not a reference); `Phase2AuditCorrectionsIT.gasP2_R02_historyOfOtherObjectsDoesNotLeakARestrictedFileByAnyResolvableSpelling` (each spelling is first shown to resolve, then withheld from per-object and global history for Viewer and Editor after restriction, still shown to Administrators; ordinary text stays visible) |
+
+Known consequence (by design, R02): because `F1` is a valid File identifier, a reason containing the
+standalone token `F1` (or `f1`) is withheld from non-Administrators when File F00001 is restricted, even if
+the writer meant something else. Only tokens that resolve to a currently restricted File are withheld.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

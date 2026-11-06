@@ -166,6 +166,18 @@ public final class FileOperationRepository {
                 .param("f", fileId).query(OPERATION).list();
     }
 
+    /**
+     * Every ingest or repair operation that targets {@code contentId} (GAS-P2-R01): destruction must account
+     * for copies such operations created but never committed as content generations.
+     */
+    public List<FileOperation> writersOfContent(UUID contentId) {
+        return jdbc.sql("SELECT " + COLUMNS + """
+                 FROM gas.file_operation
+                WHERE content_id = :c AND kind <> 'DESTROY'
+                ORDER BY created_at, operation_id
+                """).param("c", contentId).query(OPERATION).list();
+    }
+
     public Map<OperationState, Long> countsByState() {
         Map<OperationState, Long> counts = new LinkedHashMap<>();
         jdbc.sql("SELECT state, count(*) AS n FROM gas.file_operation GROUP BY state")

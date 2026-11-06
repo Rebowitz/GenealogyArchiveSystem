@@ -18,7 +18,8 @@ import java.util.UUID;
 public final class ArchivalFileRepository {
 
     public static final String OBJECT_TYPE = "archival_file";
-    private static final String PREFIX = "F";
+    /** Friendly-ID prefix of Archival Files. */
+    public static final String PREFIX = "F";
     private static final int MIN_DIGITS = 5;
 
     private static final String SELECT = """

@@ -9,7 +9,6 @@ import org.genealogyarchive.files.ManagedVolume;
 import org.genealogyarchive.history.ChangeKinds;
 import org.genealogyarchive.history.FieldChange;
 import org.genealogyarchive.history.FieldClass;
-import org.genealogyarchive.identity.FriendlyId;
 import org.genealogyarchive.identity.GlobalIds;
 import org.genealogyarchive.platform.SafeFiles;
 import org.genealogyarchive.service.ConflictException;
@@ -67,16 +66,10 @@ public final class FileService {
     /** Looks up {@code F00042}-style identifiers, subject to the same visibility rule. */
     public ArchivalFile getByFriendlyId(Actor actor, String friendlyId) {
         AccessPolicy.require(actor, Permission.VIEW_ARCHIVE);
-        try {
-            FriendlyId.Parsed parsed = FriendlyId.parse(friendlyId == null ? "" : friendlyId.strip().toUpperCase());
-            if (!"F".equals(parsed.prefix())) {
-                throw new NotFoundException(NOT_FOUND);
-            }
-            return ctx.files().findByFriendlyNumber(parsed.number()).filter(f -> canSee(actor, f))
-                    .orElseThrow(() -> new NotFoundException(NOT_FOUND));
-        } catch (IllegalArgumentException e) {
-            throw new NotFoundException(NOT_FOUND);
-        }
+        // GAS-P2-R02: the same parsing that Change History authorization uses to recognise references.
+        long number = FileIdentifiers.friendlyNumber(friendlyId).orElseThrow(() -> new NotFoundException(NOT_FOUND));
+        return ctx.files().findByFriendlyNumber(number).filter(f -> canSee(actor, f))
+                .orElseThrow(() -> new NotFoundException(NOT_FOUND));
     }
 
     public FileView view(Actor actor, UUID fileId) {

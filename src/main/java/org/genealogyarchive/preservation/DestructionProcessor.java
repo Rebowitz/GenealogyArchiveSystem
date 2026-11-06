@@ -16,7 +16,10 @@ import java.util.Map;
 import org.genealogyarchive.data.QuarantineRepository;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -27,6 +30,10 @@ import java.util.UUID;
 public final class DestructionProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(DestructionProcessor.class);
+
+    /** Repair states that can still write, commit or move bytes and are stopped by destruction (GAS-P2-R01). */
+    private static final Set<OperationState> STOPPABLE = EnumSet.of(OperationState.STAGED, OperationState.PROMOTING,
+            OperationState.PROMOTED, OperationState.WAITING_FOR_VOLUME, OperationState.BLOCKED);
 
     private final PreservationContext ctx;
 
@@ -69,7 +76,7 @@ public final class DestructionProcessor {
      * and each quarantine-ledger entry for the content - after settling any move that was interrupted
      * before it was recorded. Completion (BYTES_REMOVED) is recorded only after re-checking that none of
      * those locations still holds bytes; otherwise the operation is CLEANUP_INCOMPLETE and says what
-     * remains.
+     * remains. It also covers copies that unfinished repairs created but never committed (GAS-P2-R01).
      */
     private void removeBytes(FileOperation op) {
         ManagedVolume volume;
@@ -80,9 +87,111 @@ public final class DestructionProcessor {
                     Map.of("message", e.getMessage()));
             return;
         }
-        QuarantineMoves moves = new QuarantineMoves(ctx);
-        List<String> known = new ArrayList<>();
+        // GAS-P2-R01: no other operation may write, commit or move bytes of this content while it is removed.
+        List<OperationLocks.Held> writers = new ArrayList<>();
         try {
+            Optional<UUID> busy = holdWriters(op, writers);
+            if (busy.isPresent()) {
+                incomplete(op, "Removal waits for operation " + busy.get() + ", which is still working on this content's "
+                        + "bytes. The File is retired; removal is retried.");
+                return;
+            }
+            removeBytes(op, volume);
+        } finally {
+            for (OperationLocks.Held held : writers) {
+                held.close();
+            }
+        }
+    }
+
+    /**
+     * Takes the lock of every other operation that could still touch this content's bytes: unfinished
+     * ingests/repairs of the content and owners of unsettled quarantine moves of it.
+     *
+     * @return the first operation that is busy elsewhere, if any (nothing is then removed)
+     */
+    private Optional<UUID> holdWriters(FileOperation op, List<OperationLocks.Held> held) {
+        Set<UUID> ids = new LinkedHashSet<>();
+        for (FileOperation w : ctx.operations().writersOfContent(op.contentId())) {
+            if (!w.state().isFinal()) {
+                ids.add(w.operationId());
+            }
+        }
+        for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
+            if (entry.state() == QuarantineRepository.State.INTENDED) {
+                ids.add(entry.operationId());
+            }
+        }
+        ids.remove(op.operationId());
+        for (UUID id : ids) {
+            Optional<OperationLocks.Held> lock = ctx.locks().tryLock("file-operation", id);
+            if (lock.isEmpty()) {
+                return Optional.of(id);
+            }
+            held.add(lock.get());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Stops every unfinished repair of the destroyed content (GAS-P2-R01), under its lock, so none can
+     * write, commit or move bytes after removal. A copy one of them created (and only such a copy) is
+     * removed below with the content's other copies; an object it did not create is left untouched.
+     */
+    private void stopUnfinishedRepairs(FileOperation op) {
+        for (FileOperation w : ctx.operations().writersOfContent(op.contentId())) {
+            if (w.kind() != OperationKind.REPAIR || !STOPPABLE.contains(w.state())) {
+                continue;
+            }
+            String copy = w.targetPath() == null ? "nothing was written"
+                    : w.targetCreated() ? "the uncommitted copy it created at " + w.targetPath() + " is removed by that destruction"
+                    : "it created nothing on the volume; any object at " + w.targetPath() + " was not created by it and is left untouched";
+            String message = "cancelled: the content was permanently destroyed (operation " + op.operationId() + "); " + copy;
+            if (ctx.operations().transition(w.operationId(), w.state(), OperationState.CANCELLED, message,
+                    Map.of("message", message))) {
+                ctx.operations().note(op.operationId(), "unfinished repair " + w.operationId() + " (" + w.state()
+                        + ") stopped; " + copy);
+                ctx.staging().ifPresent(staging -> {
+                    try {
+                        if (staging.delete(w.operationId())) {
+                            ctx.operations().markStagingCleaned(w.operationId());
+                        }
+                    } catch (IOException e) {
+                        // recovery retries the clean-up of a final operation's staged bytes
+                    }
+                });
+            }
+        }
+    }
+
+    /**
+     * Uncommitted copies owned by operations on this content: targets their own exclusive create
+     * produced (target_created) and that were not since moved away through the quarantine ledger.
+     */
+    private List<String> ownedUncommittedTargets(FileOperation op, ManagedVolume volume) throws IOException {
+        List<String> owned = new ArrayList<>();
+        for (FileOperation w : ctx.operations().writersOfContent(op.contentId())) {
+            if (!w.targetCreated() || w.targetPath() == null) {
+                continue;
+            }
+            boolean movedAway = ctx.quarantine().forOperation(w.operationId()).stream()
+                    .anyMatch(e -> e.sourcePath().equals(w.targetPath()) && e.state() != QuarantineRepository.State.INTENDED);
+            if (movedAway) {
+                continue;
+            }
+            if (!volume.volumeId().equals(w.volumeId())) {
+                throw new IOException("operation " + w.operationId() + " wrote a copy on another volume: " + w.targetPath());
+            }
+            owned.add(w.targetPath());
+        }
+        return owned;
+    }
+
+    private void removeBytes(FileOperation op, ManagedVolume volume) {
+        QuarantineMoves moves = new QuarantineMoves(ctx);
+        Set<String> known = new LinkedHashSet<>();
+        try {
+            stopUnfinishedRepairs(op);
             ctx.faults().reach(FaultPoints.Point.BEFORE_PHYSICAL_DELETE, op.operationId());
             for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
                 if (!entry.volumeId().equals(volume.volumeId())) {
@@ -101,8 +210,10 @@ public final class DestructionProcessor {
                     known.add(entry.quarantinePath());
                 }
             }
+            known.addAll(ownedUncommittedTargets(op, volume));
             for (String location : known) {
                 delete(volume, location);
+                ctx.faults().reach(FaultPoints.Point.DURING_PHYSICAL_DELETE, op.operationId());
             }
             for (FileContentRepository.Generation g : ctx.contents().generations(op.contentId())) {
                 if (g.state() != GenerationState.DESTROYED) {

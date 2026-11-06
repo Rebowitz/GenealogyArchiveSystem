@@ -11,12 +11,9 @@ import org.genealogyarchive.history.HistoryVisibility;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Keeps restricted Archival Files out of Change History for readers who may not see them (P2-H, B2,
@@ -25,16 +22,13 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>entries about a restricted File are removed;</li>
  *   <li>in the remaining entries, a field whose value names a restricted File (its UUID or friendly ID)
- *       or content a restricted File uses is withheld, and so is a reason that names one.</li>
+ *       or content a restricted File uses is withheld, and so is a reason that names one - by any spelling
+ *       the application resolves (GAS-P2-R02, {@link FileIdentifiers}).</li>
  * </ul>
  * A withheld field or reason is simply absent, exactly as if it had never been recorded, so nothing
  * distinguishes a hidden reference from no reference.
  */
 public final class RestrictedFileHistory implements HistoryVisibility {
-
-    private static final Pattern UUID_TEXT =
-            Pattern.compile("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
-    private static final Pattern FRIENDLY = Pattern.compile("\\bF(\\d{5,})\\b");
 
     private final ArchivalFileRepository files;
 
@@ -79,26 +73,13 @@ public final class RestrictedFileHistory implements HistoryVisibility {
         return out;
     }
 
+    /**
+     * Whether text refers to a hidden File or content by any spelling the application resolves
+     * (GAS-P2-R02: the canonical rules of {@link FileIdentifiers}, not a separate pattern).
+     */
     static boolean refersToHidden(String text, Set<UUID> hiddenIds, Set<Long> hiddenNumbers) {
-        if (text == null || text.isEmpty()) {
-            return false;
-        }
-        Matcher m = UUID_TEXT.matcher(text);
-        while (m.find()) {
-            if (hiddenIds.contains(UUID.fromString(m.group().toLowerCase(Locale.ROOT)))) {
-                return true;
-            }
-        }
-        Matcher f = FRIENDLY.matcher(text);
-        while (f.find()) {
-            try {
-                if (hiddenNumbers.contains(Long.parseLong(f.group(1)))) {
-                    return true;
-                }
-            } catch (NumberFormatException ignored) {
-                // longer than a long: cannot be a friendly number
-            }
-        }
-        return false;
+        FileIdentifiers.References refs = FileIdentifiers.referencesIn(text);
+        return refs.uuids().stream().anyMatch(hiddenIds::contains)
+                || refs.friendlyNumbers().stream().anyMatch(hiddenNumbers::contains);
     }
 }

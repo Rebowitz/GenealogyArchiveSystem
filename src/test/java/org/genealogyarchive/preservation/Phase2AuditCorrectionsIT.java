@@ -659,4 +659,200 @@ class Phase2AuditCorrectionsIT {
         }
         assertThat(fx.preservation().integrity().openFindings(fx.admin, 10)).as("no duplicate rows").hasSize(1);
     }
+
+    // ---- GAS-P2-R01 (re-audit): destruction and uncommitted repair copies ------------------------------
+
+    /** A repair whose copy was written, protected and verified, interrupted before its database commit. */
+    private FileOperation repairStoppedBeforeCommit(Repaired f) {
+        fx.faults.crashAt(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileOperation repair = fx.operation(f.repairOperation());
+        assertThat(repair.state()).isEqualTo(OperationState.PROMOTED);
+        assertThat(repair.targetCreated()).isTrue();
+        assertThat(onVolume(repair.targetPath())).exists();
+        assertThat(fx.preservation().context().contents().generations(f.contentId()))
+                .noneMatch(g -> g.generation() == repair.targetGeneration());
+        return repair;
+    }
+
+    private void assertDestroyedWithoutTrace(Repaired f, UUID destruction, FileOperation repair) throws IOException {
+        FileOperation done = fx.operation(destruction);
+        assertThat(done.state()).as(done.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(done.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(onVolume(repair.targetPath())).as("the uncommitted repair copy").doesNotExist();
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        FileOperation stopped = fx.operation(repair.operationId());
+        assertThat(stopped.state()).isEqualTo(OperationState.CANCELLED);
+        assertThat(stopped.message()).contains("permanently destroyed", repair.targetPath());
+        assertThat(stopped.stagingCleaned()).isTrue();
+        assertThat(content(f.file()).state()).isEqualTo(ContentState.DESTROYED);
+        assertThat(fx.preservation().context().contents().generations(f.contentId()))
+                .as("the repair never became a generation").noneMatch(g -> g.generation() == repair.targetGeneration())
+                .allMatch(g -> g.state() == GenerationState.DESTROYED);
+        assertThat(fx.preservation().context().quarantine().forContent(f.contentId()))
+                .allMatch(e -> e.state() == QuarantineRepository.State.REMOVED
+                        || e.state() == QuarantineRepository.State.SOURCE_ABSENT);
+    }
+
+    @Test
+    void gasP2_R01_aRepairCopyVerifiedButNotCommittedIsRemovedByDestructionAndRecovery() throws Exception {
+        Repaired f = corruptAndRepair("survey.tif", b("land survey, 1791"));
+        FileOperation repair = repairStoppedBeforeCommit(f);
+
+        FileOperation op = destroy(f.file());
+        fx.preservation().recovery().runOnce();
+        assertDestroyedWithoutTrace(f, op.operationId(), repair);
+
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(op.operationId());
+            fx.process(repair.operationId());
+        }
+        assertDestroyedWithoutTrace(f, op.operationId(), repair);
+    }
+
+    @Test
+    void gasP2_R01_cleanupInterruptedBeforeAndDuringRemovalIsFinishedByRepeatedRecovery() throws Exception {
+        Repaired f = corruptAndRepair("plat.tif", b("plat of the mill tract"));
+        FileOperation repair = repairStoppedBeforeCommit(f);
+        Path damaged = onVolume(fx.preservation().context().contents().generations(f.contentId()).get(0).storagePath());
+        FileOperation op = destroy(f.file());
+
+        // Stop after the repair was stopped, before anything was removed.
+        fx.faults.crashAt(FaultPoints.Point.BEFORE_PHYSICAL_DELETE);
+        assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(fx.operation(repair.operationId()).state()).isEqualTo(OperationState.CANCELLED);
+        assertThat(onVolume(repair.targetPath())).exists();
+        assertThat(damaged).exists();
+        assertThat(fx.operation(op.operationId()).state()).isNotEqualTo(OperationState.COMPLETED);
+
+        // Stop again after the first copy was removed, with the other still on the volume.
+        fx.faults.crashAt(FaultPoints.Point.DURING_PHYSICAL_DELETE);
+        assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(Stream.of(damaged, onVolume(repair.targetPath())).filter(Files::exists)).hasSize(1);
+        assertThat(fx.operation(op.operationId()).state()).as("never complete while a known copy remains")
+                .isNotEqualTo(OperationState.COMPLETED);
+        assertThat(fx.operation(op.operationId()).outcome()).isNotEqualTo("BYTES_REMOVED");
+
+        fx.preservation().recovery().runOnce();
+        fx.preservation().recovery().runOnce();
+        assertDestroyedWithoutTrace(f, op.operationId(), repair);
+    }
+
+    @Test
+    void gasP2_R01_removalWaitsWhileTheRepairIsBusyElsewhere() throws Exception {
+        Repaired f = corruptAndRepair("bible.tif", b("family bible register"));
+        FileOperation repair = repairStoppedBeforeCommit(f);
+        FileOperation op = destroy(f.file());
+
+        try (var busy = fx.preservation().context().locks().tryLock("file-operation", repair.operationId()).orElseThrow()) {
+            fx.preservation().destruction().process(op.operationId());
+            FileOperation waiting = fx.operation(op.operationId());
+            assertThat(waiting.state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(waiting.message()).contains("waits for operation " + repair.operationId());
+            assertThat(onVolume(repair.targetPath())).exists();
+            assertThat(fx.operation(repair.operationId()).state()).isEqualTo(OperationState.PROMOTED);
+        }
+        fx.preservation().recovery().runOnce();
+        assertDestroyedWithoutTrace(f, op.operationId(), repair);
+    }
+
+    @Test
+    void gasP2_R01_anObjectTheRepairNeverCreatedIsLeftUntouched() throws Exception {
+        Repaired f = corruptAndRepair("muster.tif", b("militia muster roll"));
+        fx.faults.crashAt(FaultPoints.Point.BEFORE_TARGET_CREATE);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileOperation repair = fx.operation(f.repairOperation());
+        assertThat(repair.state()).isEqualTo(OperationState.PROMOTING);
+        assertThat(repair.targetCreated()).isFalse();
+        Path foreign = onVolume(repair.targetPath());
+        Files.createDirectories(foreign.getParent());
+        Files.write(foreign, b("not written by any operation"));
+
+        FileOperation op = destroy(f.file());
+        fx.preservation().recovery().runOnce();
+        fx.preservation().recovery().runOnce();
+
+        FileOperation stopped = fx.operation(repair.operationId());
+        assertThat(stopped.state()).isEqualTo(OperationState.CANCELLED);
+        assertThat(stopped.message()).contains("left untouched");
+        assertThat(foreign).exists().hasBinaryContent(b("not written by any operation"));
+        FileOperation done = fx.operation(op.operationId());
+        assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).containsExactly(foreign);
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+    }
+
+    // ---- GAS-P2-R02 (re-audit): history authorization and File identifier spellings -------------------
+
+    private static String abbreviated(UUID id) {
+        String[] groups = id.toString().split("-");
+        StringBuilder sb = new StringBuilder();
+        for (String g : groups) {
+            String stripped = g.replaceFirst("^0+(?=.)", "");
+            sb.append(sb.isEmpty() ? "" : "-").append(stripped.toUpperCase(java.util.Locale.ROOT));
+        }
+        return sb.toString();
+    }
+
+    @Test
+    void gasP2_R02_historyOfOtherObjectsDoesNotLeakARestrictedFileByAnyResolvableSpelling() {
+        ArchivalFile secret = ingestAs(fx.editor, "living-cousin.jpg", b("restricted later, by spelling"), Restriction.NORMAL,
+                null, null);
+        long number = Long.parseLong(secret.friendlyId().substring(1));
+        List<String> spellings = List.of(
+                secret.friendlyId().toLowerCase(java.util.Locale.ROOT),             // f00001
+                "F" + number,                                                         // F1
+                "f" + number,                                                         // f1
+                "F0" + number,                                                        // F01
+                "copy of f" + number + ", see notes",                                 // embedded
+                "(" + secret.friendlyId() + ")",                                      // canonical, embedded
+                secret.fileId().toString().toUpperCase(java.util.Locale.ROOT),        // upper-case UUID
+                abbreviated(secret.fileId()),                                         // abbreviated UUID
+                "ref-" + secret.fileId() + "-end",                                    // embedded UUID
+                "same bytes as " + secret.contentId());                               // content it uses
+        String ordinary = "routine clean-up of folder F-1990 for Fairfax County";
+        for (String spelling : spellings) {
+            if (!spelling.contains(" ") && !spelling.startsWith("(") && !spelling.startsWith("ref-")
+                    && !spelling.contains("-")) {
+                assertThat(fx.preservation().files().getByFriendlyId(fx.admin, spelling).fileId())
+                        .as("'%s' is a spelling the lookup resolves", spelling).isEqualTo(secret.fileId());
+            }
+        }
+        assertThat(FileIdentifiers.uuid(abbreviated(secret.fileId()))).as("the web layer accepts the abbreviated UUID")
+                .hasValue(secret.fileId());
+
+        java.util.Map<String, UUID> carriers = new java.util.LinkedHashMap<>();
+        for (String reason : java.util.stream.Stream.concat(spellings.stream(), Stream.of(ordinary)).toList()) {
+            ArchivalFile other = ingestAs(fx.editor, "other.jpg", b("carrier " + reason), Restriction.NORMAL, null, null);
+            fx.preservation().files().delete(fx.editor, other.fileId(), other.version(), reason);
+            carriers.put(reason, other.fileId());
+        }
+        for (String reason : carriers.keySet()) {
+            assertThat(fx.services().history().forObject(fx.viewer, "archival_file", carriers.get(reason)))
+                    .as("before restriction nothing is withheld: %s", reason).anyMatch(r -> reason.equals(r.reason()));
+        }
+
+        restrict(secret);
+
+        for (String spelling : spellings) {
+            UUID carrier = carriers.get(spelling);
+            for (Actor reader : new Actor[]{fx.viewer, fx.editor}) {
+                List<ChangeRecord> own = fx.services().history().forObject(reader, "archival_file", carrier);
+                assertThat(own).as("the other object's history stays visible").isNotEmpty();
+                assertThat(own).as("'%s' withheld from its object's history", spelling).noneMatch(r -> spelling.equals(r.reason()));
+                assertThat(recent(reader)).as("'%s' withheld from global history", spelling)
+                        .noneMatch(r -> spelling.equals(r.reason()));
+            }
+            assertThat(fx.services().history().forObject(fx.admin, "archival_file", carrier))
+                    .as("Administrators still see '%s'", spelling).anyMatch(r -> spelling.equals(r.reason()));
+        }
+        assertThat(fx.services().history().forObject(fx.viewer, "archival_file", carriers.get(ordinary)))
+                .as("ordinary text is not redacted").anyMatch(r -> ordinary.equals(r.reason()));
+        assertThatThrownBy(() -> fx.preservation().files().getByFriendlyId(fx.viewer, "f" + number))
+                .isInstanceOf(NotFoundException.class);
+    }
 }

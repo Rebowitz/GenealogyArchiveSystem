@@ -1,7 +1,8 @@
 # ADR-0009: File preservation — ingestion, operations, recovery, integrity and repair
 
 Status: Implemented for Phase 2 review (owner decisions P2-A … P2-K, B1 … B5), revised for the independent
-Phase 2 audit (GAS-P2-001 … GAS-P2-011; see `docs/PHASE-2-AUDIT-CORRECTIONS.md`). Not yet accepted.
+Phase 2 audit (GAS-P2-001 … GAS-P2-011) and its re-audit (GAS-P2-R01, GAS-P2-R02); see
+`docs/PHASE-2-AUDIT-CORRECTIONS.md`. Not yet accepted.
 
 ## Context
 Phase 2 stores the archive's first preservation originals. The archival invariants that govern it:
@@ -104,6 +105,13 @@ workers from driving the same operation.
   (interrupted moves are settled first). `BYTES_REMOVED` is recorded only after re-checking that none of
   those locations still holds bytes; otherwise the operation stays `CLEANUP_INCOMPLETE` and names what
   remains. Destroyed generations keep their quarantine path on record.
+- Unfinished repairs of the content are part of that accounting (GAS-P2-R01). Removal first takes the lock
+  of every unfinished operation on the content and of every owner of an unsettled quarantine move of it
+  (if one is busy, removal waits and is retried), then stops each unfinished repair (`CANCELLED`, with the
+  reason) so none can write, commit or move bytes afterwards. A copy a repair created itself
+  (`target_created`, not since moved through the ledger) is removed with the content's other copies; an
+  object it did not create is left untouched, as everywhere else. Stopping is committed before removal, so
+  an interruption at any point is finished by the next attempt.
 
 ### Integrity and repair (P2-I)
 - Quick scans check presence, size, protection, links/reparse points, unexpected objects in `originals/`
@@ -126,7 +134,11 @@ answers exactly as for a nonexistent File.
 - **Change History (GAS-P2-003)** is filtered when read, following the current restriction (so it also
   covers entries written before a File was restricted): entries about a restricted File are removed, and in
   the remaining entries a field or reason naming a restricted File (UUID or friendly ID) or content it
-  uses is withheld - absent, exactly as if it had never been recorded.
+  uses is withheld - absent, exactly as if it had never been recorded. References are recognised by the
+  same rules that resolve File identifiers (`FileIdentifiers`, GAS-P2-R02): friendly IDs in any case and
+  with any number of leading zeros (`F00001`, `f00001`, `F1`), UUIDs in every spelling the web layer
+  accepts (any case, abbreviated groups), alone or embedded in text. Text that resolves to no hidden File
+  is never withheld.
 - **Inheritance (GAS-P2-004)** is a database invariant (V0014 triggers): restricting a File restricts every
   derivative at every depth in the same statement; a derivation recorded under a restricted parent
   (including one committed concurrently, ordered by a row lock) is restricted; a derivative of a
