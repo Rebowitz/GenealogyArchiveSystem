@@ -10,6 +10,8 @@ import org.genealogyarchive.history.ChangeKinds;
 import org.genealogyarchive.history.FieldChange;
 import org.genealogyarchive.history.FieldClass;
 import org.genealogyarchive.identity.GlobalIds;
+import org.genealogyarchive.data.IntegrityRepository;
+import org.genealogyarchive.data.QuarantineRepository;
 import org.genealogyarchive.platform.SafeFiles;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,9 +59,11 @@ public final class OperationProcessor {
     private static final String LOCK = "file-operation";
 
     private final PreservationContext ctx;
+    private final QuarantineMoves quarantine;
 
     public OperationProcessor(PreservationContext ctx) {
         this.ctx = ctx;
+        this.quarantine = new QuarantineMoves(ctx);
     }
 
     /**
@@ -114,7 +118,7 @@ public final class OperationProcessor {
         PortableRelativePath path = ManagedVolume.originalPath(contentId, 1);
         return ctx.operations().transition(op.operationId(), OperationState.STAGED, OperationState.PROMOTING,
                 "target planned: " + path.value(), Map.of("content_id", contentId, "target_generation", 1,
-                        "target_path", path.value()));
+                        "target_path", path.value(), "target_created", false));
     }
 
     private boolean planRepair(FileOperation op, StagingArea staging) {
@@ -132,7 +136,7 @@ public final class OperationProcessor {
         PortableRelativePath path = ManagedVolume.originalPath(content.contentId(), generation);
         return ctx.operations().transition(op.operationId(), OperationState.STAGED, OperationState.PROMOTING,
                 "repair target planned: " + path.value(), Map.of("target_generation", generation,
-                        "target_path", path.value(), "volume_id", content.volumeId()));
+                        "target_path", path.value(), "volume_id", content.volumeId(), "target_created", false));
     }
 
     private boolean reject(FileOperation op, StagingArea staging, String message) {
@@ -167,10 +171,28 @@ public final class OperationProcessor {
             return true;
         }
 
+        // GAS-P2-008: finish any quarantine move of this operation that was interrupted before it was
+        // recorded, before deciding anything from what is (or is not) at the target.
+        for (QuarantineRepository.Entry pending : ctx.quarantine().forOperation(op.operationId())) {
+            if (pending.state() == QuarantineRepository.State.INTENDED) {
+                try {
+                    quarantine.settle(volume, pending);
+                } catch (FileAlreadyExistsException e) {
+                    return block(op, BlockedReason.STATE_UNKNOWN, "An interrupted quarantine move of " + pending.sourcePath()
+                            + " cannot be completed: both the object and " + pending.quarantinePath()
+                            + " exist. Nothing was moved.");
+                } catch (IOException e) {
+                    return ioProblem(op, e);
+                }
+            }
+        }
+
         if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-            if (op.attempts() == 0) {
+            if (!op.targetCreated()) {
+                // GAS-P2-009: only an object this operation's own exclusive create produced is ever treated
+                // as its copy; anything else at the planned location is left exactly where it is.
                 return block(op, BlockedReason.COLLISION, "An object already exists at the planned location "
-                        + op.targetPath() + " although this operation never wrote it. It was not touched.");
+                        + op.targetPath() + " although this operation never created it. It was not touched.");
             }
             ContentIo.Measurement m;
             try {
@@ -196,6 +218,8 @@ public final class OperationProcessor {
         try {
             ctx.faults().reach(FaultPoints.Point.BEFORE_TARGET_CREATE, op.operationId());
             try (FileChannel out = SafeFiles.createExclusive(target)) {
+                // Recorded before any byte is written: from now on the object at the target is ours.
+                ctx.operations().markTargetCreated(op.operationId(), op.targetPath());
                 copied = ContentIo.copy(staged, out, ctx.faults(), op.operationId());
             }
             SafeFiles.flushDirectory(target.getParent());
@@ -206,9 +230,18 @@ public final class OperationProcessor {
             return ioProblem(op, e);
         }
         if (!matchesExpected(op, copied)) {
-            moveToQuarantineQuietly(op, volume, target, "unverified-copy");
+            String where;
+            try {
+                where = quarantine.move(volume, op.operationId(), op.contentId(), PortableRelativePath.of(op.targetPath()),
+                        "unverified-copy-" + (op.attempts() + 1), QuarantineRepository.Reason.UNVERIFIED_COPY).quarantinePath();
+            } catch (IOException e) {
+                where = null;
+                log.warn("Operation {}: unverified copy could not be moved to quarantine yet; its intent is recorded",
+                        op.operationId());
+            }
             return block(op, BlockedReason.STAGING_INVALID, "The staged bytes changed after they were received "
-                    + "(size/SHA-256 differ). The copy was moved to quarantine; nothing was archived.");
+                    + "(size/SHA-256 differ). " + (where == null ? "Moving the copy to quarantine is pending; "
+                    : "The copy was moved to " + where + "; ") + "nothing was archived.");
         }
         try {
             ctx.faults().reach(FaultPoints.Point.BEFORE_PROTECT, op.operationId());
@@ -234,19 +267,38 @@ public final class OperationProcessor {
                 detail + "; protected read-only");
     }
 
+    /**
+     * GAS-P2-008: the partial copy's move is recorded in the quarantine ledger before it happens and
+     * confirmed after it; if the process stops between the move and this transition, the next attempt
+     * settles the ledger entry first (see promote) and then simply writes the target again.
+     */
     private boolean quarantinePartialAndReplan(FileOperation op, ManagedVolume volume, Path target) {
-        PortableRelativePath q = ManagedVolume.quarantinePath(op.operationId(), "partial-" + op.attempts());
+        QuarantineRepository.Entry moved;
         try {
-            moveToQuarantine(volume, target, q);
+            moved = quarantine.move(volume, op.operationId(), op.contentId(), PortableRelativePath.of(op.targetPath()),
+                    "partial-" + op.attempts(), QuarantineRepository.Reason.PARTIAL_COPY);
+        } catch (FileAlreadyExistsException e) {
+            return block(op, BlockedReason.STATE_UNKNOWN, "The partial copy at " + op.targetPath()
+                    + " cannot be moved to quarantine because its destination already exists. Nothing was moved.");
+        } catch (IOException e) {
+            return ioProblem(op, e);
+        }
+        try {
+            ctx.faults().reach(FaultPoints.Point.AFTER_QUARANTINE_RECORDED, op.operationId());
         } catch (IOException e) {
             return ioProblem(op, e);
         }
         UUID contentId = op.contentId();
         int next = Math.max(op.targetGeneration() + 1, ctx.contents().maxGeneration(contentId) + 1);
         PortableRelativePath path = ManagedVolume.originalPath(contentId, next);
+        Map<String, Object> set = new HashMap<>();
+        set.put("target_generation", next);
+        set.put("target_path", path.value());
+        set.put("quarantine_path", moved.quarantinePath());
+        set.put("target_created", false);
         return ctx.operations().transition(op.operationId(), OperationState.PROMOTING, OperationState.PROMOTING,
-                "partial copy from an interrupted attempt moved to " + q.value() + "; next attempt writes " + path.value(),
-                Map.of("target_generation", next, "target_path", path.value(), "quarantine_path", q.value()));
+                "partial copy from an interrupted attempt moved to " + moved.quarantinePath() + "; next attempt writes "
+                        + path.value(), set);
     }
 
     // ---- exact duplicates (P2-B) ----------------------------------------------------------------
@@ -258,32 +310,68 @@ public final class OperationProcessor {
                 // outcome would otherwise reveal to the uploader that the restricted File exists.
                 continue;
             }
+            // GAS-P2-005: the shared original must meet the same guarantee as a new copy before success is
+            // reported - protected read-only, and matching its authoritative size and SHA-256 - and be
+            // byte-for-byte identical to this upload.
+            Path existing;
             try {
                 ManagedVolume volume = ctx.openVolume(candidate.volumeId());
-                Path existing = volume.resolveExisting(candidate.currentPath());
-                if (!Files.exists(existing, LinkOption.NOFOLLOW_LINKS) || !ContentIo.identical(staged, existing)) {
-                    log.info("Operation {}: candidate content {} has the same size and SHA-256 but its stored bytes "
-                            + "differ or are absent; the upload is stored separately", op.operationId(), candidate.contentId());
+                Optional<Path> located = volume.locate(candidate.currentPath());
+                if (located.isEmpty() || !Files.isRegularFile(located.get(), LinkOption.NOFOLLOW_LINKS)) {
+                    log.info("Operation {}: candidate content {} is not present; the upload is stored separately",
+                            op.operationId(), candidate.contentId());
+                    continue;
+                }
+                existing = located.get();
+                ContentIo.Measurement stored = ContentIo.measure(existing);
+                if (stored.size() != candidate.byteSize() || !stored.sha256().equals(candidate.sha256())
+                        || !ContentIo.identical(staged, existing)) {
+                    log.info("Operation {}: candidate content {} no longer verifies or differs from the upload; "
+                            + "the upload is stored separately", op.operationId(), candidate.contentId());
                     continue;
                 }
             } catch (ManagedVolume.VolumeUnavailableException | IOException e) {
                 continue;
             }
+            if (!SafeFiles.isReadOnly(existing)) {
+                ctx.integrity().insertFindingIfNew(null, new IntegrityRepository.NewFinding(FindingKind.NOT_PROTECTED,
+                        candidate.volumeId(), candidate.contentId(), candidate.currentGeneration(),
+                        candidate.currentPath().value(), op.operationId(), null, null,
+                        "Found while sharing an identical upload: the stored original had lost its read-only protection. "
+                                + "The worker re-applied it before the upload was reported as archived."));
+                try {
+                    ctx.faults().reach(FaultPoints.Point.BEFORE_PROTECT, op.operationId());
+                    SafeFiles.makeReadOnly(existing);
+                } catch (IOException e) {
+                    return block(op, BlockedReason.PROTECTION, "The identical stored original " + candidate.currentPath().value()
+                            + " is not protected read-only and protection could not be re-applied ("
+                            + e.getClass().getSimpleName() + "). The upload is not reported as archived.");
+                }
+                if (!SafeFiles.isReadOnly(existing)) {
+                    return block(op, BlockedReason.PROTECTION, "The identical stored original " + candidate.currentPath().value()
+                            + " is still not protected read-only. The upload is not reported as archived.");
+                }
+            }
             guard.run();
-            if (commitShared(op, candidate.contentId(), staged)) {
+            if (commitShared(op, candidate, staged)) {
                 return true;
             }
         }
         return false;
     }
 
-    private boolean commitShared(FileOperation op, UUID contentId, Path staged) {
+    private boolean commitShared(FileOperation op, FileContent verified, Path staged) {
         String mediaType = mediaTypeOf(staged);
+        UUID contentId = verified.contentId();
         Boolean done = ctx.tx().execute(status -> {
             Optional<FileContent> locked = ctx.contents().lock(contentId);
-            if (locked.isEmpty() || locked.get().state() != ContentState.ACTIVE || usedByRestrictedFile(contentId)) {
+            // The verified generation must still be the current one, and the content still ACTIVE.
+            if (locked.isEmpty() || locked.get().state() != ContentState.ACTIVE
+                    || locked.get().currentGeneration() != verified.currentGeneration()
+                    || usedByRestrictedFile(contentId)) {
                 return false;
             }
+            ctx.contents().markVerified(contentId, ctx.clock().instant());
             UUID fileId = GlobalIds.newId();
             Map<String, Object> set = new HashMap<>();
             set.put("content_id", contentId);
@@ -366,6 +454,14 @@ public final class OperationProcessor {
         String managed = op.originalFilename().length() > 255 ? op.originalFilename().substring(0, 255) : op.originalFilename();
         Instant now = ctx.clock().instant();
         Restriction restriction = op.requestedRestriction() == null ? Restriction.NORMAL : op.requestedRestriction();
+        if (op.parentFileId() != null) {
+            // GAS-P2-004: the parent (or an ancestor) may have been restricted after this upload was received.
+            // The parent's row lock orders this check against a concurrent restriction of the parent.
+            ctx.files().lock(op.parentFileId());
+            if (ctx.files().selfOrAncestorRestricted(op.parentFileId())) {
+                restriction = Restriction.RESTRICTED;
+            }
+        }
         ctx.files().insert(new ArchivalFileRepository.NewFile(fileId, number, contentId, op.operationId(),
                 op.originalFilename(), managed.strip().isEmpty() ? "file" : managed, mediaType, now, op.actorUserId(),
                 op.batchId(), op.clientLastModified(), op.sourceNote(), restriction));
@@ -462,26 +558,20 @@ public final class OperationProcessor {
         for (FileContentRepository.Generation g : pending) {
             try {
                 ctx.faults().reach(FaultPoints.Point.BEFORE_QUARANTINE_MOVE, op.operationId());
-                Path source = volume.resolveExisting(PortableRelativePath.of(g.storagePath()));
-                PortableRelativePath q = ManagedVolume.quarantinePath(op.operationId(), "damaged-g" + g.generation());
-                if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)
-                        && Files.exists(volume.prepare(q), LinkOption.NOFOLLOW_LINKS)) {
-                    // An earlier attempt moved it but stopped before recording the move: confirm and record it now.
+                // Ledger intent first (GAS-P2-006/-008): the damaged copy is accounted for at every moment.
+                QuarantineRepository.Entry moved = quarantine.move(volume, op.operationId(), g.contentId(),
+                        PortableRelativePath.of(g.storagePath()), "damaged-g" + g.generation(),
+                        QuarantineRepository.Reason.DAMAGED_GENERATION);
+                if (moved.state() == QuarantineRepository.State.QUARANTINED) {
                     ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
-                            GenerationState.QUARANTINED, q.value());
-                    ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " confirmed in " + q.value());
-                    continue;
-                }
-                if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
+                            GenerationState.QUARANTINED, moved.quarantinePath());
+                    ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " is in "
+                            + moved.quarantinePath());
+                } else {
                     ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
                             GenerationState.MISSING, null);
                     ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " was no longer present");
-                    continue;
                 }
-                moveToQuarantine(volume, source, q);
-                ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
-                        GenerationState.QUARANTINED, q.value());
-                ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " moved to " + q.value());
             } catch (IOException e) {
                 ctx.operations().note(op.operationId(), "damaged generation " + g.generation()
                         + " could not be moved to quarantine yet (" + e.getClass().getSimpleName() + "); it remains accounted for");
@@ -543,22 +633,6 @@ public final class OperationProcessor {
         ctx.operations().note(op.operationId(), "attempt failed: " + e.getClass().getSimpleName()
                 + (e.getMessage() == null ? "" : ": " + e.getMessage()));
         throw new FileOperationFailedException(op.operationId(), e);
-    }
-
-    private void moveToQuarantine(ManagedVolume volume, Path source, PortableRelativePath quarantine) throws IOException {
-        Path destination = volume.prepare(quarantine);
-        SafeFiles.withSharingRetry(() -> Files.move(source, destination, LinkOption.NOFOLLOW_LINKS));
-        SafeFiles.flushDirectory(destination.getParent());
-        SafeFiles.flushDirectory(source.getParent());
-    }
-
-    private void moveToQuarantineQuietly(FileOperation op, ManagedVolume volume, Path target, String suffix) {
-        try {
-            moveToQuarantine(volume, target, ManagedVolume.quarantinePath(op.operationId(), suffix));
-        } catch (IOException e) {
-            log.warn("Operation {}: unverified copy could not be moved to quarantine; it stays at {}", op.operationId(),
-                    op.targetPath());
-        }
     }
 
     private void deleteStaging(UUID operationId, StagingArea staging) {

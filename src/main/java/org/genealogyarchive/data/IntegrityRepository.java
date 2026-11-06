@@ -91,20 +91,58 @@ public final class IntegrityRepository {
      * @return the new finding's ID, or empty if an identical finding was already open
      */
     public Optional<UUID> insertFindingIfNew(UUID scanId, NewFinding f) {
-        long open = jdbc.sql("""
-                SELECT count(*) FROM gas.integrity_finding
+        Observation o = observe(scanId, f);
+        return o.isNew() ? Optional.of(o.findingId()) : Optional.empty();
+    }
+
+    /** A finding as seen by one scan: newly opened, or already open from an earlier observation. */
+    public record Observation(UUID findingId, boolean isNew) {
+    }
+
+    /**
+     * Records that a scan observed a problem (GAS-P2-011): if an identical finding is already open it is
+     * linked to this scan as still present; otherwise a new finding is opened. With a null scan (problems
+     * noticed outside a scan) only the finding itself is recorded.
+     */
+    public Observation observe(UUID scanId, NewFinding f) {
+        Optional<UUID> open = jdbc.sql("""
+                SELECT finding_id FROM gas.integrity_finding
                  WHERE status = 'OPEN' AND kind = :kind
                    AND content_id IS NOT DISTINCT FROM CAST(:content AS uuid)
                    AND generation IS NOT DISTINCT FROM CAST(:gen AS integer)
                    AND storage_path IS NOT DISTINCT FROM CAST(:path AS text)
                    AND volume_id IS NOT DISTINCT FROM CAST(:vol AS uuid)
                    AND operation_id IS NOT DISTINCT FROM CAST(:op AS uuid)
+                 ORDER BY found_at LIMIT 1
                 """).param("kind", f.kind().name()).param("content", str(f.contentId()))
                 .param("gen", f.generation()).param("path", f.storagePath()).param("vol", str(f.volumeId()))
-                .param("op", str(f.operationId())).query(Long.class).single();
-        if (open > 0) {
-            return Optional.empty();
+                .param("op", str(f.operationId())).query((rs, n) -> Rows.uuid(rs, "finding_id")).optional();
+        if (open.isPresent()) {
+            observeExisting(scanId, open.get());
+            return new Observation(open.get(), false);
         }
+        UUID id = insertFinding(scanId, f);
+        observeExisting(scanId, id);
+        return new Observation(id, true);
+    }
+
+    public boolean observedBy(UUID scanId, UUID findingId) {
+        return jdbc.sql("SELECT count(*) FROM gas.integrity_finding_observation WHERE scan_id = :s AND finding_id = :f")
+                .param("s", scanId).param("f", findingId).query(Long.class).single() > 0;
+    }
+
+    /** Links an existing finding to a scan that saw it still present (no-op without a scan). */
+    public void observeExisting(UUID scanId, UUID findingId) {
+        if (scanId == null) {
+            return;
+        }
+        jdbc.sql("""
+                INSERT INTO gas.integrity_finding_observation (scan_id, finding_id) VALUES (:s, :f)
+                ON CONFLICT (scan_id, finding_id) DO NOTHING
+                """).param("s", scanId).param("f", findingId).update();
+    }
+
+    private UUID insertFinding(UUID scanId, NewFinding f) {
         UUID id = GlobalIds.newId();
         jdbc.sql("""
                 INSERT INTO gas.integrity_finding (finding_id, scan_id, kind, volume_id, content_id, generation, storage_path,
@@ -116,7 +154,7 @@ public final class IntegrityRepository {
                 .param("sha", f.observedSha256() == null ? null : Sha256.bytes(f.observedSha256()))
                 .param("detail", f.detail().length() > 4000 ? f.detail().substring(0, 4000) : f.detail())
                 .update();
-        return Optional.of(id);
+        return id;
     }
 
     public Optional<IntegrityFinding> findFinding(UUID findingId) {
@@ -134,8 +172,16 @@ public final class IntegrityRepository {
                 .param("c", contentId).query(FINDING).list();
     }
 
+    /**
+     * Every finding the scan observed: those it opened and those opened earlier that it found still
+     * present (GAS-P2-011). A finding's own scan ID tells which scan first found it.
+     */
     public List<IntegrityFinding> findingsOfScan(UUID scanId) {
-        return jdbc.sql("SELECT " + FINDING_COLUMNS + " FROM gas.integrity_finding WHERE scan_id = :s ORDER BY found_at")
+        return jdbc.sql("""
+                        SELECT i.finding_id, i.scan_id, i.kind, i.volume_id, i.content_id, i.generation, i.storage_path,
+                               i.operation_id, i.observed_size, i.observed_sha256, i.detail, i.found_at, i.status,
+                               i.resolution, i.resolved_at""" + " FROM gas.integrity_finding i JOIN gas.integrity_finding_observation o ON o.finding_id = i.finding_id"
+                        + " WHERE o.scan_id = :s ORDER BY i.found_at")
                 .param("s", scanId).query(FINDING).list();
     }
 

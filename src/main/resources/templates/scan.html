@@ -16,7 +16,8 @@
     <h2>Findings</h2>
     <p class="muted" th:if="${#lists.isEmpty(findings)}">None.</p>
     <ul><li th:each="x : ${findings}"><span th:text="${x.kind()}">k</span>: <span th:text="${x.detail()}">d</span>
-        <span class="muted" th:text="${x.open()} ? '(open)' : '(resolved: ' + ${x.resolution()} + ')'">-</span></li></ul>
+        <span class="muted" th:text="${x.open()} ? '(open)' : '(resolved: ' + ${x.resolution()} + ')'">-</span>
+        <span class="muted" th:if="${x.scanId() != scan.scanId()}">&mdash; first recorded by an earlier check, still present</span></li></ul>
     <p><a th:href="@{/preservation}">Back to preservation</a></p>
 </main>
 </body>

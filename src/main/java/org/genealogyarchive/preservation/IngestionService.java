@@ -19,6 +19,11 @@ import java.nio.channels.FileChannel;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -39,9 +44,40 @@ public final class IngestionService {
     private static final long HEARTBEAT_MILLIS = 1000;
 
     private final PreservationContext ctx;
+    /** Uploads this process is receiving right now; their receiver leases are renewed on a timer. */
+    private final Set<UUID> receiving = ConcurrentHashMap.newKeySet();
+    private ScheduledExecutorService leaseRenewer;
 
     public IngestionService(PreservationContext ctx) {
         this.ctx = ctx;
+    }
+
+    /**
+     * Renewal interval of the receiver lease: a quarter of the receiving timeout, between 200 ms and
+     * 5 s, so several renewals fall within the timeout.
+     */
+    long leaseIntervalMillis() {
+        long quarter = ctx.settings().receivingTimeout().toMillis() / 4;
+        return Math.max(200, Math.min(5000, quarter));
+    }
+
+    private synchronized void ensureLeaseRenewer() {
+        if (leaseRenewer != null) {
+            return;
+        }
+        leaseRenewer = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "gas-upload-receiver-lease");
+            t.setDaemon(true);
+            return t;
+        });
+        long interval = leaseIntervalMillis();
+        leaseRenewer.scheduleWithFixedDelay(() -> {
+            try {
+                ctx.operations().renewReceivers(List.copyOf(receiving));
+            } catch (RuntimeException e) {
+                log.warn("Upload receiver leases could not be renewed: {}", e.getMessage());
+            }
+        }, interval, interval, TimeUnit.MILLISECONDS);
     }
 
     /** An upload request: provenance captured from the browser at upload time. */
@@ -94,7 +130,20 @@ public final class IngestionService {
 
     public List<FileOperation> batchItems(Actor actor, UUID batchId) {
         batch(actor, batchId);
-        return ctx.operations().byBatch(batchId);
+        return ctx.operations().byBatch(batchId).stream().map(op -> shownTo(actor, op)).toList();
+    }
+
+    /**
+     * GAS-P2-003: an upload whose File is restricted now (restricted by an Administrator after the
+     * upload, or inherited from a restricted parent) is shown without its File, content or storage
+     * reference to a reader who may not see restricted Files.
+     */
+    FileOperation shownTo(Actor actor, FileOperation op) {
+        if (op.fileId() == null || AccessPolicy.allows(actor, Permission.VIEW_RESTRICTED_FILES)) {
+            return op;
+        }
+        boolean hidden = ctx.files().find(op.fileId()).map(ArchivalFile::restricted).orElse(true);
+        return hidden ? op.withoutFileReference() : op;
     }
 
     /** True if this batch already has an operation for the item key (a resent or repeated item). */
@@ -110,7 +159,7 @@ public final class IngestionService {
         if (!actor.userId().equals(op.actorUserId()) && !AccessPolicy.allows(actor, Permission.MANAGE_PRESERVATION)) {
             throw new NotFoundException("The upload");
         }
-        return op;
+        return shownTo(actor, op);
     }
 
     /**
@@ -128,7 +177,7 @@ public final class IngestionService {
         }
         var existing = ctx.operations().findByBatchItem(batch.batchId(), upload.itemKey());
         if (existing.isPresent()) {
-            return existing.get();
+            return shownTo(actor, existing.get());
         }
         long max = ctx.settings().maxUploadBytes();
         if (declaredLength > max) {
@@ -146,7 +195,7 @@ public final class IngestionService {
             if (method == null) {
                 throw new RuleViolationException("Describe how the derivative was made (for example: cropped in an external editor).");
             }
-            if (parent.restricted()) {
+            if (ctx.files().selfOrAncestorRestricted(parent.fileId())) {
                 restriction = Restriction.RESTRICTED;
             }
         }
@@ -164,7 +213,7 @@ public final class IngestionService {
                 blankToNull(upload.sourceNote(), 2000), restriction, upload.parentFileId(), method),
                 "upload started by " + actor.label());
         stage(operationId, staging, declaredLength, body, max);
-        return ctx.operations().find(operationId).orElseThrow();
+        return shownTo(actor, ctx.operations().find(operationId).orElseThrow());
     }
 
     /**
@@ -172,6 +221,17 @@ public final class IngestionService {
      * operation is ABANDONED; the user's source file is never touched.
      */
     void stage(UUID operationId, StagingArea staging, long declaredLength, InputStream body, long max) {
+        // GAS-P2-001: while this method runs, the receiver lease is renewed independently of bytes.
+        ensureLeaseRenewer();
+        receiving.add(operationId);
+        try {
+            receive(operationId, staging, declaredLength, body, max);
+        } finally {
+            receiving.remove(operationId);
+        }
+    }
+
+    private void receive(UUID operationId, StagingArea staging, long declaredLength, InputStream body, long max) {
         MessageDigest digest = Sha256.digest();
         long received = 0;
         String failure = null;
@@ -195,7 +255,7 @@ public final class IngestionService {
                 if ((System.nanoTime() - lastBeat) / 1_000_000 >= HEARTBEAT_MILLIS) {
                     lastBeat = System.nanoTime();
                     if (!ctx.operations().heartbeat(operationId, received)) {
-                        throw new IOException("the upload was abandoned by recovery after making no progress");
+                        throw new IOException("the upload is no longer being received (it was abandoned)");
                     }
                 }
             }
@@ -207,7 +267,10 @@ public final class IngestionService {
             abandon(operationId, staging, "The upload exceeded the limit of " + max + " bytes and was discarded.");
             throw e;
         } catch (IOException | RuntimeException e) {
-            failure = "The upload did not complete (" + e.getMessage() + "); nothing was archived and the source file was not touched.";
+            failure = readTimedOut(e)
+                    ? "The browser sent no data for longer than the server's read timeout, so the upload was ended; "
+                            + "nothing was archived and the source file was not touched."
+                    : "The upload did not complete (" + e.getMessage() + "); nothing was archived and the source file was not touched.";
         }
         if (failure != null) {
             abandon(operationId, staging, failure);
@@ -229,6 +292,16 @@ public final class IngestionService {
             log.warn("Upload {} was abandoned by recovery before it could be staged", operationId);
             cleanup(operationId, staging);
         }
+    }
+
+    /** The live-request timeout: the server stopped waiting for a client that sent nothing. */
+    private static boolean readTimedOut(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof java.net.SocketTimeoutException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void abandon(UUID operationId, StagingArea staging, String message) {

@@ -3,6 +3,7 @@ package org.genealogyarchive.preservation;
 import org.genealogyarchive.access.AccessPolicy;
 import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.access.Permission;
+import org.genealogyarchive.data.QuarantineRepository;
 import org.genealogyarchive.files.ManagedVolume;
 import org.genealogyarchive.files.PortableRelativePath;
 import org.genealogyarchive.platform.SafeFiles;
@@ -16,6 +17,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -175,23 +177,31 @@ public final class OperationAdminService {
     private boolean applyCancel(FileOperation op, String requestedBy) {
         UUID operationId = op.operationId();
         String quarantine = null;
-        if (op.targetPath() != null && op.blockedReason() != BlockedReason.COLLISION) {
+        String leftInPlace = null;
+        // GAS-P2-009: only a copy this operation's own exclusive create produced may be moved. Anything else
+        // at the planned location (never created by this operation: zero attempts, a recorded collision, or
+        // an object that appeared while the volume was away) is left exactly where it is and reported.
+        if (op.targetPath() != null && op.targetCreated()) {
             try {
                 ManagedVolume volume = ctx.openVolume(op.volumeId());
-                Path target = volume.resolveExisting(PortableRelativePath.of(op.targetPath()));
-                PortableRelativePath q = ManagedVolume.quarantinePath(operationId, "cancelled");
-                Path destination = volume.prepare(q);
-                if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-                    SafeFiles.withSharingRetry(() -> Files.move(target, destination, LinkOption.NOFOLLOW_LINKS));
-                    quarantine = q.value();
-                } else if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
-                    // An earlier attempt moved the copy but stopped before recording it: record it now.
-                    quarantine = q.value();
+                QuarantineRepository.Entry moved = new QuarantineMoves(ctx).move(volume, operationId, op.contentId(),
+                        PortableRelativePath.of(op.targetPath()), "cancelled", QuarantineRepository.Reason.CANCELLED_COPY);
+                if (moved.state() == QuarantineRepository.State.QUARANTINED) {
+                    quarantine = moved.quarantinePath();
                 }
             } catch (ManagedVolume.VolumeUnavailableException | IOException e) {
                 ctx.operations().note(operationId, "cancellation by " + requestedBy + " is waiting: the uncommitted copy "
                         + "could not be moved to quarantine yet (" + e.getClass().getSimpleName() + ")");
                 throw new IllegalStateException("uncommitted copy of " + operationId + " could not be quarantined yet", e);
+            }
+        } else if (op.targetPath() != null) {
+            try {
+                Optional<Path> target = ctx.openVolume(op.volumeId()).locate(PortableRelativePath.of(op.targetPath()));
+                if (target.isPresent() && Files.exists(target.get(), LinkOption.NOFOLLOW_LINKS)) {
+                    leftInPlace = op.targetPath();
+                }
+            } catch (ManagedVolume.VolumeUnavailableException | IOException e) {
+                // nothing is touched either way
             }
         }
         Map<String, Object> set = new HashMap<>();
@@ -199,8 +209,14 @@ public final class OperationAdminService {
         if (quarantine != null) {
             set.put("quarantine_path", quarantine);
         }
+        if (leftInPlace != null) {
+            set.put("message", "cancelled by " + requestedBy + "; an object this operation did not create is at "
+                    + leftInPlace + " and was left untouched");
+        }
         if (!ctx.operations().transition(operationId, op.state(), OperationState.CANCELLED,
-                "cancelled by " + requestedBy + (quarantine == null ? "" : "; uncommitted copy moved to " + quarantine), set)) {
+                "cancelled by " + requestedBy + (quarantine == null ? "" : "; uncommitted copy moved to " + quarantine)
+                        + (leftInPlace == null ? "" : "; object at " + leftInPlace + " not created by this operation, left untouched"),
+                set)) {
             return false;
         }
         ctx.staging().ifPresent(staging -> {

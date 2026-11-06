@@ -9,6 +9,7 @@ import org.genealogyarchive.files.StagingArea;
 import org.genealogyarchive.identity.GlobalIds;
 import org.genealogyarchive.platform.SafeFiles;
 import org.genealogyarchive.service.NotFoundException;
+import org.genealogyarchive.storage.StorageVolume;
 import org.genealogyarchive.service.RuleViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -88,7 +89,8 @@ public final class IntegrityService {
         }
         ctx.integrity().startScan(scanId);
         boolean full = "FULL".equals(scan.kind());
-        int[] counts = {0, 0};
+        // counts: [0] contents checked, [1] newly opened findings, [2] unresolved findings observed again
+        int[] counts = {0, 0, 0};
         try {
             Map<UUID, Optional<ManagedVolume>> volumes = new HashMap<>();
             for (FileContent content : ctx.contents().expectedOnDisk()) {
@@ -97,8 +99,16 @@ public final class IntegrityService {
                 if (volume.isPresent()) {
                     checkContent(scanId, volume.get(), content, full, counts);
                 }
+                observeUnresolved(scanId, content.contentId(), counts);
             }
+            // GAS-P2-010: every active required volume and the ingestion destination are checked, even
+            // when they hold no content yet.
             Set<UUID> volumeIds = new LinkedHashSet<>(volumes.keySet());
+            for (StorageVolume v : ctx.volumes().findAll()) {
+                if (v.active() && v.required()) {
+                    volumeIds.add(v.volumeId());
+                }
+            }
             ctx.archives().ingestionVolume().ifPresent(volumeIds::add);
             for (UUID volumeId : volumeIds) {
                 Optional<ManagedVolume> volume = volumes.computeIfAbsent(volumeId, id -> openOrReport(scanId, id, counts));
@@ -107,12 +117,46 @@ public final class IntegrityService {
                 }
             }
             checkStaging(scanId, counts);
-            ctx.integrity().finishScan(scanId, "COMPLETED", counts[0], counts[1],
-                    counts[1] == 0 ? "No problems found." : counts[1] + " new problem(s) recorded.");
+            int observed = counts[1] + counts[2];
+            ctx.integrity().finishScan(scanId, "COMPLETED", counts[0], observed, summary(counts));
         } catch (RuntimeException e) {
             log.error("Integrity scan {} failed: {}", scanId, e.getMessage());
-            ctx.integrity().finishScan(scanId, "FAILED", counts[0], counts[1], "The scan stopped: " + e.getClass().getSimpleName());
+            ctx.integrity().finishScan(scanId, "FAILED", counts[0], counts[1] + counts[2],
+                    "The scan stopped: " + e.getClass().getSimpleName());
             throw e;
+        }
+    }
+
+    /** GAS-P2-011: a scan reports damage that is still unresolved, not only newly found problems. */
+    static String summary(int[] counts) {
+        if (counts[1] == 0 && counts[2] == 0) {
+            return "No problems found.";
+        }
+        StringBuilder b = new StringBuilder();
+        if (counts[1] > 0) {
+            b.append(counts[1]).append(" new problem(s) recorded.");
+        }
+        if (counts[2] > 0) {
+            b.append(b.isEmpty() ? "" : " ").append(counts[2]).append(" previously recorded problem(s) still unresolved.");
+        }
+        return b.toString();
+    }
+
+    /**
+     * Content already known to be missing or damaged stays a problem until it is repaired or verified
+     * again, even when this scan cannot re-detect it (a quick scan does not hash). Its open findings are
+     * observed by this scan so the outcome never reads "No problems found" while damage is unresolved.
+     */
+    private void observeUnresolved(UUID scanId, UUID contentId, int[] counts) {
+        FileContent now = ctx.contents().find(contentId).orElse(null);
+        if (now == null || now.state() == ContentState.ACTIVE) {
+            return;
+        }
+        for (IntegrityFinding f : ctx.integrity().openFindingsFor(contentId)) {
+            if (!scanId.equals(f.scanId()) && !ctx.integrity().observedBy(scanId, f.findingId())) {
+                ctx.integrity().observeExisting(scanId, f.findingId());
+                counts[2]++;
+            }
         }
     }
 
@@ -129,13 +173,17 @@ public final class IntegrityService {
     private void checkContent(UUID scanId, ManagedVolume volume, FileContent content, boolean full, int[] counts) {
         String where = content.currentPath() == null ? null : content.currentPath().value();
         try {
-            Path path = volume.resolveExisting(content.currentPath());
-            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-                record(scanId, finding(FindingKind.MISSING, content, null, null,
-                        "Expected stored original not found at " + where), counts);
+            // GAS-P2-007: a missing shard or originals directory (on a volume whose marker verified) means
+            // the original is missing, so it can be repaired.
+            Optional<Path> located = volume.locate(content.currentPath());
+            if (located.isEmpty() || !Files.exists(located.get(), LinkOption.NOFOLLOW_LINKS)) {
+                record(scanId, finding(FindingKind.MISSING, content, null, null, located.isEmpty()
+                        ? "Expected stored original not found at " + where + " (a directory above it is missing)"
+                        : "Expected stored original not found at " + where), counts);
                 ctx.contents().setState(content.contentId(), ContentState.ACTIVE, ContentState.MISSING);
                 return;
             }
+            Path path = located.get();
             if (SafeFiles.isLinkOrReparsePoint(path)) {
                 record(scanId, finding(FindingKind.LINK_OR_REPARSE, content, null, null,
                         "The stored original's location is a link or reparse point"), counts);
@@ -244,8 +292,12 @@ public final class IntegrityService {
     }
 
     private void record(UUID scanId, IntegrityRepository.NewFinding finding, int[] counts) {
-        if (ctx.integrity().insertFindingIfNew(scanId, finding).isPresent()) {
+        if (scanId != null && ctx.integrity().observe(scanId, finding).isNew()) {
             counts[1]++;
+        } else if (scanId != null) {
+            counts[2]++;
+        } else {
+            ctx.integrity().insertFindingIfNew(null, finding);
         }
     }
 
@@ -284,10 +336,11 @@ public final class IntegrityService {
         }
         ContentIo.Measurement m;
         try {
-            Path path = volume.resolveExisting(content.currentPath());
-            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            Optional<Path> located = volume.locate(content.currentPath());
+            if (located.isEmpty() || !Files.exists(located.get(), LinkOption.NOFOLLOW_LINKS)) {
                 return false;
             }
+            Path path = located.get();
             if (!SafeFiles.isReadOnly(path)) {
                 SafeFiles.makeReadOnly(path);
             }

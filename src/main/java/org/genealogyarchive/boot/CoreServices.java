@@ -7,6 +7,7 @@ import org.genealogyarchive.data.ArchivalFileRepository;
 import org.genealogyarchive.data.FileContentRepository;
 import org.genealogyarchive.data.FileOperationRepository;
 import org.genealogyarchive.data.IntegrityRepository;
+import org.genealogyarchive.data.QuarantineRepository;
 import org.genealogyarchive.data.OperationLocks;
 import org.genealogyarchive.data.ArchiveInstanceRepository;
 import org.genealogyarchive.data.BackgroundJobRepository;
@@ -25,6 +26,7 @@ import org.genealogyarchive.migration.SchemaMigrator;
 import org.genealogyarchive.preservation.FaultPoints;
 import org.genealogyarchive.preservation.PreservationContext;
 import org.genealogyarchive.preservation.PreservationServices;
+import org.genealogyarchive.preservation.RestrictedFileHistory;
 import org.genealogyarchive.security.PasswordHasher;
 import org.genealogyarchive.security.UserService;
 import org.genealogyarchive.service.OperationalStatusService;
@@ -69,7 +71,9 @@ public record CoreServices(
         TransactionTemplate tx = Transactions.template(dataSource);
         ChangeHistoryRepository historyRepository = new ChangeHistoryRepository(dataSource);
         ChangeRecorder recorder = new ChangeRecorder(historyRepository, clock);
-        HistoryService history = new HistoryService(historyRepository);
+        ArchivalFileRepository archivalFiles = new ArchivalFileRepository(dataSource);
+        // Restricted Files never appear in Change History for readers who may not see them (GAS-P2-003).
+        HistoryService history = new HistoryService(historyRepository, new RestrictedFileHistory(archivalFiles));
         ArchiveInstanceRepository archiveRepository = new ArchiveInstanceRepository(dataSource);
         StorageVolumeRepository volumeRepository = new StorageVolumeRepository(dataSource);
         FriendlyIdSeriesRepository friendlyIds = new FriendlyIdSeriesRepository(dataSource);
@@ -81,8 +85,8 @@ public record CoreServices(
         StorageVolumeService volumes = new StorageVolumeService(volumeRepository, recorder, tx, clock, roots);
         JobQueue jobs = new JobQueue(jobRepository, clock);
         PreservationContext preservationContext = new PreservationContext(new FileOperationRepository(dataSource),
-                new FileContentRepository(dataSource), new ArchivalFileRepository(dataSource),
-                new IntegrityRepository(dataSource), archiveRepository, volumeRepository, friendlyIds,
+                new FileContentRepository(dataSource), archivalFiles,
+                new IntegrityRepository(dataSource), new QuarantineRepository(dataSource), archiveRepository, volumeRepository, friendlyIds,
                 new OperationLocks(dataSource), tx, recorder, jobs, roots, fileSettings, clock, faults);
         return new CoreServices(
                 systemStatus,

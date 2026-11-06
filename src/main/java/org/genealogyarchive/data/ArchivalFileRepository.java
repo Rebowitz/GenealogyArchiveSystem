@@ -95,6 +95,24 @@ public final class ArchivalFileRepository {
                 .query(FILE).list();
     }
 
+    /** IDs and friendly numbers of every File that is restricted now (any lifecycle, tombstones included). */
+    public java.util.Map<UUID, Long> restrictedFiles() {
+        java.util.Map<UUID, Long> out = new java.util.HashMap<>();
+        jdbc.sql("SELECT file_id, friendly_number FROM gas.archival_file WHERE restriction = 'RESTRICTED'")
+                .query((rs, n) -> {
+                    out.put(Rows.uuid(rs, "file_id"), rs.getLong("friendly_number"));
+                    return null;
+                }).list();
+        return out;
+    }
+
+    /** Contents that a restricted File uses (their IDs refer, indirectly, to that File). */
+    public java.util.Set<UUID> contentsOfRestrictedFiles() {
+        return new java.util.HashSet<>(jdbc.sql(
+                "SELECT DISTINCT content_id FROM gas.archival_file WHERE restriction = 'RESTRICTED'")
+                .query((rs, n) -> Rows.uuid(rs, "content_id")).list());
+    }
+
     public List<ArchivalFile> byContent(UUID contentId) {
         return jdbc.sql(SELECT + " WHERE f.content_id = :c ORDER BY f.friendly_number").param("c", contentId).query(FILE).list();
     }
@@ -156,6 +174,30 @@ public final class ArchivalFileRepository {
     public List<UUID> derivativesOf(UUID parentFileId) {
         return jdbc.sql("SELECT file_id FROM gas.file_derivation WHERE parent_file_id = :p ORDER BY created_at")
                 .param("p", parentFileId).query(UUID.class).list();
+    }
+
+    /** True if the File or any of its ancestors (parent, grandparent, ...) is restricted now. */
+    public boolean selfOrAncestorRestricted(UUID fileId) {
+        return Boolean.TRUE.equals(jdbc.sql("""
+                WITH RECURSIVE up(file_id) AS (
+                    SELECT CAST(:f AS uuid)
+                    UNION
+                    SELECT d.parent_file_id FROM gas.file_derivation d JOIN up ON d.file_id = up.file_id)
+                SELECT EXISTS (SELECT 1 FROM up JOIN gas.archival_file a ON a.file_id = up.file_id
+                                WHERE a.restriction = 'RESTRICTED')
+                """).param("f", fileId).query(Boolean.class).single());
+    }
+
+    /** Derivatives at every level below the File (children, grandchildren, ...) that are not restricted. */
+    public List<UUID> unrestrictedDescendants(UUID fileId) {
+        return jdbc.sql("""
+                WITH RECURSIVE down(file_id) AS (
+                    SELECT d.file_id FROM gas.file_derivation d WHERE d.parent_file_id = :f
+                    UNION
+                    SELECT d.file_id FROM gas.file_derivation d JOIN down ON d.parent_file_id = down.file_id)
+                SELECT a.file_id FROM down JOIN gas.archival_file a ON a.file_id = down.file_id
+                 WHERE a.restriction = 'NORMAL' ORDER BY a.friendly_number
+                """).param("f", fileId).query((rs, n) -> Rows.uuid(rs, "file_id")).list();
     }
 
     public long countByLifecycle(FileLifecycle lifecycle) {

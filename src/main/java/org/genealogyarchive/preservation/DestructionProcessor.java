@@ -13,6 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.Map;
+import org.genealogyarchive.data.QuarantineRepository;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -60,6 +63,14 @@ public final class DestructionProcessor {
         }
     }
 
+    /**
+     * Removes every known copy of the content's bytes (GAS-P2-006): each generation's storage location
+     * (whatever its state, in case bytes reappeared), each quarantined generation's quarantine copy,
+     * and each quarantine-ledger entry for the content - after settling any move that was interrupted
+     * before it was recorded. Completion (BYTES_REMOVED) is recorded only after re-checking that none of
+     * those locations still holds bytes; otherwise the operation is CLEANUP_INCOMPLETE and says what
+     * remains.
+     */
     private void removeBytes(FileOperation op) {
         ManagedVolume volume;
         try {
@@ -69,42 +80,94 @@ public final class DestructionProcessor {
                     Map.of("message", e.getMessage()));
             return;
         }
+        QuarantineMoves moves = new QuarantineMoves(ctx);
+        List<String> known = new ArrayList<>();
         try {
             ctx.faults().reach(FaultPoints.Point.BEFORE_PHYSICAL_DELETE, op.operationId());
+            for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
+                if (!entry.volumeId().equals(volume.volumeId())) {
+                    throw new IOException("a quarantined copy is on another volume: " + entry.quarantinePath());
+                }
+                moves.settle(volume, entry);
+            }
             for (FileContentRepository.Generation g : ctx.contents().generations(op.contentId())) {
-                if (g.state() != GenerationState.CURRENT && g.state() != GenerationState.QUARANTINE_PENDING) {
-                    continue;
+                known.add(g.storagePath());
+                if (g.quarantinePath() != null) {
+                    known.add(g.quarantinePath());
                 }
-                Path path = volume.resolveExisting(PortableRelativePath.of(g.storagePath()));
-                if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-                    SafeFiles.clearReadOnly(path);
-                    SafeFiles.withSharingRetry(() -> {
-                        Files.delete(path);
-                        return null;
-                    });
-                    SafeFiles.flushDirectory(path.getParent());
+            }
+            for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
+                if (entry.state() == QuarantineRepository.State.QUARANTINED || entry.state() == QuarantineRepository.State.REMOVED) {
+                    known.add(entry.quarantinePath());
                 }
-                ctx.contents().setGenerationState(g.contentId(), g.generation(), g.state(), GenerationState.DESTROYED, null);
+            }
+            for (String location : known) {
+                delete(volume, location);
+            }
+            for (FileContentRepository.Generation g : ctx.contents().generations(op.contentId())) {
+                if (g.state() != GenerationState.DESTROYED) {
+                    ctx.contents().setGenerationState(g.contentId(), g.generation(), g.state(), GenerationState.DESTROYED, null);
+                }
+            }
+            for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
+                if (entry.state() == QuarantineRepository.State.QUARANTINED) {
+                    ctx.quarantine().setState(entry.quarantineId(), QuarantineRepository.State.QUARANTINED,
+                            QuarantineRepository.State.REMOVED, "removed by destruction " + op.operationId());
+                }
             }
         } catch (IOException e) {
-            String message = "Physical removal is incomplete (" + e.getClass().getSimpleName()
-                    + "). The File is retired; its bytes may still be on the volume. Retry from Operations.";
-            log.warn("Destruction {}: {}", op.operationId(), message);
-            if (op.state() == OperationState.CLEANUP_PENDING) {
-                ctx.operations().transition(op.operationId(), OperationState.CLEANUP_PENDING, OperationState.CLEANUP_INCOMPLETE,
-                        message, Map.of("message", message));
-            } else {
-                ctx.operations().note(op.operationId(), message);
+            incomplete(op, "Physical removal is incomplete (" + e.getClass().getSimpleName()
+                    + "). The File is retired; its bytes may still be on the volume. Retry from Operations.");
+            return;
+        }
+        List<String> remaining = new ArrayList<>();
+        for (String location : known) {
+            try {
+                Optional<Path> p = volume.locate(PortableRelativePath.of(location));
+                if (p.isPresent() && Files.exists(p.get(), LinkOption.NOFOLLOW_LINKS)) {
+                    remaining.add(location);
+                }
+            } catch (IOException e) {
+                remaining.add(location + " (could not be checked)");
             }
+        }
+        if (!remaining.isEmpty()) {
+            incomplete(op, "Physical removal is incomplete: bytes remain at " + String.join(", ", remaining)
+                    + ". The File is retired. Retry from Operations.");
             return;
         }
         ctx.tx().executeWithoutResult(status -> {
             if (!ctx.operations().transition(op.operationId(), op.state(), OperationState.COMPLETED,
-                    "bytes removed from the volume", Map.of("outcome", "BYTES_REMOVED"))) {
+                    "every known copy removed (" + known.size() + " location(s) checked)", Map.of("outcome", "BYTES_REMOVED"))) {
                 status.setRollbackOnly();
                 return;
             }
             ctx.contents().setState(op.contentId(), ContentState.DESTROY_PENDING, ContentState.DESTROYED);
         });
+    }
+
+    private static void delete(ManagedVolume volume, String location) throws IOException {
+        Optional<Path> path = volume.locate(PortableRelativePath.of(location));
+        if (path.isEmpty() || !Files.exists(path.get(), LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        Path p = path.get();
+        SafeFiles.requirePlainFile(p);
+        SafeFiles.clearReadOnly(p);
+        SafeFiles.withSharingRetry(() -> {
+            Files.delete(p);
+            return null;
+        });
+        SafeFiles.flushDirectory(p.getParent());
+    }
+
+    private void incomplete(FileOperation op, String message) {
+        log.warn("Destruction {}: {}", op.operationId(), message);
+        if (op.state() == OperationState.CLEANUP_PENDING) {
+            ctx.operations().transition(op.operationId(), OperationState.CLEANUP_PENDING, OperationState.CLEANUP_INCOMPLETE,
+                    message, Map.of("message", message));
+        } else {
+            ctx.operations().note(op.operationId(), message);
+        }
     }
 }

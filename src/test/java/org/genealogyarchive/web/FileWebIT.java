@@ -56,11 +56,15 @@ class FileWebIT {
     }
 
     private void start(long maxUploadBytes) {
+        start(maxUploadBytes, Map.of());
+    }
+
+    private void start(long maxUploadBytes, Map<String, Object> properties) {
         InstallationConfig base = TestDatabase.installationConfig(fx.db.settings());
         InstallationConfig config = new InstallationConfig(base.sourceFile(), base.database(), base.server(), base.logging(),
                 Map.of(fx.volumeId, fx.volumeRoot),
                 new FileSettings(Optional.of(fx.staging), Optional.of(fx.cache), maxUploadBytes, Duration.ofMinutes(15)));
-        app = ProcessLauncher.startWeb(config, Map.of());
+        app = ProcessLauncher.startWeb(config, properties);
     }
 
     private WebSession signedIn(String user) {
@@ -212,5 +216,76 @@ class FileWebIT {
         // In a test the web process deliberately has write access, so the probe must say so
         // (the native service tests prove the denied case under the real service accounts).
         assertThat(ops.body()).contains("not confirmed as denied", "can write archival originals");
+    }
+
+    @Test
+    void gasP2_003_theHistoryPageDoesNotShowRestrictedFiles() {
+        start(FileSettings.DEFAULT_MAX_UPLOAD_BYTES);
+        WebSession admin = signedIn("admin1");
+        String batch = batch(admin);
+        HttpResponse<String> put = upload(admin, batch, "r", "living-person-census.jpg", payload(500),
+                Map.of("X-Restriction", "RESTRICTED"), false);
+        String fileId = fx.process(UUID.fromString(group(OP, put.body()))).fileId().toString();
+
+        assertThat(admin.get("/history").body()).contains("living-person-census.jpg");
+        for (String user : new String[]{"editor1", "viewer1"}) {
+            String page = signedIn(user).get("/history").body();
+            assertThat(page).doesNotContain("living-person-census", fileId, fx.file(UUID.fromString(fileId)).friendlyId());
+        }
+    }
+
+    @Test
+    void gasP2_001_aClientThatStopsSendingIsEndedByItsLiveReceiverNotByRecovery() throws Exception {
+        // The live-request timeout is the server's read timeout; recovery's receiver-lease timeout (15 min
+        // here) plays no part.
+        start(FileSettings.DEFAULT_MAX_UPLOAD_BYTES, Map.of("server.tomcat.connection-timeout", "2s"));
+        WebSession editor = signedIn("editor1");
+        String batch = batch(editor);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.io.InputStream silentAfterHeadStart = new java.io.InputStream() {
+            int sent;
+
+            @Override
+            public int read() throws java.io.IOException {
+                byte[] one = new byte[1];
+                return read(one, 0, 1) < 0 ? -1 : one[0] & 0xff;
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) throws java.io.IOException {
+                if (sent < 1000) {
+                    int n = Math.min(len, 1000 - sent);
+                    java.util.Arrays.fill(b, off, off + n, (byte) 'x');
+                    sent += n;
+                    return n;
+                }
+                try {
+                    release.await(30, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return -1;
+            }
+        };
+        java.util.concurrent.CompletableFuture<HttpResponse<String>> pending = java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> editor.put("/files/upload", "/files/batches/" + batch + "/items/silent",
+                        Map.of("X-File-Name", "silent.tif"), HttpRequest.BodyPublishers.ofInputStream(() -> silentAfterHeadStart)));
+        try {
+            org.genealogyarchive.preservation.FileOperation op = null;
+            for (int i = 0; i < 200; i++) {
+                var found = fx.preservation().context().operations().findByBatchItem(UUID.fromString(batch), "silent");
+                if (found.isPresent() && found.get().state() == OperationState.ABANDONED) {
+                    op = found.get();
+                    break;
+                }
+                Thread.sleep(100);
+            }
+            assertThat(op).as("the receiver ended the silent upload itself").isNotNull();
+            assertThat(op.message()).contains("read timeout");
+            assertThat(op.fileId()).isNull();
+        } finally {
+            release.countDown();
+            pending.handle((r, e) -> null).get(30, java.util.concurrent.TimeUnit.SECONDS);
+        }
     }
 }

@@ -290,19 +290,8 @@ class RecoveryIT {
         assertThat(op.expectedSize()).isEqualTo(24);
     }
 
-    @Test
-    void requirement1_anUploadThatStallsPastTheTimeoutIsAbandonedAndCannotLaterBeArchived() throws Exception {
-        fx.withSettings(new FileSettings(Optional.of(fx.staging), Optional.of(fx.cache), 1L << 30, Duration.ofSeconds(2)));
-        UUID batch = fx.newBatch(fx.editor);
-        CompletableFuture<FileOperation> upload = CompletableFuture.supplyAsync(() -> fx.preservation().ingestion().receive(
-                fx.editor, new IngestionService.Upload(batch, "stall", "stall.txt", null, null, null, null, null), 20,
-                trickle(20, 100, 5, 4500)));
-        Thread.sleep(3500);
-        assertThat(fx.preservation().recovery().runOnce().abandoned()).isEqualTo(1);
-
-        FileOperation op = upload.get(20, TimeUnit.SECONDS);
-        assertThat(op.state()).isEqualTo(OperationState.ABANDONED);
-        assertThat(op.fileId()).isNull();
-        assertThat(count(fx.staging)).isZero();
-    }
+    // The former "stalled upload is abandoned" test asserted the behaviour the independent audit found
+    // defective (GAS-P2-001): a live receiver must not be abandoned for lack of byte progress. Its
+    // replacement tests are Phase2AuditCorrectionsIT.gasP2_001_* (live receiver kept; dead receiver
+    // abandoned) and FileWebIT.gasP2_001_* (the live-request read timeout ends a silent client's upload).
 }

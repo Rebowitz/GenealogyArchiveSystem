@@ -29,7 +29,11 @@ public interface FaultPoints {
         /** Destruction: tombstone committed, before bytes are removed. */
         BEFORE_PHYSICAL_DELETE,
         /** Repair: repaired generation committed, before the damaged copy is moved to quarantine. */
-        BEFORE_QUARANTINE_MOVE
+        BEFORE_QUARANTINE_MOVE,
+        /** Any quarantine move: the object has been moved, before the move is recorded (GAS-P2-008). */
+        AFTER_QUARANTINE_MOVE,
+        /** Partial copy: its quarantine move is recorded, before the operation is replanned (GAS-P2-008). */
+        AFTER_QUARANTINE_RECORDED
     }
 
     FaultPoints NONE = (point, operationId) -> { };

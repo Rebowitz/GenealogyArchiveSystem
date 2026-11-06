@@ -52,8 +52,23 @@ public final class ChangeHistoryRepository {
     }
 
     public List<ChangeRecord> recent(int limit) {
+        return recent(limit, false);
+    }
+
+    /**
+     * The most recent entries. With {@code excludeRestrictedFiles}, entries about Archival Files that are
+     * restricted now are left out before the limit is applied, so a reader without access to restricted
+     * Files still gets a full page and learns nothing from gaps (Phase 2, P2-H/B2, GAS-P2-003).
+     */
+    public List<ChangeRecord> recent(int limit, boolean excludeRestrictedFiles) {
+        String filter = excludeRestrictedFiles ? """
+                 WHERE NOT (c.object_type = 'archival_file' AND EXISTS (
+                       SELECT 1 FROM gas.archival_file a WHERE a.file_id = c.object_id AND a.restriction = 'RESTRICTED'))
+                """ : "";
         return group(jdbc.sql(SELECT + """
-                 WHERE h.change_id IN (SELECT change_id FROM gas.change_history ORDER BY occurred_at DESC, change_id DESC LIMIT :limit)
+                 WHERE h.change_id IN (SELECT c.change_id FROM gas.change_history c
+                """ + filter + """
+                  ORDER BY c.occurred_at DESC, c.change_id DESC LIMIT :limit)
                  ORDER BY h.occurred_at DESC, h.change_id DESC, f.ord
                 """).param("limit", limit).query((rs, n) -> row(rs)).list());
     }

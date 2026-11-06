@@ -127,8 +127,9 @@ public final class FileService {
             if (current.restricted() && target == Restriction.NORMAL) {
                 AccessPolicy.require(actor, Permission.VIEW_RESTRICTED_FILES);
                 Optional<Derivation> d = ctx.files().derivation(fileId);
-                if (d.isPresent() && ctx.files().find(d.get().parentFileId()).map(ArchivalFile::restricted).orElse(false)) {
-                    throw new RuleViolationException("This derivative's parent is restricted, so the derivative must stay restricted.");
+                if (d.isPresent() && ctx.files().selfOrAncestorRestricted(d.get().parentFileId())) {
+                    throw new RuleViolationException("A File this one was derived from (directly or through other "
+                            + "derivatives) is restricted, so this derivative must stay restricted.");
                 }
             }
             List<FieldChange> changes = List.of(
@@ -138,13 +139,36 @@ public final class FileService {
             if (changes.stream().noneMatch(FieldChange::changed)) {
                 return current;
             }
+            boolean restricting = target == Restriction.RESTRICTED && !current.restricted();
+            List<UUID> inheriting = restricting ? ctx.files().unrestrictedDescendants(fileId) : List.of();
             if (!ctx.files().updateAttributes(fileId, expectedVersion, name, displayRotation, target)) {
                 throw new ConflictException("The file");
             }
             ctx.recorder().record(actor, ArchivalFileRepository.OBJECT_TYPE, fileId, ChangeKinds.CORRECTED, changes, reason);
+            if (restricting) {
+                recordInheritedRestriction(actor, fileId, inheriting);
+            }
             return ctx.files().find(fileId).orElseThrow();
         });
     }
+
+    /**
+     * Restriction inheritance (P2-H, GAS-P2-004). The database restricts every derivative below a newly
+     * restricted File, at any depth, in the same statement (V0014 triggers), and also restricts a
+     * derivative recorded concurrently. This records that inherited change, with its cause, on each
+     * derivative that was NORMAL before, and fails visibly if any derivative were left unrestricted.
+     */
+    private void recordInheritedRestriction(Actor actor, UUID fileId, List<UUID> inheriting) {
+        for (UUID d : inheriting) {
+            ctx.recorder().record(actor, ArchivalFileRepository.OBJECT_TYPE, d, ChangeKinds.CORRECTED, List.of(
+                    FieldChange.of("restriction", FieldClass.CORRECTABLE, Restriction.NORMAL, Restriction.RESTRICTED)),
+                    "Inherited: a File it was derived from was restricted.");
+        }
+        if (!ctx.files().unrestrictedDescendants(fileId).isEmpty()) {
+            throw new IllegalStateException("Restriction inheritance left a derivative of File " + fileId + " unrestricted");
+        }
+    }
+
 
     /** Recoverable deletion (BUILD-SPEC s.37): a database state only; the bytes stay in place. */
     public ArchivalFile delete(Actor actor, UUID fileId, long expectedVersion, String reason) {
@@ -266,13 +290,16 @@ public final class FileService {
             throw new RuleViolationException("This File is temporarily unavailable: " + e.getMessage());
         }
         try {
-            Path path = volume.resolveExisting(content.currentPath());
-            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            Optional<Path> located = volume.locate(content.currentPath());
+            if (located.isEmpty() || !Files.exists(located.get(), LinkOption.NOFOLLOW_LINKS)) {
+                // GAS-P2-007: a missing directory above the original is missing content too (repairable).
                 ctx.integrity().insertFindingIfNew(null, new org.genealogyarchive.data.IntegrityRepository.NewFinding(
                         FindingKind.MISSING, content.volumeId(), content.contentId(), content.currentGeneration(),
                         content.currentPath().value(), null, null, null, "Stored original not found when a download was requested."));
+                ctx.contents().setState(content.contentId(), ContentState.ACTIVE, ContentState.MISSING);
                 throw new RuleViolationException("This File's stored original is missing. The problem has been recorded.");
             }
+            Path path = located.get();
             FileChannel channel = SafeFiles.openForRead(path);
             long size = channel.size();
             if (size != content.byteSize()) {

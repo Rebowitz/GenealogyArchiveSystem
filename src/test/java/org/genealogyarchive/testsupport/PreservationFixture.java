@@ -110,6 +110,18 @@ public final class PreservationFixture implements AutoCloseable {
                 new PasswordHasher(4), settings, faults);
     }
 
+    /** Services with several configured volume roots (the fixture volume plus others). */
+    public CoreServices servicesWithRoots(Map<UUID, Path> roots) {
+        return CoreServices.create(ds, new VolumeRoots(roots), Clock.systemUTC(), new PasswordHasher(4), settings, faults);
+    }
+
+    /** Runs a scan of the given kind with these services and returns what it observed. */
+    public java.util.List<org.genealogyarchive.preservation.IntegrityFinding> scan(CoreServices with, String kind) {
+        var s = with.preservation().integrity().requestScan(admin, kind);
+        with.preservation().integrity().run(s.scanId());
+        return with.preservation().integrity().findingsOfScan(admin, s.scanId());
+    }
+
     public FileSettings settings() {
         return settings;
     }

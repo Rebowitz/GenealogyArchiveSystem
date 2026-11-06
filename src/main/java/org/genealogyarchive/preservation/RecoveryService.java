@@ -43,8 +43,11 @@ public final class RecoveryService {
         int abandoned = 0;
         for (UUID id : ctx.operations().abandonStaleReceiving(ctx.settings().receivingTimeout())) {
             abandoned++;
-            log.warn("Upload {} made no progress within {} and was abandoned", id, ctx.settings().receivingTimeout());
+            log.warn("Upload {} was abandoned: its receiver renewed neither its lease nor its progress within {}", id,
+                    ctx.settings().receivingTimeout());
         }
+        // GAS-P2-008: finish quarantine moves interrupted between the move and its record.
+        new QuarantineMoves(ctx).reconcileAll();
         int examined = 0;
         int failed = 0;
         for (FileOperation op : ctx.operations().needingAttention()) {

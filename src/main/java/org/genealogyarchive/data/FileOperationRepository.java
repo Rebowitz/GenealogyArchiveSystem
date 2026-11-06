@@ -35,7 +35,7 @@ public final class FileOperationRepository {
             content_id, target_generation, target_path, file_id, original_filename, client_last_modified,
             source_note, requested_restriction, parent_file_id, derivation_method, expected_size, expected_sha256,
             received_bytes, last_progress_at, outcome, blocked_reason, message, quarantine_path, staging_cleaned,
-            finding_id, attempts, created_at, updated_at, completed_at""";
+            finding_id, attempts, created_at, updated_at, completed_at, target_created, receiver_alive_at""";
 
     /** Columns a transition may set, with the SQL cast each needs. */
     private static final Map<String, String> SETTABLE = Map.ofEntries(
@@ -52,6 +52,7 @@ public final class FileOperationRepository {
             Map.entry("message", ":message"),
             Map.entry("quarantine_path", ":quarantine_path"),
             Map.entry("staging_cleaned", ":staging_cleaned"),
+            Map.entry("target_created", ":target_created"),
             Map.entry("finding_id", "CAST(:finding_id AS uuid)"));
 
     private static final RowMapper<FileOperation> OPERATION = (rs, n) -> {
@@ -72,7 +73,7 @@ public final class FileOperationRepository {
                 blocked == null ? null : BlockedReason.valueOf(blocked), rs.getString("message"),
                 rs.getString("quarantine_path"), rs.getBoolean("staging_cleaned"), Rows.uuid(rs, "finding_id"),
                 rs.getInt("attempts"), Rows.instant(rs, "created_at"), Rows.instant(rs, "updated_at"),
-                Rows.instant(rs, "completed_at"));
+                Rows.instant(rs, "completed_at"), rs.getBoolean("target_created"), Rows.instant(rs, "receiver_alive_at"));
     };
 
     /** Values for a new operation row. Unused fields are null. */
@@ -267,33 +268,68 @@ public final class FileOperationRepository {
     }
 
     /**
-     * Abandons uploads whose receiver has made no progress for {@code grace} (database clock).
-     * A slow but active upload heartbeats and is never selected.
+     * Renews the receiver lease of uploads still being received by a live process (GAS-P2-001). Called
+     * on a timer, independently of byte arrivals, so a live receiver blocked in a read or write keeps
+     * its upload.
+     *
+     * @return how many leases were renewed
+     */
+    public int renewReceivers(java.util.Collection<UUID> operationIds) {
+        if (operationIds.isEmpty()) {
+            return 0;
+        }
+        return jdbc.sql("""
+                UPDATE gas.file_operation SET receiver_alive_at = clock_timestamp()
+                 WHERE state = 'RECEIVING' AND operation_id = ANY (CAST(:ids AS uuid[]))
+                """).param("ids", operationIds.stream().map(UUID::toString).toArray(String[]::new)).update();
+    }
+
+    /**
+     * Abandons uploads whose receiver has stopped: neither its lease nor its byte progress was renewed
+     * for {@code grace} (database clock). A live receiver renews its lease on a timer whether or not
+     * bytes arrive, so it is never selected; a client that stops sending is ended by the receiver
+     * itself (the server's read timeout), not by recovery.
      *
      * @return the abandoned operation IDs
      */
     public List<UUID> abandonStaleReceiving(Duration grace) {
-        List<UUID> ids = jdbc.sql("""
-                SELECT operation_id FROM gas.file_operation
-                 WHERE state = 'RECEIVING'
-                   AND last_progress_at < clock_timestamp() - make_interval(secs => CAST(:grace AS double precision))
-                """).param("grace", grace.toSeconds()).query(UUID.class).list();
+        String stale = """
+                 greatest(last_progress_at, coalesce(receiver_alive_at, last_progress_at))
+                      < clock_timestamp() - make_interval(secs => CAST(:grace AS double precision))
+                """;
+        double seconds = grace.toMillis() / 1000.0;
+        List<UUID> ids = jdbc.sql("SELECT operation_id FROM gas.file_operation WHERE state = 'RECEIVING' AND " + stale)
+                .param("grace", seconds).query(UUID.class).list();
         return ids.stream().filter(id -> {
             Boolean ok = tx.execute(s -> {
                 int n = jdbc.sql("""
                         UPDATE gas.file_operation
                            SET state = 'ABANDONED', updated_at = clock_timestamp(), completed_at = clock_timestamp(),
-                               message = 'The upload stopped making progress and was abandoned; the source file was not touched.'
-                         WHERE operation_id = :id AND state = 'RECEIVING'
-                           AND last_progress_at < clock_timestamp() - make_interval(secs => CAST(:grace AS double precision))
-                        """).param("id", id).param("grace", grace.toSeconds()).update();
+                               message = 'The process receiving this upload stopped; the upload was abandoned. The source file was not touched.'
+                         WHERE operation_id = :id AND state = 'RECEIVING' AND""" + stale)
+                        .param("id", id).param("grace", seconds).update();
                 if (n == 1) {
-                    event(id, OperationState.RECEIVING, OperationState.ABANDONED, "no upload progress within " + grace);
+                    event(id, OperationState.RECEIVING, OperationState.ABANDONED,
+                            "receiver lease and progress not renewed within " + grace);
                 }
                 return n == 1;
             });
             return Boolean.TRUE.equals(ok);
         }).toList();
+    }
+
+    /**
+     * Records that this operation's exclusive create of its planned target succeeded (GAS-P2-009). Only
+     * an object created this way is ever treated as the operation's own uncommitted copy.
+     */
+    public void markTargetCreated(UUID operationId, String targetPath) {
+        int n = jdbc.sql("""
+                UPDATE gas.file_operation SET target_created = true, updated_at = clock_timestamp()
+                 WHERE operation_id = :id AND target_path = :path
+                """).param("id", operationId).param("path", targetPath).update();
+        if (n != 1) {
+            throw new IllegalStateException("operation " + operationId + " no longer targets " + targetPath);
+        }
     }
 
     /** Portable target paths planned by unfinished operations on a volume (not yet content generations). */

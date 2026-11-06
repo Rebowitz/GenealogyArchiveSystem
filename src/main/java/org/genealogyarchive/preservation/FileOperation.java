@@ -12,5 +12,14 @@ public record FileOperation(UUID operationId, OperationKind kind, OperationState
                             Long expectedSize, String expectedSha256, long receivedBytes, Instant lastProgressAt,
                             String outcome, BlockedReason blockedReason, String message, String quarantinePath,
                             boolean stagingCleaned, UUID findingId, int attempts, Instant createdAt,
-                            Instant updatedAt, Instant completedAt) {
+                            Instant updatedAt, Instant completedAt, boolean targetCreated, Instant receiverAliveAt) {
+
+    /** This operation as shown to a reader who may not see the File it produced (GAS-P2-003). */
+    public FileOperation withoutFileReference() {
+        return new FileOperation(operationId, kind, state, actorLabel, actorUserId, volumeId, batchId, itemKey, stagingName,
+                null, targetGeneration, null, null, originalFilename, clientLastModified, sourceNote, requestedRestriction,
+                parentFileId, derivationMethod, expectedSize, expectedSha256, receivedBytes, lastProgressAt, outcome,
+                blockedReason, message, null, stagingCleaned, findingId, attempts, createdAt, updatedAt, completedAt,
+                targetCreated, receiverAliveAt);
+    }
 }

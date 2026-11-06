@@ -66,8 +66,11 @@ public final class ThumbnailService {
             return false;
         }
         ManagedVolume volume = ctx.openVolume(content.volumeId());
-        Path source = volume.resolveExisting(content.currentPath());
-        BufferedImage image = readScaled(source);
+        java.util.Optional<Path> located = volume.locate(content.currentPath());
+        if (located.isEmpty() || !java.nio.file.Files.isRegularFile(located.get(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return false; // missing originals are reported by integrity scans and downloads
+        }
+        BufferedImage image = readScaled(located.get());
         if (image == null) {
             return false;
         }

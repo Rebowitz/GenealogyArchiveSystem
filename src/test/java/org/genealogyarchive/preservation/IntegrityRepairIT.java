@@ -205,7 +205,11 @@ class IntegrityRepairIT {
                 .containsExactlyInAnyOrder(FindingKind.UNEXPECTED_OBJECT, FindingKind.STAGING_LEFTOVER);
         assertThat(Files.exists(stray)).isTrue();
         assertThat(Files.exists(leftover)).isTrue();
-        assertThat(scan("QUICK")).as("an open finding is not duplicated").isEmpty();
+        List<IntegrityFinding> again = scan("QUICK");
+        // GAS-P2-011: a repeated scan reports problems that are still present, without duplicating them.
+        assertThat(again).extracting(IntegrityFinding::kind)
+                .containsExactlyInAnyOrder(FindingKind.UNEXPECTED_OBJECT, FindingKind.STAGING_LEFTOVER);
+        assertThat(fx.preservation().integrity().openFindings(fx.admin, 10)).as("an open finding is not duplicated").hasSize(2);
     }
 
     @Test

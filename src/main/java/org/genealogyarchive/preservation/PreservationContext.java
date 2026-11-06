@@ -7,6 +7,7 @@ import org.genealogyarchive.data.FileContentRepository;
 import org.genealogyarchive.data.FileOperationRepository;
 import org.genealogyarchive.data.FriendlyIdSeriesRepository;
 import org.genealogyarchive.data.IntegrityRepository;
+import org.genealogyarchive.data.QuarantineRepository;
 import org.genealogyarchive.data.OperationLocks;
 import org.genealogyarchive.data.StorageVolumeRepository;
 import org.genealogyarchive.files.ManagedVolume;
@@ -30,6 +31,7 @@ public record PreservationContext(
         FileContentRepository contents,
         ArchivalFileRepository files,
         IntegrityRepository integrity,
+        QuarantineRepository quarantine,
         ArchiveInstanceRepository archives,
         StorageVolumeRepository volumes,
         FriendlyIdSeriesRepository friendlyIds,

@@ -7,6 +7,8 @@ import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.util.Optional;
+import java.nio.file.LinkOption;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
@@ -120,6 +122,33 @@ public final class ManagedVolume {
         Path target = path.toNative(root);
         SafeFiles.requirePlainDirectoryChain(root, target);
         return target;
+    }
+
+    /**
+     * Native path of a location whose directories below the root all exist as plain directories, or
+     * empty if one of them is missing (GAS-P2-007: a lost shard or {@code originals} directory means the
+     * object is missing, not that the volume is unreadable). A link, junction, reparse point or
+     * non-directory in the chain is refused with {@link SafeFiles.UnsafePathException}; a missing volume
+     * root throws {@link NoSuchFileException} because then nothing below it can be judged.
+     */
+    public Optional<Path> locate(PortableRelativePath path) throws IOException {
+        Path target = path.toNative(root);
+        if (!Files.isDirectory(root)) {
+            throw new NoSuchFileException(root.toString(), null, "volume root is not available");
+        }
+        Path relativeParent = root.relativize(target).getParent();
+        Path current = root;
+        if (relativeParent != null) {
+            for (Path name : relativeParent) {
+                current = current.resolve(name);
+                if (!Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                    return Optional.empty();
+                }
+                SafeFiles.requirePlainDirectory(current);
+            }
+        }
+        SafeFiles.requirePlainDirectoryChain(root, target);
+        return Optional.of(target);
     }
 
     /** Like {@link #resolveExisting}, creating any missing directories (each checked as plain). */
