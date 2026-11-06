@@ -82,7 +82,8 @@ public final class FileIdentifiers {
      * Every File identifier the text refers to, read from the text alone (GAS-P2-IV02: nothing here depends
      * on which Files exist, so callers can decide visibility without revealing existence).
      * <ul>
-     *   <li>Friendly IDs: each maximal run of letters and digits (any script) that the lookup resolves.</li>
+     *   <li>Friendly IDs: each maximal run of letters and digits (any script) that the lookup resolves and
+     *       that is not part of a window read as a UUID.</li>
      *   <li>UUIDs: in each maximal run of characters a UUID can contain ({@link Character#digit(char, int)}
      *       hex digits of any script, {@code +}, {@code -}), every five consecutive hyphen-separated groups
      *       form a window. A window with the canonical 8-4-4-4-12 shape is always read; any other window is
@@ -98,20 +99,10 @@ public final class FileIdentifiers {
         if (text == null || text.isEmpty()) {
             return new References(uuids, numbers);
         }
+        // UUIDs first; the characters of every window read as a UUID belong to that UUID, so a group such as
+        // "f312" inside one is not also read as the friendly ID F312.
+        boolean[] inUuid = new boolean[text.length()];
         int i = 0;
-        while (i < text.length()) {
-            if (!Character.isLetterOrDigit(text.charAt(i))) {
-                i++;
-                continue;
-            }
-            int j = i;
-            while (j < text.length() && Character.isLetterOrDigit(text.charAt(j))) {
-                j++;
-            }
-            friendlyNumber(text.substring(i, j)).ifPresent(numbers::add);
-            i = j;
-        }
-        i = 0;
         while (i < text.length()) {
             if (!uuidChar(text.charAt(i))) {
                 i++;
@@ -121,7 +112,24 @@ public final class FileIdentifiers {
             while (j < text.length() && uuidChar(text.charAt(j))) {
                 j++;
             }
-            uuidsIn(text.substring(i, j), uuids);
+            uuidsIn(text, i, j, uuids, inUuid);
+            i = j;
+        }
+        i = 0;
+        while (i < text.length()) {
+            if (!Character.isLetterOrDigit(text.charAt(i))) {
+                i++;
+                continue;
+            }
+            int j = i;
+            boolean partOfUuid = false;
+            while (j < text.length() && Character.isLetterOrDigit(text.charAt(j))) {
+                partOfUuid |= inUuid[j];
+                j++;
+            }
+            if (!partOfUuid) {
+                friendlyNumber(text.substring(i, j)).ifPresent(numbers::add);
+            }
             i = j;
         }
         return new References(uuids, numbers);
@@ -131,11 +139,17 @@ public final class FileIdentifiers {
         return c == '-' || c == '+' || Character.digit(c, 16) >= 0;
     }
 
-    private static void uuidsIn(String run, Set<UUID> out) {
+    private static void uuidsIn(String text, int from, int to, Set<UUID> out, boolean[] inUuid) {
+        String run = text.substring(from, to);
         String[] groups = run.split("-", -1);
         int windows = groups.length - GROUP_DIGITS.length + 1;
         if (windows <= 0) {
             return;
+        }
+        int[] groupStart = new int[groups.length];
+        for (int g = 0, at = from; g < groups.length; g++) {
+            groupStart[g] = at;
+            at += groups[g].length() + 1;
         }
         UUID[] read = new UUID[windows];
         boolean[] canonical = new boolean[windows];
@@ -159,6 +173,10 @@ public final class FileIdentifiers {
             }
             if (canonical[w] || !overlaps) {
                 out.add(read[w]);
+                int last = w + GROUP_DIGITS.length - 1;
+                for (int c = groupStart[w]; c < groupStart[last] + groups[last].length(); c++) {
+                    inUuid[c] = true;
+                }
             }
         }
     }

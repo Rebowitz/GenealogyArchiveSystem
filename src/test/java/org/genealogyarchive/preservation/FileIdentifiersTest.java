@@ -186,6 +186,21 @@ class FileIdentifiersTest {
         }
     }
 
+    @Test
+    void gasP2_IV02_groupsOfAUuidAreNeverAlsoReadAsFriendlyIds() {
+        // A UUID group such as "f312" is part of the UUID, not the friendly ID F312 (which would make an
+        // unrelated, nonexistent File decide the visibility of a visible UUID).
+        assertThat(FileIdentifiers.referencesIn("0190a000-f312-7000-8000-00000000000a").friendlyNumbers()).isEmpty();
+        java.util.Random random = new java.util.Random(7L);
+        for (int i = 0; i < 20000; i++) {
+            UUID u = new UUID(random.nextLong(), random.nextLong());
+            var refs = FileIdentifiers.referencesIn("see " + u + ".");
+            assertThat(refs.uuids()).as(u.toString()).containsExactly(u);
+            assertThat(refs.friendlyNumbers()).as(u.toString()).isEmpty();
+        }
+        assertThat(FileIdentifiers.referencesIn("F3-F4 and f12").friendlyNumbers()).containsExactly(3L, 4L, 12L);
+    }
+
     private static boolean isUuidChar(char c) {
         return c == '-' || c == '+' || Character.digit(c, 16) >= 0;
     }
