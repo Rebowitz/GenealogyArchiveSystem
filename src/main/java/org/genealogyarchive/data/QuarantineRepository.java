@@ -16,7 +16,7 @@ import java.util.UUID;
 public final class QuarantineRepository {
 
     /** Why an object was set aside. */
-    public enum Reason { PARTIAL_COPY, UNVERIFIED_COPY, CANCELLED_COPY }
+    public enum Reason { PARTIAL_COPY, UNVERIFIED_COPY, CANCELLED_COPY, DAMAGED_GENERATION }
 
     /** Where the ledger entry stands. */
     public enum State { INTENDED, QUARANTINED, SOURCE_ABSENT, REMOVED }
