@@ -4,13 +4,20 @@ Prepared by the implementation agent for independent review. **Phase 2 is not ac
 acceptance requires independent review, correction of confirmed findings and owner approval. The Phase 2
 PR has not been merged.
 
+> **Audit corrections.** The independent audit of `438649f` found 9 MAJOR and 2 MINOR defects
+> (GAS-P2-001 … GAS-P2-011). They are corrected in `83031267c8c37394462c4cf8346cc5a1d8108cde`; the
+> correction matrix, replaced tests and reconciliation are in
+> [`PHASE-2-AUDIT-CORRECTIONS.md`](PHASE-2-AUDIT-CORRECTIONS.md), which takes precedence over this report
+> where they differ. The design is in the revised ADR-0009.
+
 ## Baseline and head
 | | |
 |---|---|
 | Starting baseline | `phase-1-accepted` = `1dff0fa63672ac9af162d283816207cb0d78c357`; branched from `main` at `26b8df8` (PR #4 merge) |
 | Branch / PR | `phase-2` / PR (open; not merged) |
-| Implementation commit | `438649f2d0a88cf861675c5cb8234f46ca607eaa` |
-| Later commits | documentation only (this report); CI runs on the PR head and the run IDs are in the PR description |
+| Implementation commit (audited) | `438649f2d0a88cf861675c5cb8234f46ca607eaa` |
+| Corrected implementation commit | `83031267c8c37394462c4cf8346cc5a1d8108cde` (audit corrections) |
+| Later commits | documentation only; CI runs on the PR head and the run IDs are in the PR description |
 
 ## 1. What was implemented
 Owner decisions P2-A … P2-K and B1 … B5 ([`PHASE-2-DECISIONS.md`](PHASE-2-DECISIONS.md)); design in
@@ -38,6 +45,7 @@ Owner decisions P2-A … P2-K and B1 … B5 ([`PHASE-2-DECISIONS.md`](PHASE-2-DE
 | `V0011__archival_file.sql` | Friendly series `F` (min. 5 digits); `archival_file` (identity, provenance, lifecycle ACTIVE/DELETED/DESTROYED, restriction, display rotation, deletion/destruction fields, replacement; immutable provenance; destruction final); `file_derivation`; foreign keys from operations (the File reference is deferred to the committing transaction) |
 | `V0012__integrity.sql` | `integrity_scan`; `integrity_finding` (11 kinds; only resolution may change; never deleted) |
 | `V0013__volume_preservation_settings.sql` | `storage_volume.marker_initialized_at` (set once); `archive_instance.ingestion_volume_id`; guard refusing to retire a volume that holds current or quarantine-pending generations or is the ingestion destination |
+| `V0014__preservation_audit_corrections.sql` | Audit corrections: `quarantine_object` ledger; `file_operation.target_created` and `receiver_alive_at`; `integrity_finding_observation`; destroyed generations keep their quarantine path; restriction-inheritance triggers (and consistency fix for existing data) |
 
 ## 3. File / storage behaviour
 - Originals: `<volume root>/originals/<hex2>/<hex2>/<content-id>[.gN]`, never named after uploads;
@@ -91,8 +99,10 @@ test and the native service-manager test; no test is skipped on any platform.
 - **Integrity scans are started by an Administrator**; no scheduled scans yet.
 - **Ingestion volume** is archive configuration but is not yet part of the archive configuration export
   (Phase 8).
-- **Crash testing** simulates crashes at protocol points in-process (including inside a launched worker's
-  job); an operating-system kill of the worker JVM is not exercised in CI.
+- **Crash testing:** protocol-point crashes are simulated in-process, and a real worker JVM is forcibly
+  terminated mid-copy and recovered by a fresh JVM on every CI host (`WorkerProcessKillIT`, GAS-P2-002).
+- **Change History redaction** covers structured references (File UUIDs, friendly IDs, content IDs);
+  free-text that describes a restricted File in other words cannot be recognised.
 - `DestructionIT`'s Linux obstruction uses a read-only directory, which a superuser ignores; that case
   would be skipped (and the CI evidence guard would then fail the job) if tests were run as root.
 
