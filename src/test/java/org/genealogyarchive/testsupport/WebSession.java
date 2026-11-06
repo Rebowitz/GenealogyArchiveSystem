@@ -27,15 +27,32 @@ public final class WebSession {
 
     private final ConfigurableApplicationContext app;
     private final HttpClient client;
+    private final CookieManager cookies = new CookieManager();
 
     public WebSession(ConfigurableApplicationContext app) {
         this.app = app;
         this.client = HttpClient.newBuilder()
                 .proxy(HttpClient.Builder.NO_PROXY)
-                .cookieHandler(new CookieManager())
+                .cookieHandler(cookies)
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
+    }
+
+    /** The port the web process listens on. */
+    public int port() {
+        return Http.port(app);
+    }
+
+    /** The session's cookies as a Cookie request header value (for raw-socket requests). */
+    public String cookieHeader() {
+        return String.join("; ", cookies.getCookieStore().getCookies().stream()
+                .map(c -> c.getName() + "=" + c.getValue()).toList());
+    }
+
+    /** A CSRF token valid for this session, taken from {@code page}. */
+    public String token(String page) {
+        return csrfToken(get(page).body());
     }
 
     private URI uri(String path) {

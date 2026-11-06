@@ -237,55 +237,43 @@ class FileWebIT {
     @Test
     void gasP2_001_aClientThatStopsSendingIsEndedByItsLiveReceiverNotByRecovery() throws Exception {
         // The live-request timeout is the server's read timeout; recovery's receiver-lease timeout (15 min
-        // here) plays no part.
+        // here) plays no part. A raw socket sends the headers and 1000 of the declared 5000 bytes, then
+        // falls silent while keeping the connection open.
         start(FileSettings.DEFAULT_MAX_UPLOAD_BYTES, Map.of("server.tomcat.connection-timeout", "2s"));
         WebSession editor = signedIn("editor1");
         String batch = batch(editor);
-        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
-        java.io.InputStream silentAfterHeadStart = new java.io.InputStream() {
-            int sent;
+        String token = editor.token("/files/upload");
+        try (java.net.Socket socket = new java.net.Socket("127.0.0.1", editor.port())) {
+            socket.setSoTimeout(30_000);
+            java.io.OutputStream out = socket.getOutputStream();
+            String head = "PUT /files/batches/" + batch + "/items/silent HTTP/1.1\r\n"
+                    + "Host: 127.0.0.1:" + editor.port() + "\r\n"
+                    + "Cookie: " + editor.cookieHeader() + "\r\n"
+                    + "X-CSRF-TOKEN: " + token + "\r\n"
+                    + "X-File-Name: silent.tif\r\n"
+                    + "Content-Type: application/octet-stream\r\n"
+                    + "Content-Length: 5000\r\n\r\n";
+            out.write(head.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            out.write(new byte[1000]);
+            out.flush();
 
-            @Override
-            public int read() throws java.io.IOException {
-                byte[] one = new byte[1];
-                return read(one, 0, 1) < 0 ? -1 : one[0] & 0xff;
-            }
-
-            @Override
-            public int read(byte[] b, int off, int len) throws java.io.IOException {
-                if (sent < 1000) {
-                    int n = Math.min(len, 1000 - sent);
-                    java.util.Arrays.fill(b, off, off + n, (byte) 'x');
-                    sent += n;
-                    return n;
-                }
-                try {
-                    release.await(30, java.util.concurrent.TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                return -1;
-            }
-        };
-        java.util.concurrent.CompletableFuture<HttpResponse<String>> pending = java.util.concurrent.CompletableFuture
-                .supplyAsync(() -> editor.put("/files/upload", "/files/batches/" + batch + "/items/silent",
-                        Map.of("X-File-Name", "silent.tif"), HttpRequest.BodyPublishers.ofInputStream(() -> silentAfterHeadStart)));
-        try {
             org.genealogyarchive.preservation.FileOperation op = null;
-            for (int i = 0; i < 200; i++) {
+            String last = "no operation";
+            for (int i = 0; i < 400; i++) {
                 var found = fx.preservation().context().operations().findByBatchItem(UUID.fromString(batch), "silent");
-                if (found.isPresent() && found.get().state() == OperationState.ABANDONED) {
-                    op = found.get();
-                    break;
+                if (found.isPresent()) {
+                    last = found.get().state() + " after " + found.get().receivedBytes() + " bytes: " + found.get().message();
+                    if (found.get().state() == OperationState.ABANDONED) {
+                        op = found.get();
+                        break;
+                    }
                 }
                 Thread.sleep(100);
             }
-            assertThat(op).as("the receiver ended the silent upload itself").isNotNull();
+            assertThat(op).as("the receiver ended the silent upload itself (last seen: %s)", last).isNotNull();
             assertThat(op.message()).contains("read timeout");
             assertThat(op.fileId()).isNull();
-        } finally {
-            release.countDown();
-            pending.handle((r, e) -> null).get(30, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(fx.preservation().recovery().runOnce().abandoned()).as("recovery had nothing to do").isZero();
         }
     }
 }
