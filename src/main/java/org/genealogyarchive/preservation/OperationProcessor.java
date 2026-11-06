@@ -148,6 +148,45 @@ public final class OperationProcessor {
 
     // ---- PROMOTING ----------------------------------------------------------------------------
 
+    /**
+     * Creates the operation's copy exclusively and records that the operation owns it, in one transaction
+     * (GAS-P2-IV03). For a repair the transaction first locks the content row in share mode and re-reads
+     * its state: destruction intent locks that row for update, so it either committed before (the repair
+     * sees DESTROY_PENDING and creates nothing) or waits until the copy exists and is owned, after which it
+     * cannot proceed while this worker holds the operation's lock (see {@code FileService.destroy}).
+     *
+     * @return the open channel, or null if the content is being destroyed (nothing was created)
+     */
+    private FileChannel createOwned(FileOperation op, Path target) throws IOException {
+        FileChannel[] created = new FileChannel[1];
+        try {
+            ctx.tx().executeWithoutResult(status -> {
+                if (op.kind() == OperationKind.REPAIR) {
+                    ContentState state = ctx.contents().lockShared(op.contentId()).map(FileContent::state)
+                            .orElse(ContentState.DESTROYED);
+                    if (state == ContentState.DESTROY_PENDING || state == ContentState.DESTROYED) {
+                        return;
+                    }
+                }
+                try {
+                    created[0] = SafeFiles.createExclusive(target);
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+                // Recorded before any byte is written: from now on the object at the target is ours.
+                ctx.operations().markTargetCreated(op.operationId(), op.targetPath());
+            });
+        } catch (java.io.UncheckedIOException e) {
+            throw e.getCause();
+        } catch (RuntimeException e) {
+            if (created[0] != null) {
+                created[0].close();
+            }
+            throw e;
+        }
+        return created[0];
+    }
+
     private boolean promote(FileOperation op, Runnable guard) {
         if (op.kind() == OperationKind.REPAIR) {
             ContentState state = ctx.contents().find(op.contentId()).map(FileContent::state).orElse(ContentState.DESTROYED);
@@ -227,9 +266,11 @@ public final class OperationProcessor {
         ContentIo.Measurement copied;
         try {
             ctx.faults().reach(FaultPoints.Point.BEFORE_TARGET_CREATE, op.operationId());
-            try (FileChannel out = SafeFiles.createExclusive(target)) {
-                // Recorded before any byte is written: from now on the object at the target is ours.
-                ctx.operations().markTargetCreated(op.operationId(), op.targetPath());
+            FileChannel created = createOwned(op, target);
+            if (created == null) {
+                return false;
+            }
+            try (FileChannel out = created) {
                 copied = ContentIo.copy(staged, out, ctx.faults(), op.operationId());
             }
             SafeFiles.flushDirectory(target.getParent());

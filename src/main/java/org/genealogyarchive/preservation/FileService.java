@@ -211,6 +211,73 @@ public final class FileService {
         }
         String why = reason.strip().length() > 2000 ? reason.strip().substring(0, 2000) : reason.strip();
         UUID operationId = GlobalIds.newId();
+        // GAS-P2-IV03: destruction intent is ordered against every repair of the content. The locks of its
+        // unfinished operations are taken first (a worker holds one for as long as it works on the operation),
+        // waiting only briefly; a repair that is writing makes this request fail visibly instead of waiting.
+        UUID contentId = ctx.files().find(fileId).filter(f -> canSee(actor, f)).map(ArchivalFile::contentId)
+                .orElseThrow(() -> new NotFoundException(NOT_FOUND));
+        List<org.genealogyarchive.data.OperationLocks.Held> held = new java.util.ArrayList<>();
+        try {
+            java.util.Set<UUID> holding = holdRepairs(contentId, held);
+            FileOperation op = destroyHolding(actor, fileId, expectedVersion, why, replacementFileId, operationId, holding);
+            // Staged bytes of the repairs stopped by the intent are no longer needed.
+            for (UUID repair : holding) {
+                ctx.operations().find(repair).filter(r -> r.state() == OperationState.CANCELLED && !r.stagingCleaned())
+                        .ifPresent(r -> ctx.staging().ifPresent(staging -> {
+                            try {
+                                if (staging.delete(r.operationId())) {
+                                    ctx.operations().markStagingCleaned(r.operationId());
+                                }
+                            } catch (IOException e) {
+                                // recovery retries the clean-up of a final operation's staged bytes
+                            }
+                        }));
+            }
+            return op;
+        } finally {
+            for (var lock : held) {
+                lock.close();
+            }
+        }
+    }
+
+    private static final java.util.Set<OperationState> STOPPED_BY_DESTRUCTION = java.util.EnumSet.of(OperationState.STAGED,
+            OperationState.PROMOTING, OperationState.PROMOTED, OperationState.WAITING_FOR_VOLUME, OperationState.BLOCKED);
+
+    private static final java.time.Duration REPAIR_LOCK_WAIT = java.time.Duration.ofSeconds(2);
+
+    /** Takes the lock of every unfinished repair of the content, waiting at most {@link #REPAIR_LOCK_WAIT}. */
+    private java.util.Set<UUID> holdRepairs(UUID contentId, List<org.genealogyarchive.data.OperationLocks.Held> held) {
+        java.util.Set<UUID> holding = new java.util.HashSet<>();
+        long deadline = System.nanoTime() + REPAIR_LOCK_WAIT.toNanos();
+        for (FileOperation w : ctx.operations().writersOfContent(contentId)) {
+            if (w.kind() != OperationKind.REPAIR || w.state().isFinal()) {
+                continue;
+            }
+            while (true) {
+                Optional<org.genealogyarchive.data.OperationLocks.Held> lock = ctx.locks().tryLock("file-operation", w.operationId());
+                if (lock.isPresent()) {
+                    held.add(lock.get());
+                    holding.add(w.operationId());
+                    break;
+                }
+                if (System.nanoTime() > deadline) {
+                    throw new RuleViolationException("A repair of this File's bytes is being written right now (operation "
+                            + w.operationId() + "). Try again when it has finished, or cancel it from Operations first.");
+                }
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuleViolationException("Destruction was interrupted; nothing was changed.");
+                }
+            }
+        }
+        return holding;
+    }
+
+    private FileOperation destroyHolding(Actor actor, UUID fileId, long expectedVersion, String why, UUID replacementFileId,
+                                         UUID operationId, java.util.Set<UUID> holding) {
         FileOperation op = ctx.tx().execute(status -> {
             ArchivalFile file = ctx.files().lock(fileId).filter(f -> canSee(actor, f))
                     .orElseThrow(() -> new NotFoundException(NOT_FOUND));
@@ -225,6 +292,15 @@ public final class FileService {
                 throw new RuleViolationException("The preferred replacement must be another File that still exists.");
             }
             FileContent content = ctx.contents().lock(file.contentId()).orElseThrow();
+            // With the content row locked no repair can create a copy (it needs the row in share mode); any
+            // unfinished repair that is not held here started after the locks were taken and may be writing.
+            for (FileOperation w : ctx.operations().writersOfContent(content.contentId())) {
+                if (w.kind() == OperationKind.REPAIR && !w.state().isFinal() && w.state() != OperationState.RECEIVING
+                        && !holding.contains(w.operationId())) {
+                    throw new RuleViolationException("A repair of this File's bytes started just now (operation "
+                            + w.operationId() + "). Try again when it has finished, or cancel it from Operations first.");
+                }
+            }
             Instant now = ctx.clock().instant();
             if (!ctx.files().updateLifecycle(fileId, expectedVersion, FileLifecycle.DELETED, FileLifecycle.DESTROYED,
                     file.deletedAt(), null, now, actor.userId(), why, replacementFileId)) {
@@ -238,6 +314,14 @@ public final class FileService {
                     && content.state() != ContentState.DESTROY_PENDING;
             if (removable) {
                 ctx.contents().setState(content.contentId(), content.state(), ContentState.DESTROY_PENDING);
+                // Unfinished repairs end with the intent, while their locks are held: none can write afterwards.
+                for (FileOperation w : ctx.operations().writersOfContent(content.contentId())) {
+                    if (w.kind() == OperationKind.REPAIR && holding.contains(w.operationId()) && STOPPED_BY_DESTRUCTION.contains(w.state())) {
+                        String message = DestructionProcessor.stoppedRepairMessage(operationId, w);
+                        ctx.operations().transition(w.operationId(), w.state(), OperationState.CANCELLED, message,
+                                java.util.Map.of("message", message));
+                    }
+                }
             }
             ctx.operations().insert(new FileOperationRepository.NewOperation(operationId, OperationKind.DESTROY,
                     removable ? OperationState.CLEANUP_PENDING : OperationState.COMPLETED, actor, content.volumeId(),

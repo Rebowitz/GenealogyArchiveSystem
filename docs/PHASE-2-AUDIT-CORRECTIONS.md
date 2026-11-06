@@ -76,6 +76,25 @@ someone who already knows a restricted File's UUID (UUIDs cannot be guessed); su
 "not found" on that File's page, so history reveals nothing more. Content shared by a restricted and an
 unrestricted File stays withheld (GAS-P2-003 behaviour, unchanged).
 
+## Corrections IV01 – IV03 (audited revision `d2a2349920ed352a258920d5aca46b36f83cf92e`)
+
+Two MAJOR findings (IV01, IV02) and one MINOR (IV03). Earlier corrections are kept; no schema change.
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **GAS-P2-IV01** (MAJOR) destruction deleted a foreign object at a historical path | Destruction's inventory is now only locations a record says hold bytes now: `CURRENT`/`QUARANTINE_PENDING` generation storage paths, `QUARANTINED` generation and ledger quarantine paths, and owned targets. Storage paths of `QUARANTINED`/`MISSING`/`DESTROYED` generations, ledger sources, `REMOVED` quarantine paths and unowned targets are historical: never deleted; an object found there is reported as left untouched. `QuarantineMoves.settle` retires the source in the confirming transaction for every record (all operations' ownership via `releaseTargetsAt`; the superseded generation via `retireGenerationAt`), closing the window between the ledger confirmation and the separate generation update. Generation/ledger/content retirement moved into the completion transaction. | `Phase2AuditCorrectionsIT.gasP2_IV01_aForeignObjectAtAQuarantinedGenerationsVacatedPathSurvivesDestruction` (the audit's case), `…DestructionBeforeTheDamagedGenerationWasMovedRemovesItWhereItIs` (before the move), `…AMoveInterruptedBeforeItWasRecordedFailsVisiblyIfSomethingAppearedAtItsSource` (after the move, before its record: `CLEANUP_INCOMPLETE`, nothing touched, completes once resolved), `…AMoveSettledAfterAnInterruptionRetiresTheSourceSoAForeignObjectThereSurvives` (after the record), `…CleanupInterruptedAfterEachRemovalNeverTouchesHistoricalLocations` |
+| **GAS-P2-IV02** (MAJOR) embedded-UUID deny-list was existence-dependent | The deny-list is removed. `FileIdentifiers.referencesIn` reads references from the text alone (UUID windows read as the JDK reads them; canonical-shaped windows take precedence over windows overlapping them) and `RestrictedFileHistory` shows a value only if every reference is visible. Whole and embedded identifiers follow the same policy; restricted and nonexistent are never distinguished. | `gasP2_IV02_restrictedAndNonexistentUuidsLookTheSameInEveryContext` (canonical, upper-case, Arabic-Indic, full-width × 8 contexts incl. glued and hyphen-joined; Viewer, Editor, Administrator; per-object and global), `…FilenamesAndIndirectReferencesFollowTheSamePolicy` (filenames, content IDs); `FileIdentifiersTest.gasP2_IV02_*` (overlap rule, text-only reading, seeded generator: any text containing a resolvable spelling is governed by the allow-list, delimited spellings read exactly) |
+| **GAS-P2-IV03** (MINOR) repair could write after destruction intent | `FileService.destroy` takes the locks of the content's unfinished repairs before its transaction (bounded 2 s wait, then a visible refusal), re-checks under the content row lock that no unheld repair has started, and cancels unfinished repairs in the intent transaction. `OperationProcessor.createOwned` creates the copy and records ownership in one transaction holding the content row `FOR SHARE` after re-reading its state. | `gasP2_IV03_destructionIntentCannotCommitWhileARepairThatPassedItsCheckIsWriting` (the reported interleaving, before creation and during copying), `…ARepairCreatesNothingOnceDestructionIntentHasCommitted`, `…AConcurrentDestructionRequestIsRefusedNotBlockedWhileARepairCopies` (two threads), `…DestructionIntentStopsARepairThatIsNotRunningSoItNeverWrites` |
+
+Tests changed because they asserted superseded behaviour (none weakened): `gasP2_R01_removalWaitsWhileTheRepairIsBusyElsewhere`
+now uses a committed repair, since unfinished repairs are stopped by the intent (IV03); `FileIdentifiersTest`'s
+FV03 completeness test (every resolvable substring is a reference, for the removed deny-list) is replaced by
+the IV02 allow-list property, and the glued-hex example now expects the UUID the JDK reads.
+
+Consequences, by design: hyphen-joined text whose groups form an extra UUID window with no canonical
+window to anchor it (rare) is withheld from non-Administrators unless that UUID is visible. A destruction
+request made while a repair of the same content is writing is refused with a message to retry.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

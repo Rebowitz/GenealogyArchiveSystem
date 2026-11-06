@@ -20,24 +20,21 @@ import java.util.UUID;
 
 /**
  * Keeps restricted Archival Files out of Change History for readers who may not see them (P2-H, B2,
- * GAS-P2-003, GAS-P2-R02, GAS-P2-FV02). Applied at read time, so it follows the current restriction and
- * also covers entries written before a File was restricted.
+ * GAS-P2-003, GAS-P2-R02, GAS-P2-FV02, GAS-P2-IV02). Applied at read time, so it follows the current
+ * restriction and also covers entries written before a File was restricted.
  * <ul>
  *   <li>Entries about a restricted File are removed.</li>
- *   <li>In the remaining entries, a field value or reason is withheld (simply absent) when
- *     <ol>
- *       <li>an identifier written in it as a whole - a friendly ID, or a delimited UUID - does not name
- *           something the reader may see: an unrestricted File, content used only by unrestricted Files, or
- *           another object that has Change History (archive, volume, user). A restricted File and a File
- *           that does not exist are treated identically here, so writing a guessed identifier into a
- *           reason or a filename shows nothing about whether a restricted File has it; or</li>
- *       <li>any substring of it, in any spelling the application resolves ({@link FileIdentifiers}),
- *           is the UUID of a restricted File or of content one uses - so no spelling leaks one.</li>
- *     </ol></li>
+ *   <li>In the remaining entries - reasons, filenames and every other before/after value - a value is
+ *       withheld (simply absent) unless every File identifier it refers to, whole or embedded and in any
+ *       spelling the application resolves ({@link FileIdentifiers#referencesIn}), names something the
+ *       reader may see: an unrestricted File, content used only by unrestricted Files, or another object
+ *       that has Change History (archive, volume, user).</li>
  * </ul>
- * Text containing no identifier is never affected. The second rule can only be triggered by someone who
- * already knows a restricted File's UUID (UUIDs cannot be guessed); for such a person the File's own page
- * already answers "not found" where it used to show the File, so it reveals nothing more than the lookup.
+ * <p>One visibility policy for whole and embedded identifiers: which identifiers a text refers to is read
+ * from the text alone, and the decision asks only whether each is visible. A restricted File and a File
+ * that does not exist are never distinguished, so writing guessed identifiers - friendly IDs or UUIDs, in
+ * any spelling or embedding - into a reason or filename shows nothing about whether a restricted File has
+ * them. Text containing no identifier is never affected.
  */
 public final class RestrictedFileHistory implements HistoryVisibility {
 
@@ -73,31 +70,29 @@ public final class RestrictedFileHistory implements HistoryVisibility {
 
         Map<String, FileIdentifiers.References> found = new HashMap<>();
         Set<UUID> uuids = new HashSet<>();
-        Set<UUID> primary = new HashSet<>();
         Set<Long> numbers = new HashSet<>();
         for (ChangeRecord r : kept) {
-            collect(r.reason(), found, uuids, primary, numbers);
+            collect(r.reason(), found, uuids, numbers);
             for (FieldChange f : r.fieldChanges()) {
-                collect(f.before(), found, uuids, primary, numbers);
-                collect(f.after(), found, uuids, primary, numbers);
+                collect(f.before(), found, uuids, numbers);
+                collect(f.after(), found, uuids, numbers);
             }
         }
         if (found.isEmpty()) {
             return kept;
         }
         Set<Long> visibleNumbers = files.unrestrictedFriendlyNumbers(numbers);
-        Set<UUID> visibleIds = new HashSet<>(files.unrestrictedFileIds(primary));
-        visibleIds.addAll(files.contentsOfOnlyUnrestrictedFiles(primary));
-        visibleIds.addAll(history.historyObjectsOtherThan(ArchivalFileRepository.OBJECT_TYPE, primary));
-        Set<UUID> hidden = files.restrictedFilesOrTheirContents(uuids);
+        Set<UUID> visibleIds = new HashSet<>(files.unrestrictedFileIds(uuids));
+        visibleIds.addAll(files.contentsOfOnlyUnrestrictedFiles(uuids));
+        visibleIds.addAll(history.historyObjectsOtherThan(ArchivalFileRepository.OBJECT_TYPE, uuids));
 
         List<ChangeRecord> out = new ArrayList<>(kept.size());
         for (ChangeRecord r : kept) {
             List<FieldChange> fields = r.fieldChanges().stream()
-                    .filter(f -> shown(f.before(), found, visibleIds, visibleNumbers, hidden)
-                            && shown(f.after(), found, visibleIds, visibleNumbers, hidden))
+                    .filter(f -> shown(f.before(), found, visibleIds, visibleNumbers)
+                            && shown(f.after(), found, visibleIds, visibleNumbers))
                     .toList();
-            String reason = shown(r.reason(), found, visibleIds, visibleNumbers, hidden) ? r.reason() : null;
+            String reason = shown(r.reason(), found, visibleIds, visibleNumbers) ? r.reason() : null;
             if (fields.size() == r.fieldChanges().size() && Objects.equals(reason, r.reason())) {
                 out.add(r);
             } else {
@@ -109,7 +104,7 @@ public final class RestrictedFileHistory implements HistoryVisibility {
     }
 
     private static void collect(String text, Map<String, FileIdentifiers.References> found, Set<UUID> uuids,
-                                Set<UUID> primary, Set<Long> numbers) {
+                                Set<Long> numbers) {
         if (text == null || text.isEmpty() || found.containsKey(text)) {
             return;
         }
@@ -117,19 +112,14 @@ public final class RestrictedFileHistory implements HistoryVisibility {
         if (!refs.isEmpty()) {
             found.put(text, refs);
             uuids.addAll(refs.uuids());
-            primary.addAll(refs.primaryUuids());
             numbers.addAll(refs.friendlyNumbers());
         }
     }
 
+    /** Shown only if everything the text refers to is visible to the reader (never "unless it is hidden"). */
     private static boolean shown(String text, Map<String, FileIdentifiers.References> found, Set<UUID> visibleIds,
-                                 Set<Long> visibleNumbers, Set<UUID> hidden) {
+                                 Set<Long> visibleNumbers) {
         FileIdentifiers.References refs = text == null ? null : found.get(text);
-        if (refs == null) {
-            return true;
-        }
-        return visibleNumbers.containsAll(refs.friendlyNumbers())
-                && visibleIds.containsAll(refs.primaryUuids())
-                && refs.uuids().stream().noneMatch(hidden::contains);
+        return refs == null || (visibleNumbers.containsAll(refs.friendlyNumbers()) && visibleIds.containsAll(refs.uuids()));
     }
 }

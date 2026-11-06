@@ -35,15 +35,14 @@ class FileIdentifiersTest {
             "190a000-0-7000-8000-a", "+190a000-0-7000-8000-a"})
     void gasP2_R02_everyUuidSpellingTheWebLayerAcceptsIsRecognised(String spelling) {
         assertThat(FileIdentifiers.uuid(spelling)).as("accepted as a request parameter").hasValue(ID);
-        assertThat(FileIdentifiers.referencesIn("see " + spelling + ".").primaryUuids()).containsExactly(ID);
-        assertThat(FileIdentifiers.referencesIn("see " + spelling + ".").uuids()).contains(ID);
+        assertThat(FileIdentifiers.referencesIn("see " + spelling + ".").uuids()).containsExactly(ID);
     }
 
     @Test
     void gasP2_R02_embeddedReferencesAreFound() {
         assertThat(FileIdentifiers.referencesIn("derived from f1, compare (F00002); also F3-F4 and x+f5")
                 .friendlyNumbers()).containsExactlyInAnyOrder(1L, 2L, 3L, 4L, 5L);
-        assertThat(FileIdentifiers.referencesIn("ref-0190A000-0000-7000-8000-00000000000A-end").uuids()).contains(ID);
+        assertThat(FileIdentifiers.referencesIn("ref-0190A000-0000-7000-8000-00000000000A-end").uuids()).containsExactly(ID);
     }
 
     @Test
@@ -87,9 +86,8 @@ class FileIdentifiersTest {
         for (String spelling : spellings) {
             assertThat(java.util.UUID.fromString(spelling)).as("the JDK accepts %s", spelling).isEqualTo(ID);
             assertThat(FileIdentifiers.uuid(spelling)).as(spelling).hasValue(ID);
-            assertThat(FileIdentifiers.referencesIn("note: " + spelling + ", end").primaryUuids()).as(spelling).containsExactly(ID);
-            assertThat(FileIdentifiers.referencesIn("note: " + spelling + ", end").uuids()).as(spelling).contains(ID);
-            assertThat(FileIdentifiers.referencesIn("x" + spelling + "y").primaryUuids()).as("glued %s", spelling).containsExactly(ID);
+            assertThat(FileIdentifiers.referencesIn("note: " + spelling + ", end").uuids()).as(spelling).containsExactly(ID);
+            assertThat(FileIdentifiers.referencesIn("x" + spelling + "y").uuids()).as("glued %s", spelling).containsExactly(ID);
         }
     }
 
@@ -100,7 +98,6 @@ class FileIdentifiersTest {
                 canonical.replace('0', 'Ο'),                           // Greek capital omicron
                 canonical.replace('-', '‐'))) {                        // Unicode hyphen
             assertThat(FileIdentifiers.uuid(spelling)).as(spelling).isEmpty();
-            assertThat(FileIdentifiers.referencesIn(spelling).primaryUuids()).as(spelling).doesNotContain(ID);
             assertThat(FileIdentifiers.referencesIn(spelling).uuids()).as(spelling).doesNotContain(ID);
         }
     }
@@ -117,17 +114,42 @@ class FileIdentifiersTest {
     void gasP2_FV03_overlongAndGluedGroupsResolveAsTheJdkResolvesThem() {
         // The JDK keeps the low-order digits of an over-long group, so extra leading digits are ignored.
         assertThat(FileIdentifiers.uuid("ab0190a000-0-7000-8000-a")).hasValue(ID);
-        assertThat(FileIdentifiers.referencesIn("ab0190a000-0-7000-8000-a").uuids()).contains(ID);
-        // Glued trailing hex makes the whole string another UUID, but the reference is still inside it.
-        assertThat(FileIdentifiers.referencesIn(ID + "ff").uuids()).contains(ID);
+        assertThat(FileIdentifiers.referencesIn("ab0190a000-0-7000-8000-a").uuids()).containsExactly(ID);
+        // IV02: glued trailing hex is read the way the JDK reads an over-long last group (its low-order
+        // digits), so the text refers to that UUID - a reference like any other, never silently ignored.
+        assertThat(FileIdentifiers.referencesIn(ID + "ff").uuids())
+                .containsExactly(UUID.fromString("0190a000-0000-7000-8000-000000000aff"));
+    }
+
+    @Test
+    void gasP2_IV02_windowsSharingAGroupWithACanonicalUuidAreNotReadSeparately() {
+        assertThat(FileIdentifiers.referencesIn("deed-" + ID + "-copy").uuids()).containsExactly(ID);
+        assertThat(FileIdentifiers.referencesIn(ID + "-" + ID).uuids()).containsExactly(ID);
+        UUID other = UUID.fromString("0190a000-0000-7000-8000-00000000000b");
+        assertThat(FileIdentifiers.referencesIn(ID + "-1-2-3-4-" + other).uuids()).containsExactly(ID, other);
+    }
+
+    @Test
+    void gasP2_IV02_whatTextRefersToDependsOnTheTextAlone() {
+        // Texts that differ only in which UUID they name are read alike: same number of references, and the
+        // named UUID itself whenever it is written delimited.
+        UUID a = UUID.fromString("0190a000-0000-7000-8000-0000000000a1");
+        UUID b = UUID.fromString("0190a000-0000-7000-8000-0000000000b2");
+        for (String template : List.of("%s", "see %s.", "ref-%s-end", "xx%sff", "(%s)", "copy of %s and F7", "deed-%s")) {
+            var ra = FileIdentifiers.referencesIn(template.formatted(a));
+            var rb = FileIdentifiers.referencesIn(template.formatted(b));
+            assertThat(ra.uuids()).as(template).hasSameSizeAs(rb.uuids()).isNotEmpty();
+            assertThat(ra.friendlyNumbers()).isEqualTo(rb.friendlyNumbers());
+        }
     }
 
     /**
-     * Independent check of completeness (FV03): for generated text mixing UUID spellings, scripts and
-     * junk, every substring the UUID conversion resolves must be among the references found.
+     * Independent check (IV02, FV03): for generated text mixing UUID spellings, scripts and junk, every text
+     * that contains any substring the UUID conversion resolves yields at least one UUID reference, so the
+     * allow-list decides it; and a resolvable substring delimited on both sides is read as exactly itself.
      */
     @Test
-    void gasP2_FV03_everyResolvableSubstringOfGeneratedTextIsFound() {
+    void gasP2_IV02_everyTextContainingAResolvableSpellingIsGovernedByTheAllowList() {
         java.util.Random random = new java.util.Random(20261106L);
         String palette = "0123456789abcdefABCDEF-+ xzF.٠٥٩０ａＦа‐";
         for (int round = 0; round < 400; round++) {
@@ -150,11 +172,21 @@ class FileIdentifiersTest {
                     } catch (IllegalArgumentException e) {
                         resolved = Optional.empty();
                     }
-                    int from = i;
-                    int to = j;
-                    resolved.ifPresent(u -> assertThat(found).as("'%s' in '%s'", t.substring(from, to), t).contains(u));
+                    if (resolved.isEmpty()) {
+                        continue;
+                    }
+                    assertThat(found).as("'%s' resolves inside '%s'", t.substring(i, j), t).isNotEmpty();
+                    boolean delimited = (i == 0 || !isUuidChar(t.charAt(i - 1)))
+                            && (j == t.length() || !isUuidChar(t.charAt(j)));
+                    if (delimited) {
+                        assertThat(found).as("delimited '%s' in '%s'", t.substring(i, j), t).contains(resolved.get());
+                    }
                 }
             }
         }
+    }
+
+    private static boolean isUuidChar(char c) {
+        return c == '-' || c == '+' || Character.digit(c, 16) >= 0;
     }
 }

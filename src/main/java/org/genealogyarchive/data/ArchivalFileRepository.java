@@ -153,18 +153,6 @@ public final class ArchivalFileRepository {
                 """).param("ids", List.copyOf(ids)).query((rs, n) -> Rows.uuid(rs, "content_id")).list());
     }
 
-    /** Of the given ids, those of restricted Files and of contents any restricted File uses (GAS-P2-FV02). */
-    public java.util.Set<UUID> restrictedFilesOrTheirContents(java.util.Collection<UUID> ids) {
-        if (ids.isEmpty()) {
-            return java.util.Set.of();
-        }
-        return new java.util.HashSet<>(jdbc.sql("""
-                SELECT file_id AS id FROM gas.archival_file WHERE restriction = 'RESTRICTED' AND file_id IN (:ids)
-                UNION
-                SELECT content_id AS id FROM gas.archival_file WHERE restriction = 'RESTRICTED' AND content_id IN (:ids)
-                """).param("ids", List.copyOf(ids)).query((rs, n) -> Rows.uuid(rs, "id")).list());
-    }
-
     public List<ArchivalFile> byContent(UUID contentId) {
         return jdbc.sql(SELECT + " WHERE f.content_id = :c ORDER BY f.friendly_number").param("c", contentId).query(FILE).list();
     }

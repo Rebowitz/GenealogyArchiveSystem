@@ -76,6 +76,31 @@ public final class FileContentRepository {
         return find(contentId);
     }
 
+    /**
+     * Locks the content row in share mode for the rest of the transaction (GAS-P2-IV03): held by a repair
+     * while it checks the content and creates its copy, so destruction intent (which locks the row for
+     * update) is ordered strictly before or after that creation.
+     */
+    public Optional<FileContent> lockShared(UUID contentId) {
+        jdbc.sql("SELECT content_id FROM gas.file_content WHERE content_id = :id FOR SHARE")
+                .param("id", contentId).query(UUID.class).optional();
+        return find(contentId);
+    }
+
+    /**
+     * Retires a superseded generation's storage location once the move of its bytes is settled
+     * (GAS-P2-IV01): QUARANTINE_PENDING becomes QUARANTINED at {@code quarantinePath}, or MISSING when
+     * the bytes were no longer there. Its storage path is then only a historical location.
+     */
+    public boolean retireGenerationAt(UUID contentId, String storagePath, String quarantinePath) {
+        return jdbc.sql("""
+                UPDATE gas.file_content_generation
+                   SET state = :to, quarantine_path = :qpath, updated_at = clock_timestamp()
+                 WHERE content_id = :id AND storage_path = :path AND state = 'QUARANTINE_PENDING'
+                """).param("to", quarantinePath == null ? GenerationState.MISSING.name() : GenerationState.QUARANTINED.name())
+                .param("qpath", quarantinePath).param("id", contentId).param("path", storagePath).update() > 0;
+    }
+
     /** ACTIVE contents with exactly this size and SHA-256 (candidates only; bytes must still be compared). */
     public List<FileContent> duplicateCandidates(long size, String sha256) {
         return jdbc.sql(SELECT + " WHERE c.state = 'ACTIVE' AND c.byte_size = :size AND c.sha256 = :sha ORDER BY c.created_at")

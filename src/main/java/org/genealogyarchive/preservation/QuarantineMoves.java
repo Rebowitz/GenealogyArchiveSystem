@@ -26,9 +26,10 @@ import java.util.UUID;
  *   <li>both absent: record SOURCE_ABSENT (nothing to account for);</li>
  *   <li>both present: something unexplained is in the way; fail visibly, touch nothing.</li>
  * </ul>
- * Confirming a move also ends the moving operation's ownership of the vacated location in the same
- * transaction (GAS-P2-FV01): the copy is then accounted by the ledger, and a copy the operation later
- * creates at the same location is owned again from its exclusive create.
+ * Confirming a move also retires the vacated location in the same transaction (GAS-P2-FV01, IV01): every
+ * operation's ownership of it ends and a superseded generation stored there becomes QUARANTINED (or
+ * MISSING). The copy is then accounted by the ledger alone; the vacated path is only historical, and a
+ * copy an operation later creates there is owned again from its exclusive create.
  */
 final class QuarantineMoves {
 
@@ -84,9 +85,13 @@ final class QuarantineMoves {
         // GAS-P2-FV01: the object's new location (or its absence) and the end of the operation's ownership of
         // the place it left are recorded together. The operation owns whatever it creates there later.
         QuarantineRepository.State settled = outcome;
+        // GAS-P2-IV01: in the same transaction, the source location becomes historical for every record that
+        // claimed it - every operation's ownership and a superseded generation's storage location.
         ctx.tx().executeWithoutResult(status -> {
             if (ctx.quarantine().setState(entry.quarantineId(), QuarantineRepository.State.INTENDED, settled, detail)) {
-                ctx.operations().releaseTarget(entry.operationId(), entry.sourcePath());
+                ctx.operations().releaseTargetsAt(entry.volumeId(), entry.sourcePath());
+                ctx.contents().retireGenerationAt(entry.contentId(), entry.sourcePath(),
+                        settled == QuarantineRepository.State.QUARANTINED ? entry.quarantinePath() : null);
             }
         });
         return ctx.quarantine().find(entry.volumeId(), entry.quarantinePath()).orElseThrow();

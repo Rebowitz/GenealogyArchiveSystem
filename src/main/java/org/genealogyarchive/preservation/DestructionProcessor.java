@@ -143,15 +143,11 @@ public final class DestructionProcessor {
             if (w.kind() != OperationKind.REPAIR || !STOPPABLE.contains(w.state())) {
                 continue;
             }
-            String copy = w.targetPath() == null ? "nothing was written"
-                    : w.targetCreated() ? "the uncommitted copy it created at " + w.targetPath() + " is removed by that destruction"
-                    : "it owns no copy at its planned location " + w.targetPath() + " (copies it moved to quarantine are "
-                    + "removed with the content's); any object there was not created by it and is left untouched";
-            String message = "cancelled: the content was permanently destroyed (operation " + op.operationId() + "); " + copy;
+            String message = stoppedRepairMessage(op.operationId(), w);
             if (ctx.operations().transition(w.operationId(), w.state(), OperationState.CANCELLED, message,
                     Map.of("message", message))) {
                 ctx.operations().note(op.operationId(), "unfinished repair " + w.operationId() + " (" + w.state()
-                        + ") stopped; " + copy);
+                        + ") stopped");
                 ctx.staging().ifPresent(staging -> {
                     try {
                         if (staging.delete(w.operationId())) {
@@ -163,6 +159,16 @@ public final class DestructionProcessor {
                 });
             }
         }
+    }
+
+    /** Why an unfinished repair was stopped by destruction (intent or removal), and what of it remains. */
+    static String stoppedRepairMessage(UUID destruction, FileOperation w) {
+        String copy = w.targetPath() == null ? "nothing was written"
+                : w.targetCreated() ? "the uncommitted copy it created at " + w.targetPath() + " is removed by that destruction"
+                : "it owns no copy at its planned location " + w.targetPath() + " (copies it moved to quarantine are "
+                + "removed with the content's); any object there was not created by it and is left untouched";
+        return "cancelled: the content was permanently destroyed (operation " + destruction + "); nothing more is written; "
+                + copy;
     }
 
     /** A copy an operation on this content owns: its own exclusive create produced it (GAS-P2-FV01). */
@@ -192,43 +198,49 @@ public final class DestructionProcessor {
     private void removeBytes(FileOperation op, ManagedVolume volume) {
         QuarantineMoves moves = new QuarantineMoves(ctx);
         Set<String> known = new LinkedHashSet<>();
+        Set<String> historical = new LinkedHashSet<>();
         List<Owned> owned;
         try {
             stopUnfinishedRepairs(op);
             ctx.faults().reach(FaultPoints.Point.BEFORE_PHYSICAL_DELETE, op.operationId());
+            // Interrupted moves are settled first, so every location below is current (GAS-P2-IV01).
             for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
                 if (!entry.volumeId().equals(volume.volumeId())) {
                     throw new IOException("a quarantined copy is on another volume: " + entry.quarantinePath());
                 }
                 moves.settle(volume, entry);
             }
+            // Current physical inventory only: a location counts if a record says the bytes are there now.
+            // Locations bytes were moved away from (or never reached) are historical and never deleted.
             for (FileContentRepository.Generation g : ctx.contents().generations(op.contentId())) {
-                known.add(g.storagePath());
-                if (g.quarantinePath() != null) {
-                    known.add(g.quarantinePath());
+                switch (g.state()) {
+                    case CURRENT, QUARANTINE_PENDING -> known.add(g.storagePath());
+                    case QUARANTINED -> {
+                        known.add(g.quarantinePath());
+                        historical.add(g.storagePath());
+                    }
+                    case MISSING, DESTROYED -> historical.add(g.storagePath());
                 }
             }
             for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
-                if (entry.state() == QuarantineRepository.State.QUARANTINED || entry.state() == QuarantineRepository.State.REMOVED) {
+                historical.add(entry.sourcePath());
+                if (entry.state() == QuarantineRepository.State.QUARANTINED) {
                     known.add(entry.quarantinePath());
+                } else if (entry.state() == QuarantineRepository.State.REMOVED) {
+                    historical.add(entry.quarantinePath());
                 }
             }
             owned = ownedTargets(op, volume);
             owned.forEach(o -> known.add(o.path()));
+            for (FileOperation w : ctx.operations().writersOfContent(op.contentId())) {
+                if (w.targetPath() != null && !w.targetCreated()) {
+                    historical.add(w.targetPath());
+                }
+            }
+            historical.removeAll(known);
             for (String location : known) {
                 delete(volume, location);
                 ctx.faults().reach(FaultPoints.Point.DURING_PHYSICAL_DELETE, op.operationId());
-            }
-            for (FileContentRepository.Generation g : ctx.contents().generations(op.contentId())) {
-                if (g.state() != GenerationState.DESTROYED) {
-                    ctx.contents().setGenerationState(g.contentId(), g.generation(), g.state(), GenerationState.DESTROYED, null);
-                }
-            }
-            for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
-                if (entry.state() == QuarantineRepository.State.QUARANTINED) {
-                    ctx.quarantine().setState(entry.quarantineId(), QuarantineRepository.State.QUARANTINED,
-                            QuarantineRepository.State.REMOVED, "removed by destruction " + op.operationId());
-                }
             }
         } catch (IOException e) {
             incomplete(op, "Physical removal is incomplete (" + e.getClass().getSimpleName()
@@ -238,8 +250,7 @@ public final class DestructionProcessor {
         List<String> remaining = new ArrayList<>();
         for (String location : known) {
             try {
-                Optional<Path> p = volume.locate(PortableRelativePath.of(location));
-                if (p.isPresent() && Files.exists(p.get(), LinkOption.NOFOLLOW_LINKS)) {
+                if (present(volume, location)) {
                     remaining.add(location);
                 }
             } catch (IOException e) {
@@ -251,19 +262,53 @@ public final class DestructionProcessor {
                     + ". The File is retired. Retry from Operations.");
             return;
         }
+        // Objects at historical locations are not this content's copies: untouched, and reported.
+        List<String> unexplained = new ArrayList<>();
+        for (String location : historical) {
+            try {
+                if (present(volume, location)) {
+                    unexplained.add(location);
+                }
+            } catch (IOException e) {
+                unexplained.add(location + " (could not be checked)");
+            }
+        }
         List<Owned> release = owned;
+        String detail = "every known copy removed (" + known.size() + " location(s) checked)"
+                + (unexplained.isEmpty() ? "" : "; objects this archive did not record as copies of this content were left "
+                + "untouched at " + String.join(", ", unexplained));
         ctx.tx().executeWithoutResult(status -> {
-            if (!ctx.operations().transition(op.operationId(), op.state(), OperationState.COMPLETED,
-                    "every known copy removed (" + known.size() + " location(s) checked)", Map.of("outcome", "BYTES_REMOVED"))) {
+            Map<String, Object> set = new java.util.HashMap<>();
+            set.put("outcome", "BYTES_REMOVED");
+            if (!unexplained.isEmpty()) {
+                set.put("message", detail);
+            }
+            if (!ctx.operations().transition(op.operationId(), op.state(), OperationState.COMPLETED, detail, set)) {
                 status.setRollbackOnly();
                 return;
             }
+            // The removal is reconciled in one transaction: every record of a current copy is retired with it.
+            for (FileContentRepository.Generation g : ctx.contents().generations(op.contentId())) {
+                if (g.state() != GenerationState.DESTROYED) {
+                    ctx.contents().setGenerationState(g.contentId(), g.generation(), g.state(), GenerationState.DESTROYED, null);
+                }
+            }
+            for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
+                if (entry.state() == QuarantineRepository.State.QUARANTINED) {
+                    ctx.quarantine().setState(entry.quarantineId(), QuarantineRepository.State.QUARANTINED,
+                            QuarantineRepository.State.REMOVED, "removed by destruction " + op.operationId());
+                }
+            }
             ctx.contents().setState(op.contentId(), ContentState.DESTROY_PENDING, ContentState.DESTROYED);
-            // The owned copies were removed and re-checked: their ownership ends with the removal's record.
             for (Owned o : release) {
                 ctx.operations().releaseTarget(o.operationId(), o.path());
             }
         });
+    }
+
+    private static boolean present(ManagedVolume volume, String location) throws IOException {
+        Optional<Path> p = volume.locate(PortableRelativePath.of(location));
+        return p.isPresent() && Files.exists(p.get(), LinkOption.NOFOLLOW_LINKS);
     }
 
     private static void delete(ManagedVolume volume, String location) throws IOException {

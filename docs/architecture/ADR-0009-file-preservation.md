@@ -1,8 +1,8 @@
 # ADR-0009: File preservation — ingestion, operations, recovery, integrity and repair
 
 Status: Implemented for Phase 2 review (owner decisions P2-A … P2-K, B1 … B5), revised for the independent
-Phase 2 audit (GAS-P2-001 … GAS-P2-011), its re-audit (GAS-P2-R01, GAS-P2-R02) and final verification
-(GAS-P2-FV01 … FV03); see
+Phase 2 audit (GAS-P2-001 … GAS-P2-011), its re-audit (GAS-P2-R01, GAS-P2-R02) final verification
+(GAS-P2-FV01 … FV03) and IV01 … IV03; see
 `docs/PHASE-2-AUDIT-CORRECTIONS.md`. Not yet accepted.
 
 ## Context
@@ -106,12 +106,22 @@ workers from driving the same operation.
   (interrupted moves are settled first). `BYTES_REMOVED` is recorded only after re-checking that none of
   those locations still holds bytes; otherwise the operation stays `CLEANUP_INCOMPLETE` and names what
   remains. Destroyed generations keep their quarantine path on record.
-- Physical-copy accounting (GAS-P2-FV01): every copy is accounted in exactly one place at every moment -
-  a content generation, the quarantine ledger, or the operation that owns it (`target_created`, set right
-  after its exclusive create). Ownership ends only in the same transaction that records where the copy
-  went: a confirmed quarantine move (or `SOURCE_ABSENT`), or destruction's verified removal. So a copy an
-  operation creates again at a location an earlier move vacated is owned again, and an object that appears
-  at a vacated location is not. A repair never writes a copy of content being destroyed.
+- Physical-copy accounting (GAS-P2-FV01, IV01): every copy is accounted at every moment by a record that
+  says it is there now - a `CURRENT` or `QUARANTINE_PENDING` generation (its storage path), a `QUARANTINED`
+  generation or ledger entry (its quarantine path), or the operation that created it (`target_created`, set
+  in the transaction that creates it exclusively). Settling a quarantine move retires its source in the
+  same transaction: every operation's ownership of that location ends and a superseded generation stored
+  there becomes `QUARANTINED` (or `MISSING`). Locations bytes were moved from, never reached, or already
+  removed are historical: destruction never deletes there, and reports any object it finds there as left
+  untouched. Interrupted moves are settled before anything is deleted; if a move's source and destination
+  both exist, nothing is deleted and the operation stays `CLEANUP_INCOMPLETE`. Generation, ledger and
+  content states are retired in the completion transaction.
+- Destruction intent and repairs (GAS-P2-IV03): the intent first takes the lock of every unfinished repair of
+  the content (a worker holds it for as long as it works on the operation), waiting at most two seconds and
+  otherwise failing visibly ("being written right now"); in its transaction it locks the content row,
+  refuses if an unheld repair has started, and cancels unfinished repairs. A repair creates its copy and
+  records ownership in one transaction holding the content row in share mode after re-reading its state, so
+  no repair byte is created after the intent commits.
 - Unfinished repairs of the content are part of that accounting (GAS-P2-R01). Removal first takes the lock
   of every unfinished operation on the content and of every owner of an unsettled quarantine move of it
   (if one is busy, removal waits and is retried), then stops each unfinished repair (`CANCELLED`, with the
@@ -146,12 +156,13 @@ answers exactly as for a nonexistent File.
   web layer's UUID conversion: friendly IDs in any case and with any number of leading zeros (`F00001`,
   `f00001`, `F1`); UUIDs in every spelling `UUID.fromString` accepts (any case, abbreviated or over-long
   groups, any Unicode decimal digit, full-width letters), alone or embedded in text.
-- **No existence oracle (GAS-P2-FV02):** a value or reason is withheld when an identifier written in it as
-  a whole names nothing the reader may see - a restricted File and a nonexistent File are treated
-  identically - or when any embedded spelling is a restricted File's (or its content's) UUID. Writing a
-  guessed identifier into a reason or filename therefore shows the same result whether or not a
-  restricted File has it. References to unrestricted Files, their content, and other objects with history
-  (archive, volumes, users) are shown; text without identifiers is never affected.
+- **No existence oracle (GAS-P2-FV02, IV02):** one visibility policy for whole and embedded identifiers.
+  Which identifiers a value refers to is read from the text alone: friendly IDs as delimited words; UUIDs
+  from every five consecutive hyphen-separated groups of UUID characters, read as the JDK reads them
+  (canonical-shaped groups take precedence over overlapping windows). The value is shown only if every
+  identifier it refers to is visible to the reader - an unrestricted File, content used only by
+  unrestricted Files, or another object with history (archive, volume, user). A restricted File and a
+  nonexistent one are never distinguished, whatever the spelling or embedding.
 - **Inheritance (GAS-P2-004)** is a database invariant (V0014 triggers): restricting a File restricts every
   derivative at every depth in the same statement; a derivation recorded under a restricted parent
   (including one committed concurrently, ordered by a row lock) is restricted; a derivative of a

@@ -67,36 +67,36 @@ public final class FileIdentifiers {
     /**
      * Identifiers that text refers to, by the rules above.
      *
-     * @param uuids           every UUID any substring of the text resolves to (complete: used to withhold
-     *                        any text that contains a hidden File's identifier in any spelling)
-     * @param primaryUuids    UUIDs written as a whole, delimited identifier - a maximal run of identifier
-     *                        characters that resolves as it stands (what a reader takes to be "the" UUID)
+     * @param uuids           the UUIDs the text's identifier-shaped groups are read as (see {@link #referencesIn})
      * @param friendlyNumbers friendly numbers written as a whole, delimited identifier
      */
-    public record References(Set<UUID> uuids, Set<UUID> primaryUuids, Set<Long> friendlyNumbers) {
+    public record References(Set<UUID> uuids, Set<Long> friendlyNumbers) {
         public boolean isEmpty() {
             return uuids.isEmpty() && friendlyNumbers.isEmpty();
         }
     }
 
+    private static final int[] GROUP_DIGITS = {8, 4, 4, 4, 12};
+
     /**
-     * Every File identifier spelling contained in text.
+     * Every File identifier the text refers to, read from the text alone (GAS-P2-IV02: nothing here depends
+     * on which Files exist, so callers can decide visibility without revealing existence).
      * <ul>
      *   <li>Friendly IDs: each maximal run of letters and digits (any script) that the lookup resolves.</li>
-     *   <li>UUIDs: every substring the UUID conversion resolves. Such a substring consists only of
-     *       characters {@link Character#digit(char, int)} accepts in base 16, {@code +} and {@code -}, so
-     *       each maximal run of those is examined: every five consecutive hyphen-separated groups, with
-     *       every suffix of the first group and every prefix of the last (groups in between are whole).
-     *       A run that resolves as a whole is also a primary reference.</li>
+     *   <li>UUIDs: in each maximal run of characters a UUID can contain ({@link Character#digit(char, int)}
+     *       hex digits of any script, {@code +}, {@code -}), every five consecutive hyphen-separated groups
+     *       form a window. A window with the canonical 8-4-4-4-12 shape is always read; any other window is
+     *       read unless it shares a group with a canonical one. A window is read as the JDK reads it: the
+     *       hex digits ending the first group and starting the last group, each group keeping its low-order
+     *       digits. A delimited spelling the web layer accepts is therefore read as exactly the UUID it
+     *       resolves to, and any text containing a resolvable spelling yields at least one reference.</li>
      * </ul>
-     * Text that resolves to nothing yields no references.
      */
     public static References referencesIn(String text) {
         Set<UUID> uuids = new LinkedHashSet<>();
-        Set<UUID> primary = new LinkedHashSet<>();
         Set<Long> numbers = new LinkedHashSet<>();
         if (text == null || text.isEmpty()) {
-            return new References(uuids, primary, numbers);
+            return new References(uuids, numbers);
         }
         int i = 0;
         while (i < text.length()) {
@@ -121,13 +121,10 @@ public final class FileIdentifiers {
             while (j < text.length() && uuidChar(text.charAt(j))) {
                 j++;
             }
-            String run = text.substring(i, j);
-            uuid(run).ifPresent(primary::add);
-            uuidsIn(run, uuids);
+            uuidsIn(text.substring(i, j), uuids);
             i = j;
         }
-        uuids.addAll(primary);
-        return new References(uuids, primary, numbers);
+        return new References(uuids, numbers);
     }
 
     private static boolean uuidChar(char c) {
@@ -136,24 +133,90 @@ public final class FileIdentifiers {
 
     private static void uuidsIn(String run, Set<UUID> out) {
         String[] groups = run.split("-", -1);
-        for (int g = 0; g + UUID_GROUPS <= groups.length; g++) {
-            String first = groups[g];
-            String last = groups[g + UUID_GROUPS - 1];
-            String middle = String.join("-", groups[g + 1], groups[g + 2], groups[g + 3]);
-            if (middle.length() + 4 > UUID_MAX_LENGTH) {
-                continue;
-            }
-            // Only the last 36 characters of the first group and the first 36 of the last can fit.
-            for (int s = Math.max(0, first.length() - UUID_MAX_LENGTH); s < first.length(); s++) {
-                String head = first.substring(s);
-                for (int p = Math.min(last.length(), UUID_MAX_LENGTH); p > 0; p--) {
-                    int length = head.length() + middle.length() + p + 2;
-                    if (length > UUID_MAX_LENGTH) {
-                        continue;
-                    }
-                    uuid(head + "-" + middle + "-" + last.substring(0, p)).ifPresent(out::add);
+        int windows = groups.length - GROUP_DIGITS.length + 1;
+        if (windows <= 0) {
+            return;
+        }
+        UUID[] read = new UUID[windows];
+        boolean[] canonical = new boolean[windows];
+        boolean[] coveredByCanonical = new boolean[groups.length];
+        for (int w = 0; w < windows; w++) {
+            read[w] = window(groups, w);
+            canonical[w] = read[w] != null && canonicalShape(groups, w);
+            if (canonical[w]) {
+                for (int g = w; g < w + GROUP_DIGITS.length; g++) {
+                    coveredByCanonical[g] = true;
                 }
             }
         }
+        for (int w = 0; w < windows; w++) {
+            if (read[w] == null) {
+                continue;
+            }
+            boolean overlaps = false;
+            for (int g = w; g < w + GROUP_DIGITS.length && !canonical[w]; g++) {
+                overlaps |= coveredByCanonical[g];
+            }
+            if (canonical[w] || !overlaps) {
+                out.add(read[w]);
+            }
+        }
+    }
+
+    private static boolean canonicalShape(String[] groups, int w) {
+        for (int k = 0; k < GROUP_DIGITS.length; k++) {
+            if (groups[w + k].length() != GROUP_DIGITS[k]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** The UUID a window reads as, or null if no substring spanning its groups resolves. */
+    private static UUID window(String[] groups, int w) {
+        StringBuilder canonical = new StringBuilder(36);
+        for (int k = 0; k < GROUP_DIGITS.length; k++) {
+            String group = groups[w + k];
+            String digits;
+            if (k == 0) {
+                int start = group.length();
+                while (start > 0 && Character.digit(group.charAt(start - 1), 16) >= 0) {
+                    start--;
+                }
+                digits = group.substring(start);
+            } else if (k == GROUP_DIGITS.length - 1) {
+                int from = group.startsWith("+") ? 1 : 0;
+                int end = from;
+                while (end < group.length() && Character.digit(group.charAt(end), 16) >= 0) {
+                    end++;
+                }
+                digits = group.substring(from, end);
+            } else {
+                String body = group.startsWith("+") ? group.substring(1) : group;
+                for (int c = 0; c < body.length(); c++) {
+                    if (Character.digit(body.charAt(c), 16) < 0) {
+                        return null;
+                    }
+                }
+                digits = body;
+            }
+            if (digits.isEmpty()) {
+                return null;
+            }
+            int keep = GROUP_DIGITS[k];
+            String low = digits.length() > keep ? digits.substring(digits.length() - keep) : digits;
+            StringBuilder hex = new StringBuilder(keep);
+            for (int c = 0; c < low.length(); c++) {
+                hex.append(Character.forDigit(Character.digit(low.charAt(c), 16), 16));
+            }
+            while (hex.length() < keep) {
+                hex.insert(0, '0');
+            }
+            if (k > 0) {
+                canonical.append('-');
+            }
+            canonical.append(hex);
+        }
+        return UUID.fromString(canonical.toString());
     }
 }

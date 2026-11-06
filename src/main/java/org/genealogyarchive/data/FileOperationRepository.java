@@ -357,6 +357,18 @@ public final class FileOperationRepository {
                 """).param("id", operationId).param("path", path).update();
     }
 
+    /**
+     * Ends every operation's ownership of the object at {@code path} on a volume (GAS-P2-IV01): called in
+     * the transaction that records that the object there was moved away, so the location becomes
+     * historical for all of them - an object that later appears there is not theirs.
+     */
+    public void releaseTargetsAt(UUID volumeId, String path) {
+        jdbc.sql("""
+                UPDATE gas.file_operation SET target_created = false, updated_at = clock_timestamp()
+                 WHERE volume_id = :v AND target_path = :path AND target_created
+                """).param("v", volumeId).param("path", path).update();
+    }
+
     /** Portable target paths planned by unfinished operations on a volume (not yet content generations). */
     public Set<String> plannedTargets(UUID volumeId) {
         return Set.copyOf(jdbc.sql("""

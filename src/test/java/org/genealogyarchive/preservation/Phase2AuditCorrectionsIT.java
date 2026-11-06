@@ -745,20 +745,32 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_R01_removalWaitsWhileTheRepairIsBusyElsewhere() throws Exception {
+        // IV03: an unfinished repair is now stopped by the destruction intent itself, so removal can only meet
+        // a busy repair that had already committed (finishing the quarantine of the damaged generation).
         Repaired f = corruptAndRepair("bible.tif", b("family bible register"));
-        FileOperation repair = repairStoppedBeforeCommit(f);
+        fx.faults.crashAt(FaultPoints.Point.BEFORE_QUARANTINE_MOVE);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileOperation repair = fx.operation(f.repairOperation());
+        assertThat(repair.state()).isEqualTo(OperationState.COMMITTED);
         FileOperation op = destroy(f.file());
+        assertThat(fx.operation(repair.operationId()).state()).as("a committed repair is not cancelled")
+                .isEqualTo(OperationState.COMMITTED);
 
         try (var busy = fx.preservation().context().locks().tryLock("file-operation", repair.operationId()).orElseThrow()) {
             fx.preservation().destruction().process(op.operationId());
             FileOperation waiting = fx.operation(op.operationId());
             assertThat(waiting.state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
             assertThat(waiting.message()).contains("waits for operation " + repair.operationId());
-            assertThat(onVolume(repair.targetPath())).exists();
-            assertThat(fx.operation(repair.operationId()).state()).isEqualTo(OperationState.PROMOTED);
+            assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).hasSize(2);
         }
         fx.preservation().recovery().runOnce();
-        assertDestroyedWithoutTrace(f, op.operationId(), repair);
+        fx.preservation().recovery().runOnce();
+        FileOperation done = fx.operation(op.operationId());
+        assertThat(done.state()).as(done.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(done.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        assertThat(fx.operation(repair.operationId()).state()).isEqualTo(OperationState.COMPLETED);
     }
 
     @Test
@@ -1194,5 +1206,329 @@ class Phase2AuditCorrectionsIT {
             }
             assertThat(seen(fx.admin, carriers.get(s), s)).isEqualTo(new Seen(true, true));
         }
+    }
+
+    // ---- GAS-P2-IV01: historical locations never authorize deletion ---------------------------------------
+
+    private ArchivalFile repairedCompletely(String name, byte[] bytes) throws Exception {
+        Repaired f = corruptAndRepair(name, bytes);
+        FileOperation done = fx.process(f.repairOperation());
+        assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
+        return fx.file(f.fileId());
+    }
+
+    private FileContentRepository.Generation generation(UUID contentId, int n) {
+        return fx.preservation().context().contents().generations(contentId).stream()
+                .filter(g -> g.generation() == n).findFirst().orElseThrow();
+    }
+
+    @Test
+    void gasP2_IV01_aForeignObjectAtAQuarantinedGenerationsVacatedPathSurvivesDestruction() throws Exception {
+        ArchivalFile f = repairedCompletely("ledger.tif", b("store ledger, gen 1 quarantined"));
+        FileContentRepository.Generation g1 = generation(f.contentId(), 1);
+        assertThat(g1.state()).isEqualTo(GenerationState.QUARANTINED);
+        assertThat(fx.preservation().context().operations().writersOfContent(f.contentId()))
+                .as("the vacated location is owned by no operation").noneMatch(w -> g1.storagePath().equals(w.targetPath())
+                        && w.targetCreated());
+        Path vacated = onVolume(g1.storagePath());
+        assertThat(vacated).doesNotExist();
+        Files.write(vacated, b("someone else's file"));
+
+        FileOperation op = destroy(f);
+        fx.preservation().recovery().runOnce();
+        fx.preservation().recovery().runOnce();
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(d.message()).contains("left untouched", g1.storagePath());
+        assertThat(vacated).hasBinaryContent(b("someone else's file"));
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).containsExactly(vacated);
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        assertThat(fx.preservation().context().contents().generations(f.contentId()))
+                .allMatch(g -> g.state() == GenerationState.DESTROYED);
+    }
+
+    @Test
+    void gasP2_IV01_destructionBeforeTheDamagedGenerationWasMovedRemovesItWhereItIs() throws Exception {
+        Repaired f = corruptAndRepair("lease.tif", b("lease, stopped before the quarantine move"));
+        fx.faults.crashAt(FaultPoints.Point.BEFORE_QUARANTINE_MOVE);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.QUARANTINE_PENDING);
+        assertEveryCopyAccounted(f.contentId());
+
+        FileOperation op = destroy(f.file());
+        fx.preservation().destruction().process(op.operationId());
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().recovery().runOnce();
+        }
+        assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+    }
+
+    @Test
+    void gasP2_IV01_aMoveInterruptedBeforeItWasRecordedFailsVisiblyIfSomethingAppearedAtItsSource() throws Exception {
+        Repaired f = corruptAndRepair("bond.tif", b("bond, move done but not recorded"));
+        fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_MOVE);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileContentRepository.Generation g1 = generation(f.contentId(), 1);
+        assertThat(g1.state()).isEqualTo(GenerationState.QUARANTINE_PENDING);
+        Path source = onVolume(g1.storagePath());
+        assertThat(source).doesNotExist();
+        Files.write(source, b("appeared at the old location"));
+        List<Path> quarantined = filesUnder(fx.volumeRoot.resolve("quarantine"));
+        assertThat(quarantined).hasSize(1);
+
+        FileOperation op = destroy(f.file());
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().destruction().process(op.operationId());
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as("unsettled move with something at its source").isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+            assertThat(source).hasBinaryContent(b("appeared at the old location"));
+            assertThat(quarantined.get(0)).exists();
+        }
+        // An Administrator removes the stray object; the move then settles and removal completes.
+        Files.delete(source);
+        fx.preservation().recovery().runOnce();
+        fx.preservation().recovery().runOnce();
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+    }
+
+    @Test
+    void gasP2_IV01_aMoveSettledAfterAnInterruptionRetiresTheSourceSoAForeignObjectThereSurvives() throws Exception {
+        Repaired f = corruptAndRepair("poll.tif", b("poll book, move settled by recovery"));
+        fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_MOVE);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        fx.preservation().recovery().runOnce();
+        FileContentRepository.Generation g1 = generation(f.contentId(), 1);
+        assertThat(g1.state()).as("settling retired the source in the same transaction").isEqualTo(GenerationState.QUARANTINED);
+        assertThat(fx.preservation().context().operations().writersOfContent(f.contentId()))
+                .noneMatch(w -> g1.storagePath().equals(w.targetPath()) && w.targetCreated());
+        Path vacated = onVolume(g1.storagePath());
+        Files.write(vacated, b("not a copy of this content"));
+        assertEveryCopyAccounted(f.contentId(), vacated);
+
+        FileOperation op = destroy(f.file());
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            assertNotCompleteWhileACopyRemains(op.operationId(), vacated);
+        }
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(vacated).hasBinaryContent(b("not a copy of this content"));
+    }
+
+    @Test
+    void gasP2_IV01_cleanupInterruptedAfterEachRemovalNeverTouchesHistoricalLocations() throws Exception {
+        ArchivalFile f = repairedCompletely("deed3.tif", b("deed, interrupted cleanup with a foreign object"));
+        Path vacated = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(vacated, b("foreign"));
+        FileOperation op = destroy(f);
+        // Known current copies: generation 2 and generation 1's quarantined copy.
+        for (int k = 1; k <= 2; k++) {
+            AtomicInteger reached = new AtomicInteger();
+            int stopAt = k;
+            fx.faults.armSticky(FaultPoints.Point.DURING_PHYSICAL_DELETE, id -> {
+                if (reached.incrementAndGet() == stopAt) {
+                    throw new ScriptedFaults.SimulatedCrash(FaultPoints.Point.DURING_PHYSICAL_DELETE);
+                }
+            });
+            assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
+                    .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+            fx.faults.clear();
+            assertThat(fx.operation(op.operationId()).state()).isNotEqualTo(OperationState.COMPLETED);
+            assertThat(vacated).hasBinaryContent(b("foreign"));
+        }
+        fx.preservation().recovery().runOnce();
+        fx.preservation().recovery().runOnce();
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(vacated).hasBinaryContent(b("foreign"));
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+    }
+
+    // ---- GAS-P2-IV02: one visibility policy for whole and embedded identifiers ----------------------------
+
+    @Test
+    void gasP2_IV02_restrictedAndNonexistentUuidsLookTheSameInEveryContext() {
+        ArchivalFile visible = ingestAs(fx.editor, "public.jpg", b("visible iv02"), Restriction.NORMAL, null, null);
+        ArchivalFile secret = ingestAs(fx.admin, "secret.jpg", b("restricted iv02"), Restriction.RESTRICTED, null, null);
+        UUID missing = UUID.randomUUID();
+        java.util.function.Function<UUID, String> arabic = u -> arabicDigits(u.toString());
+        java.util.function.Function<UUID, String> fullWidth = u -> {
+            StringBuilder sb = new StringBuilder();
+            for (char c : u.toString().toCharArray()) {
+                sb.append(c >= '0' && c <= '9' ? (char) ('０' + (c - '0')) : c >= 'a' && c <= 'f' ? (char) ('ａ' + (c - 'a')) : c);
+            }
+            return sb.toString();
+        };
+        List<java.util.function.Function<UUID, String>> spellings = List.of(UUID::toString,
+                u -> u.toString().toUpperCase(java.util.Locale.ROOT), arabic, fullWidth);
+        List<String> contexts = List.of("%s", "see %s.", "ref-%s-end", "xx%sff", "deed-%s", "ab%s", "(%s)",
+                "copy of %s, compare F00001");
+        for (var spelling : spellings) {
+            for (String context : contexts) {
+                String r = context.formatted(spelling.apply(secret.fileId()));
+                String m = context.formatted(spelling.apply(missing));
+                UUID cr = carrier(r);
+                UUID cm = carrier(m);
+                for (Actor reader : new Actor[]{fx.viewer, fx.editor}) {
+                    assertThat(seen(reader, cr, r)).as("'%s' vs '%s'", r, m).isEqualTo(seen(reader, cm, m))
+                            .isEqualTo(new Seen(false, false));
+                }
+                assertThat(seen(fx.admin, cr, r)).isEqualTo(new Seen(true, true));
+            }
+            // Delimited references to an unrestricted File stay visible.
+            for (String context : List.of("%s", "see %s.", "ref-%s-end", "deed-%s", "(%s)")) {
+                String v = context.formatted(spelling.apply(visible.fileId()));
+                assertThat(seen(fx.viewer, carrier(v), v)).as(v).isEqualTo(new Seen(true, true));
+            }
+        }
+    }
+
+    @Test
+    void gasP2_IV02_filenamesAndIndirectReferencesFollowTheSamePolicy() {
+        ArchivalFile secret = ingestAs(fx.admin, "secret.jpg", b("restricted iv02 names"), Restriction.RESTRICTED, null, null);
+        UUID missing = UUID.randomUUID();
+        UUID missingContent = UUID.randomUUID();
+        java.util.Map<String, String> pairs = new java.util.LinkedHashMap<>();
+        pairs.put("xx" + secret.fileId() + "ff.jpg", "xx" + missing + "ff.jpg");
+        pairs.put(arabicDigits(secret.fileId().toString()) + ".tif", arabicDigits(missing.toString()) + ".tif");
+        pairs.put("bytes-" + secret.contentId() + ".jpg", "bytes-" + missingContent + ".jpg");
+        for (var pair : pairs.entrySet()) {
+            ArchivalFile a = ingestAs(fx.editor, "a.jpg", b("name " + pair.getKey()), Restriction.NORMAL, null, null);
+            ArchivalFile c = ingestAs(fx.editor, "c.jpg", b("name " + pair.getValue()), Restriction.NORMAL, null, null);
+            fx.preservation().files().correct(fx.editor, a.fileId(), a.version(), pair.getKey(), 0, Restriction.NORMAL, null);
+            fx.preservation().files().correct(fx.editor, c.fileId(), c.version(), pair.getValue(), 0, Restriction.NORMAL, null);
+            for (Actor reader : new Actor[]{fx.viewer, fx.editor}) {
+                boolean shownA = fx.services().history().forObject(reader, "archival_file", a.fileId()).stream()
+                        .flatMap(x -> x.fieldChanges().stream()).anyMatch(x -> pair.getKey().equals(x.after()));
+                boolean shownC = fx.services().history().forObject(reader, "archival_file", c.fileId()).stream()
+                        .flatMap(x -> x.fieldChanges().stream()).anyMatch(x -> pair.getValue().equals(x.after()));
+                assertThat(shownA).as(pair.getKey()).isEqualTo(shownC).isFalse();
+                boolean globalA = recent(reader).stream().flatMap(x -> x.fieldChanges().stream())
+                        .anyMatch(x -> pair.getKey().equals(x.after()));
+                boolean globalC = recent(reader).stream().flatMap(x -> x.fieldChanges().stream())
+                        .anyMatch(x -> pair.getValue().equals(x.after()));
+                assertThat(globalA).isEqualTo(globalC).isFalse();
+            }
+        }
+    }
+
+    // ---- GAS-P2-IV03: no repair bytes after destruction intent -------------------------------------------
+
+    @Test
+    void gasP2_IV03_destructionIntentCannotCommitWhileARepairThatPassedItsCheckIsWriting() throws Exception {
+        Repaired f = corruptAndRepair("plat2.tif", large("plat, repair writing during destruction request"));
+        java.util.concurrent.atomic.AtomicReference<Throwable> attempt = new java.util.concurrent.atomic.AtomicReference<>();
+        AtomicInteger calls = new AtomicInteger();
+        ArchivalFile deleted = fx.preservation().files().delete(fx.editor, f.fileId(), fx.file(f.fileId()).version(), null);
+        // Codex's interleaving: the repair passed its content check; destruction intent is requested now.
+        for (FaultPoints.Point point : List.of(FaultPoints.Point.BEFORE_TARGET_CREATE, FaultPoints.Point.DURING_COPY)) {
+            fx.faults.armSticky(point, id -> {
+                if (calls.incrementAndGet() <= 2 && attempt.get() == null) {
+                    try {
+                        fx.preservation().files().destroy(fx.admin, f.fileId(), deleted.version(), "race", null);
+                        attempt.set(new AssertionError("destruction intent committed while the repair was writing"));
+                    } catch (RuntimeException e) {
+                        attempt.set(e);
+                    }
+                }
+            });
+        }
+        FileOperation repaired = fx.process(f.repairOperation());
+        fx.faults.clear();
+        assertThat(attempt.get()).isInstanceOf(RuleViolationException.class)
+                .hasMessageContaining("being written right now");
+        assertThat(repaired.state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(content(f.file()).state()).isEqualTo(ContentState.ACTIVE);
+        assertThat(fx.file(f.fileId()).lifecycle()).isEqualTo(FileLifecycle.DELETED);
+
+        // Once the repair is finished, destruction proceeds normally.
+        FileOperation op = fx.preservation().files().destroy(fx.admin, f.fileId(), deleted.version(), "after repair", null);
+        fx.preservation().destruction().process(op.operationId());
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+    }
+
+    @Test
+    void gasP2_IV03_aRepairCreatesNothingOnceDestructionIntentHasCommitted() throws Exception {
+        Repaired f = corruptAndRepair("plat3.tif", b("plat, intent committed between check and create"));
+        // The intent commits after the repair's early check but before it creates its copy (as if the
+        // destruction had not seen this repair yet): the create step re-reads the content under its lock.
+        fx.faults.armSticky(FaultPoints.Point.BEFORE_TARGET_CREATE, id -> fx.preservation().context().contents()
+                .setState(f.contentId(), ContentState.DAMAGED, ContentState.DESTROY_PENDING));
+        fx.process(f.repairOperation());
+        fx.faults.clear();
+        FileOperation repair = fx.operation(f.repairOperation());
+        assertThat(repair.targetCreated()).isFalse();
+        assertThat(onVolume(repair.targetPath())).doesNotExist();
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).hasSize(1);
+        for (int i = 0; i < 2; i++) {
+            fx.process(repair.operationId());
+            assertThat(onVolume(repair.targetPath())).doesNotExist();
+        }
+    }
+
+    @Test
+    void gasP2_IV03_aConcurrentDestructionRequestIsRefusedNotBlockedWhileARepairCopies() throws Exception {
+        Repaired f = corruptAndRepair("plat4.tif", large("plat, concurrent destroy request"));
+        ArchivalFile deleted = fx.preservation().files().delete(fx.editor, f.fileId(), fx.file(f.fileId()).version(), null);
+        java.util.concurrent.CountDownLatch copying = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        AtomicInteger chunks = new AtomicInteger();
+        fx.faults.armSticky(FaultPoints.Point.DURING_COPY, id -> {
+            if (chunks.incrementAndGet() == 1) {
+                copying.countDown();
+                try {
+                    release.await(30, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+        var worker = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var repairing = worker.submit(() -> fx.process(f.repairOperation()));
+            assertThat(copying.await(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            long started = System.nanoTime();
+            assertThatThrownBy(() -> fx.preservation().files().destroy(fx.admin, f.fileId(), deleted.version(), "race", null))
+                    .isInstanceOf(RuleViolationException.class).hasMessageContaining("being written right now");
+            assertThat(java.time.Duration.ofNanos(System.nanoTime() - started)).isLessThan(java.time.Duration.ofSeconds(10));
+            assertThat(content(f.file()).state()).isEqualTo(ContentState.DAMAGED);
+            release.countDown();
+            assertThat(repairing.get(60, java.util.concurrent.TimeUnit.SECONDS).state()).isEqualTo(OperationState.COMPLETED);
+        } finally {
+            release.countDown();
+            worker.shutdownNow();
+            fx.faults.clear();
+        }
+    }
+
+    @Test
+    void gasP2_IV03_destructionIntentStopsARepairThatIsNotRunningSoItNeverWrites() throws Exception {
+        Repaired f = corruptAndRepair("plat5.tif", b("plat, repair planned but idle"));
+        fx.faults.crashAt(FaultPoints.Point.BEFORE_TARGET_CREATE);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileOperation planned = fx.operation(f.repairOperation());
+        assertThat(planned.state()).isEqualTo(OperationState.PROMOTING);
+
+        FileOperation op = destroy(f.file());
+        FileOperation stopped = fx.operation(planned.operationId());
+        assertThat(stopped.state()).as("stopped in the intent transaction").isEqualTo(OperationState.CANCELLED);
+        assertThat(stopped.stagingCleaned()).isTrue();
+        for (int i = 0; i < 2; i++) {
+            fx.process(planned.operationId());
+            fx.preservation().recovery().runOnce();
+            assertThat(onVolume(planned.targetPath())).doesNotExist();
+        }
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
     }
 }
