@@ -344,6 +344,19 @@ public final class FileOperationRepository {
         }
     }
 
+    /**
+     * Ends this operation's ownership of the object at {@code path} (GAS-P2-FV01). Called in the same
+     * transaction that records where that object went (a confirmed quarantine move, or destruction's
+     * verified removal), so an owned copy is never unaccounted. Has no effect if the operation's current
+     * target is another path.
+     */
+    public void releaseTarget(UUID operationId, String path) {
+        jdbc.sql("""
+                UPDATE gas.file_operation SET target_created = false, updated_at = clock_timestamp()
+                 WHERE operation_id = :id AND target_path = :path AND target_created
+                """).param("id", operationId).param("path", path).update();
+    }
+
     /** Portable target paths planned by unfinished operations on a volume (not yet content generations). */
     public Set<String> plannedTargets(UUID volumeId) {
         return Set.copyOf(jdbc.sql("""

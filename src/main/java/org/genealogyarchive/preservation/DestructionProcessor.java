@@ -145,7 +145,8 @@ public final class DestructionProcessor {
             }
             String copy = w.targetPath() == null ? "nothing was written"
                     : w.targetCreated() ? "the uncommitted copy it created at " + w.targetPath() + " is removed by that destruction"
-                    : "it created nothing on the volume; any object at " + w.targetPath() + " was not created by it and is left untouched";
+                    : "it owns no copy at its planned location " + w.targetPath() + " (copies it moved to quarantine are "
+                    + "removed with the content's); any object there was not created by it and is left untouched";
             String message = "cancelled: the content was permanently destroyed (operation " + op.operationId() + "); " + copy;
             if (ctx.operations().transition(w.operationId(), w.state(), OperationState.CANCELLED, message,
                     Map.of("message", message))) {
@@ -164,25 +165,26 @@ public final class DestructionProcessor {
         }
     }
 
+    /** A copy an operation on this content owns: its own exclusive create produced it (GAS-P2-FV01). */
+    private record Owned(UUID operationId, String path) {
+    }
+
     /**
-     * Uncommitted copies owned by operations on this content: targets their own exclusive create
-     * produced (target_created) and that were not since moved away through the quarantine ledger.
+     * Copies owned by operations on this content (target_created). Ownership ends only when the copy is
+     * accounted elsewhere - a confirmed quarantine move releases it in the same transaction - so this
+     * includes a copy recreated at a location an earlier move vacated, and never an object the operation
+     * did not create.
      */
-    private List<String> ownedUncommittedTargets(FileOperation op, ManagedVolume volume) throws IOException {
-        List<String> owned = new ArrayList<>();
+    private List<Owned> ownedTargets(FileOperation op, ManagedVolume volume) throws IOException {
+        List<Owned> owned = new ArrayList<>();
         for (FileOperation w : ctx.operations().writersOfContent(op.contentId())) {
             if (!w.targetCreated() || w.targetPath() == null) {
-                continue;
-            }
-            boolean movedAway = ctx.quarantine().forOperation(w.operationId()).stream()
-                    .anyMatch(e -> e.sourcePath().equals(w.targetPath()) && e.state() != QuarantineRepository.State.INTENDED);
-            if (movedAway) {
                 continue;
             }
             if (!volume.volumeId().equals(w.volumeId())) {
                 throw new IOException("operation " + w.operationId() + " wrote a copy on another volume: " + w.targetPath());
             }
-            owned.add(w.targetPath());
+            owned.add(new Owned(w.operationId(), w.targetPath()));
         }
         return owned;
     }
@@ -190,6 +192,7 @@ public final class DestructionProcessor {
     private void removeBytes(FileOperation op, ManagedVolume volume) {
         QuarantineMoves moves = new QuarantineMoves(ctx);
         Set<String> known = new LinkedHashSet<>();
+        List<Owned> owned;
         try {
             stopUnfinishedRepairs(op);
             ctx.faults().reach(FaultPoints.Point.BEFORE_PHYSICAL_DELETE, op.operationId());
@@ -210,7 +213,8 @@ public final class DestructionProcessor {
                     known.add(entry.quarantinePath());
                 }
             }
-            known.addAll(ownedUncommittedTargets(op, volume));
+            owned = ownedTargets(op, volume);
+            owned.forEach(o -> known.add(o.path()));
             for (String location : known) {
                 delete(volume, location);
                 ctx.faults().reach(FaultPoints.Point.DURING_PHYSICAL_DELETE, op.operationId());
@@ -247,6 +251,7 @@ public final class DestructionProcessor {
                     + ". The File is retired. Retry from Operations.");
             return;
         }
+        List<Owned> release = owned;
         ctx.tx().executeWithoutResult(status -> {
             if (!ctx.operations().transition(op.operationId(), op.state(), OperationState.COMPLETED,
                     "every known copy removed (" + known.size() + " location(s) checked)", Map.of("outcome", "BYTES_REMOVED"))) {
@@ -254,6 +259,10 @@ public final class DestructionProcessor {
                 return;
             }
             ctx.contents().setState(op.contentId(), ContentState.DESTROY_PENDING, ContentState.DESTROYED);
+            // The owned copies were removed and re-checked: their ownership ends with the removal's record.
+            for (Owned o : release) {
+                ctx.operations().releaseTarget(o.operationId(), o.path());
+            }
         });
     }
 

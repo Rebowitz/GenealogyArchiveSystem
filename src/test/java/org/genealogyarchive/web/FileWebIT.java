@@ -206,6 +206,29 @@ class FileWebIT {
     }
 
     @Test
+    void gasP2_FV03_aUnicodeDigitSpellingInTheUrlResolvesAsBeforeAndStillHidesRestrictedFiles() {
+        start(FileSettings.DEFAULT_MAX_UPLOAD_BYTES);
+        WebSession admin = signedIn("admin1");
+        String batch = batch(admin);
+        HttpResponse<String> put = upload(admin, batch, "u", "unicode.jpg", payload(800),
+                Map.of("X-Restriction", "RESTRICTED"), false);
+        String fileId = fx.process(UUID.fromString(group(OP, put.body()))).fileId().toString();
+        StringBuilder arabic = new StringBuilder();
+        for (char c : fileId.toCharArray()) {
+            arabic.append(c >= '0' && c <= '9' ? (char) ('\u0660' + (c - '0')) : c);
+        }
+        String path = "/files/" + java.net.URLEncoder.encode(arabic.toString(), java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(admin.get(path).statusCode()).as("compatibility: the JDK spelling still resolves").isEqualTo(200);
+        for (String user : new String[]{"editor1", "viewer1"}) {
+            WebSession s = signedIn(user);
+            HttpResponse<String> hidden = s.get(path);
+            HttpResponse<String> absent = s.get("/files/" + UUID.randomUUID());
+            assertThat(hidden.statusCode()).isEqualTo(404).isEqualTo(absent.statusCode());
+            assertThat(withoutCsrf(hidden.body())).isEqualTo(withoutCsrf(absent.body()));
+        }
+    }
+
+    @Test
     void preservationPagesAreForAdministratorsOnly() {
         start(FileSettings.DEFAULT_MAX_UPLOAD_BYTES);
         assertThat(signedIn("admin1").get("/preservation").statusCode()).isEqualTo(200);

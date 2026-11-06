@@ -114,6 +114,57 @@ public final class ArchivalFileRepository {
                 .query((rs, n) -> Rows.uuid(rs, "content_id")).list());
     }
 
+    /**
+     * Of the given friendly numbers, those of Files that exist and are not restricted (any lifecycle) -
+     * exactly the numbers the friendly-ID lookup resolves for a reader without access to restricted Files
+     * (GAS-P2-FV02).
+     */
+    public java.util.Set<Long> unrestrictedFriendlyNumbers(java.util.Collection<Long> numbers) {
+        if (numbers.isEmpty()) {
+            return java.util.Set.of();
+        }
+        return new java.util.HashSet<>(jdbc.sql("""
+                SELECT friendly_number FROM gas.archival_file
+                 WHERE restriction <> 'RESTRICTED' AND friendly_number IN (:n)
+                """).param("n", List.copyOf(numbers)).query(Long.class).list());
+    }
+
+    /** Of the given ids, those of Files that exist and are not restricted (GAS-P2-FV02). */
+    public java.util.Set<UUID> unrestrictedFileIds(java.util.Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return java.util.Set.of();
+        }
+        return new java.util.HashSet<>(jdbc.sql("""
+                SELECT file_id FROM gas.archival_file WHERE restriction <> 'RESTRICTED' AND file_id IN (:ids)
+                """).param("ids", List.copyOf(ids)).query((rs, n) -> Rows.uuid(rs, "file_id")).list());
+    }
+
+    /**
+     * Of the given ids, those of contents used by at least one File and by no restricted File
+     * (GAS-P2-FV02): content a restricted File uses is treated like content that does not exist.
+     */
+    public java.util.Set<UUID> contentsOfOnlyUnrestrictedFiles(java.util.Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return java.util.Set.of();
+        }
+        return new java.util.HashSet<>(jdbc.sql("""
+                SELECT content_id FROM gas.archival_file WHERE content_id IN (:ids)
+                 GROUP BY content_id HAVING bool_and(restriction <> 'RESTRICTED')
+                """).param("ids", List.copyOf(ids)).query((rs, n) -> Rows.uuid(rs, "content_id")).list());
+    }
+
+    /** Of the given ids, those of restricted Files and of contents any restricted File uses (GAS-P2-FV02). */
+    public java.util.Set<UUID> restrictedFilesOrTheirContents(java.util.Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return java.util.Set.of();
+        }
+        return new java.util.HashSet<>(jdbc.sql("""
+                SELECT file_id AS id FROM gas.archival_file WHERE restriction = 'RESTRICTED' AND file_id IN (:ids)
+                UNION
+                SELECT content_id AS id FROM gas.archival_file WHERE restriction = 'RESTRICTED' AND content_id IN (:ids)
+                """).param("ids", List.copyOf(ids)).query((rs, n) -> Rows.uuid(rs, "id")).list());
+    }
+
     public List<ArchivalFile> byContent(UUID contentId) {
         return jdbc.sql(SELECT + " WHERE f.content_id = :c ORDER BY f.friendly_number").param("c", contentId).query(FILE).list();
     }

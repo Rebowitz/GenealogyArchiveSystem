@@ -3,6 +3,7 @@ package org.genealogyarchive.preservation;
 import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.boot.CoreServices;
 import org.genealogyarchive.config.InstallationConfig.FileSettings;
+import org.genealogyarchive.data.ArchivalFileRepository;
 import org.genealogyarchive.data.FileContentRepository;
 import org.genealogyarchive.data.QuarantineRepository;
 import org.genealogyarchive.files.ManagedVolume;
@@ -854,5 +855,344 @@ class Phase2AuditCorrectionsIT {
                 .as("ordinary text is not redacted").anyMatch(r -> ordinary.equals(r.reason()));
         assertThatThrownBy(() -> fx.preservation().files().getByFriendlyId(fx.viewer, "f" + number))
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    // ---- GAS-P2-FV01 (final verification): physical-copy accounting ---------------------------------------
+
+    /**
+     * Invariant 1, checked independently of any scenario: every object on the volume under originals/ or
+     * quarantine/ is accounted for by a generation, the quarantine ledger, or an operation that owns it
+     * (target_created) - unless it is one of the named foreign objects.
+     */
+    private void assertEveryCopyAccounted(UUID contentId, Path... foreign) throws IOException {
+        var ctx = fx.preservation().context();
+        java.util.Set<Path> accounted = new java.util.HashSet<>(List.of(foreign));
+        for (FileContentRepository.Generation g : ctx.contents().generations(contentId)) {
+            accounted.add(onVolume(g.storagePath()));
+            if (g.quarantinePath() != null) {
+                accounted.add(onVolume(g.quarantinePath()));
+            }
+        }
+        for (QuarantineRepository.Entry e : ctx.quarantine().forContent(contentId)) {
+            if (e.state() == QuarantineRepository.State.INTENDED) {
+                accounted.add(onVolume(e.sourcePath()));
+                accounted.add(onVolume(e.quarantinePath()));
+            } else if (e.state() == QuarantineRepository.State.QUARANTINED) {
+                accounted.add(onVolume(e.quarantinePath()));
+            }
+        }
+        for (FileOperation w : ctx.operations().writersOfContent(contentId)) {
+            if (w.targetCreated()) {
+                accounted.add(onVolume(w.targetPath()));
+            }
+        }
+        List<Path> onDisk = new java.util.ArrayList<>(filesUnder(fx.volumeRoot.resolve("originals")));
+        onDisk.addAll(filesUnder(fx.volumeRoot.resolve("quarantine")));
+        assertThat(accounted).as("every copy on the volume is accounted for").containsAll(onDisk);
+    }
+
+    /** Invariant 5: a completed destruction leaves no copy on the volume except named foreign objects. */
+    private void assertNotCompleteWhileACopyRemains(UUID destruction, Path... foreign) throws IOException {
+        FileOperation d = fx.operation(destruction);
+        if (d.state() == OperationState.COMPLETED || "BYTES_REMOVED".equals(d.outcome())) {
+            List<Path> onDisk = new java.util.ArrayList<>(filesUnder(fx.volumeRoot.resolve("originals")));
+            onDisk.addAll(filesUnder(fx.volumeRoot.resolve("quarantine")));
+            assertThat(onDisk).as("BYTES_REMOVED recorded while copies remain").containsExactlyInAnyOrder(foreign);
+        }
+    }
+
+    /**
+     * The audit's sequence: a repair's partial copy is moved to quarantine (interrupted at {@code moveStop}),
+     * the next attempt creates a new copy at the very location that move vacated, verifies it and stops
+     * before its commit.
+     */
+    private FileOperation recreatedAtTheVacatedTarget(Repaired f, FaultPoints.Point moveStop) throws IOException {
+        fx.faults.crashAt(FaultPoints.Point.DURING_COPY);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        String vacated = fx.operation(f.repairOperation()).targetPath();
+        assertEveryCopyAccounted(f.contentId());
+
+        fx.faults.crashAt(moveStop);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertEveryCopyAccounted(f.contentId());
+
+        fx.faults.crashAt(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileOperation repair = fx.operation(f.repairOperation());
+        assertThat(repair.state()).isEqualTo(OperationState.PROMOTED);
+        assertThat(repair.targetPath()).as("the new copy is at the location the move vacated").isEqualTo(vacated);
+        assertThat(repair.targetCreated()).as("and the operation owns it").isTrue();
+        assertThat(onVolume(vacated)).exists();
+        assertThat(fx.preservation().context().quarantine().forOperation(repair.operationId()))
+                .anyMatch(e -> e.sourcePath().equals(vacated) && e.state() == QuarantineRepository.State.QUARANTINED);
+        assertEveryCopyAccounted(f.contentId());
+        return repair;
+    }
+
+    @Test
+    void gasP2_FV01_aCopyRecreatedWhereARecordedMoveVacatedIsRemovedByDestruction() throws Exception {
+        Repaired f = corruptAndRepair("census.tif", large("1850 census, recreated after a recorded move"));
+        FileOperation repair = recreatedAtTheVacatedTarget(f, FaultPoints.Point.AFTER_QUARANTINE_RECORDED);
+
+        FileOperation op = destroy(f.file());
+        fx.preservation().recovery().runOnce();
+        assertDestroyedWithoutTrace(f, op.operationId(), repair);
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            fx.process(repair.operationId());
+            assertDestroyedWithoutTrace(f, op.operationId(), repair);
+        }
+    }
+
+    @Test
+    void gasP2_FV01_aCopyRecreatedAfterAnUnconfirmedMoveWasSettledIsRemovedByDestruction() throws Exception {
+        Repaired f = corruptAndRepair("tax.tif", large("tax list, recreated after an unconfirmed move"));
+        FileOperation repair = recreatedAtTheVacatedTarget(f, FaultPoints.Point.AFTER_QUARANTINE_MOVE);
+
+        FileOperation op = destroy(f.file());
+        fx.preservation().destruction().process(op.operationId());
+        assertDestroyedWithoutTrace(f, op.operationId(), repair);
+        fx.preservation().recovery().runOnce();
+        fx.preservation().recovery().runOnce();
+        assertDestroyedWithoutTrace(f, op.operationId(), repair);
+    }
+
+    @Test
+    void gasP2_FV01_anUnconfirmedMoveSettledByDestructionLeavesNothingAndNoRepairWritesAgain() throws Exception {
+        Repaired f = corruptAndRepair("deed2.tif", large("deed, move unconfirmed when destroyed"));
+        fx.faults.crashAt(FaultPoints.Point.DURING_COPY);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_MOVE);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileOperation repair = fx.operation(f.repairOperation());
+        assertThat(repair.targetCreated()).as("the move is not yet confirmed").isTrue();
+        assertEveryCopyAccounted(f.contentId());
+
+        FileOperation op = destroy(f.file());
+        // Recovery settles the move, then meets the repair before the destruction: it must not write again.
+        fx.preservation().recovery().runOnce();
+        fx.preservation().recovery().runOnce();
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        assertThat(fx.operation(repair.operationId()).state()).isEqualTo(OperationState.CANCELLED);
+        assertThat(fx.preservation().context().quarantine().forContent(f.contentId()))
+                .allMatch(e -> e.state() == QuarantineRepository.State.REMOVED
+                        || e.state() == QuarantineRepository.State.SOURCE_ABSENT);
+    }
+
+    @Test
+    void gasP2_FV01_anUnknownObjectAtAVacatedTargetIsNeitherAdoptedNorRemoved() throws Exception {
+        Repaired f = corruptAndRepair("roll.tif", large("tithe roll, foreign object at a vacated target"));
+        fx.faults.crashAt(FaultPoints.Point.DURING_COPY);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_RECORDED);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileOperation vacated = fx.operation(f.repairOperation());
+        assertThat(vacated.targetCreated()).as("the confirmed move ended its ownership").isFalse();
+        Path foreign = onVolume(vacated.targetPath());
+        assertThat(foreign).doesNotExist();
+        Files.write(foreign, b("placed here by hand"));
+        assertEveryCopyAccounted(f.contentId(), foreign);
+
+        FileOperation blocked = fx.process(f.repairOperation());
+        assertThat(blocked.state()).isEqualTo(OperationState.BLOCKED);
+        assertThat(blocked.blockedReason()).isEqualTo(BlockedReason.COLLISION);
+        assertThat(foreign).hasBinaryContent(b("placed here by hand"));
+
+        FileOperation op = destroy(f.file());
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            assertNotCompleteWhileACopyRemains(op.operationId(), foreign);
+        }
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(foreign).hasBinaryContent(b("placed here by hand"));
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        assertThat(fx.operation(f.repairOperation()).message()).contains("left untouched");
+    }
+
+    @Test
+    void gasP2_FV01_cleanupInterruptedAfterEachRemovalNeverReportsCompletionEarly() throws Exception {
+        Repaired f = corruptAndRepair("will2.tif", large("will, interrupted at every removal"));
+        FileOperation repair = recreatedAtTheVacatedTarget(f, FaultPoints.Point.AFTER_QUARANTINE_RECORDED);
+        FileOperation op = destroy(f.file());
+        // Known locations: the damaged generation, the quarantined partial copy and the recreated copy.
+        for (int k = 1; k <= 3; k++) {
+            // Stop right after the k-th location is removed.
+            AtomicInteger reached = new AtomicInteger();
+            int stopAt = k;
+            fx.faults.armSticky(FaultPoints.Point.DURING_PHYSICAL_DELETE, id -> {
+                if (reached.incrementAndGet() == stopAt) {
+                    throw new ScriptedFaults.SimulatedCrash(FaultPoints.Point.DURING_PHYSICAL_DELETE);
+                }
+            });
+            assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
+                    .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+            fx.faults.clear();
+            assertThat(fx.operation(op.operationId()).state()).isNotEqualTo(OperationState.COMPLETED);
+            assertNotCompleteWhileACopyRemains(op.operationId());
+            assertEveryCopyAccounted(f.contentId());
+        }
+        fx.faults.clear();
+        fx.preservation().recovery().runOnce();
+        fx.preservation().recovery().runOnce();
+        assertDestroyedWithoutTrace(f, op.operationId(), repair);
+    }
+
+    // ---- GAS-P2-FV02 (final verification): no existence oracle through history --------------------------
+
+    /** What a reader observes of a reason written on another object: shown or withheld, per-object and global. */
+    private record Seen(boolean perObject, boolean global) {
+    }
+
+    private Seen seen(Actor reader, UUID object, String reason) {
+        return new Seen(
+                fx.services().history().forObject(reader, "archival_file", object).stream().anyMatch(r -> reason.equals(r.reason())),
+                recent(reader).stream().anyMatch(r -> object.equals(r.objectId()) && reason.equals(r.reason())));
+    }
+
+    private UUID carrier(String reason) {
+        ArchivalFile other = ingestAs(fx.editor, "carrier.jpg", b("carrier " + reason), Restriction.NORMAL, null, null);
+        fx.preservation().files().delete(fx.editor, other.fileId(), other.version(), reason);
+        return other.fileId();
+    }
+
+    private static String arabicDigits(String text) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : text.toCharArray()) {
+            sb.append(c >= '0' && c <= '9' ? (char) ('٠' + (c - '0')) : c);
+        }
+        return sb.toString();
+    }
+
+    @Test
+    void gasP2_FV02_aGuessedIdentifierLooksTheSameWhetherItsFileIsRestrictedOrDoesNotExist() {
+        ArchivalFile visible = ingestAs(fx.editor, "public.jpg", b("ordinary visible file"), Restriction.NORMAL, null, null);
+        ArchivalFile visible2 = ingestAs(fx.editor, "public2.jpg", b("second visible file"), Restriction.NORMAL, null, null);
+        ArchivalFile secret = ingestAs(fx.admin, "secret.jpg", b("restricted file"), Restriction.RESTRICTED, null, null);
+        long v = Long.parseLong(visible.friendlyId().substring(1));
+        long v2 = Long.parseLong(visible2.friendlyId().substring(1));
+        long r = Long.parseLong(secret.friendlyId().substring(1));
+        long missing = r + 1000;
+
+        java.util.Map<String, java.util.function.LongFunction<String>> friendlyForms = new java.util.LinkedHashMap<>();
+        friendlyForms.put("canonical", ArchivalFileRepository::friendlyIdOf);
+        friendlyForms.put("short lower-case", n -> "f" + n);
+        friendlyForms.put("embedded", n -> "duplicate of F" + n + ", see notes");
+        for (var form : friendlyForms.entrySet()) {
+            String restrictedText = form.getValue().apply(r);
+            String missingText = form.getValue().apply(missing);
+            String visibleText = form.getValue().apply(v);
+            UUID cr = carrier(restrictedText);
+            UUID cm = carrier(missingText);
+            UUID cv = carrier(visibleText);
+            for (Actor reader : new Actor[]{fx.viewer, fx.editor}) {
+                Seen ofRestricted = seen(reader, cr, restrictedText);
+                assertThat(ofRestricted).as("%s: restricted and nonexistent look the same", form.getKey())
+                        .isEqualTo(seen(reader, cm, missingText)).isEqualTo(new Seen(false, false));
+                assertThat(seen(reader, cv, visibleText)).as("%s: an unrestricted File is shown", form.getKey())
+                        .isEqualTo(new Seen(true, true));
+            }
+            assertThat(seen(fx.admin, cr, restrictedText)).isEqualTo(new Seen(true, true));
+            assertThat(seen(fx.admin, cm, missingText)).isEqualTo(new Seen(true, true));
+        }
+
+        UUID missingId = UUID.randomUUID();
+        java.util.Map<String, java.util.function.Function<UUID, String>> uuidForms = new java.util.LinkedHashMap<>();
+        uuidForms.put("canonical", UUID::toString);
+        uuidForms.put("upper-case", u -> u.toString().toUpperCase(java.util.Locale.ROOT));
+        uuidForms.put("Arabic-Indic digits", u -> "see " + arabicDigits(u.toString()));
+        for (var form : uuidForms.entrySet()) {
+            String restrictedText = form.getValue().apply(secret.fileId());
+            String missingText = form.getValue().apply(missingId);
+            String visibleText = form.getValue().apply(visible.fileId());
+            UUID cr = carrier(restrictedText);
+            UUID cm = carrier(missingText);
+            UUID cv = carrier(visibleText);
+            for (Actor reader : new Actor[]{fx.viewer, fx.editor}) {
+                assertThat(seen(reader, cr, restrictedText)).as("%s UUID", form.getKey())
+                        .isEqualTo(seen(reader, cm, missingText)).isEqualTo(new Seen(false, false));
+                assertThat(seen(reader, cv, visibleText)).as("%s UUID of an unrestricted File", form.getKey())
+                        .isEqualTo(new Seen(true, true));
+            }
+        }
+
+        // Several identifiers in one text.
+        String bothVisible = "compare F" + v + " with F" + v2;
+        String withRestricted = "compare F" + v + " with F" + r;
+        String withMissing = "compare F" + v + " with F" + missing;
+        UUID c1 = carrier(bothVisible);
+        UUID c2 = carrier(withRestricted);
+        UUID c3 = carrier(withMissing);
+        for (Actor reader : new Actor[]{fx.viewer, fx.editor}) {
+            assertThat(seen(reader, c1, bothVisible)).isEqualTo(new Seen(true, true));
+            assertThat(seen(reader, c2, withRestricted)).isEqualTo(seen(reader, c3, withMissing)).isEqualTo(new Seen(false, false));
+        }
+
+        // A user-controlled field value (a corrected filename) behaves the same way.
+        ArchivalFile renamedR = ingestAs(fx.editor, "a.jpg", b("rename r"), Restriction.NORMAL, null, null);
+        ArchivalFile renamedM = ingestAs(fx.editor, "b.jpg", b("rename m"), Restriction.NORMAL, null, null);
+        fx.preservation().files().correct(fx.editor, renamedR.fileId(), renamedR.version(), "F" + r + ".jpg", 0,
+                Restriction.NORMAL, null);
+        fx.preservation().files().correct(fx.editor, renamedM.fileId(), renamedM.version(), "F" + missing + ".jpg", 0,
+                Restriction.NORMAL, null);
+        for (Actor reader : new Actor[]{fx.viewer, fx.editor}) {
+            boolean shownR = fx.services().history().forObject(reader, "archival_file", renamedR.fileId()).stream()
+                    .flatMap(x -> x.fieldChanges().stream()).anyMatch(x -> ("F" + r + ".jpg").equals(x.after()));
+            boolean shownM = fx.services().history().forObject(reader, "archival_file", renamedM.fileId()).stream()
+                    .flatMap(x -> x.fieldChanges().stream()).anyMatch(x -> ("F" + missing + ".jpg").equals(x.after()));
+            assertThat(shownR).isEqualTo(shownM).isFalse();
+        }
+    }
+
+    @Test
+    void gasP2_FV02_textWithoutIdentifiersAndReferencesToVisibleObjectsAreNotSuppressed() {
+        ArchivalFile visible = ingestAs(fx.editor, "public.jpg", b("visible"), Restriction.NORMAL, null, null);
+        ingestAs(fx.admin, "secret.jpg", b("secret"), Restriction.RESTRICTED, null, null);
+        List<String> ordinary = List.of("Moved to the Fairfax box, folder F-1990", "scanned 12 deeds at 600 dpi",
+                "see " + visible.friendlyId() + " and " + visible.fileId(), "content " + visible.contentId());
+        for (String text : ordinary) {
+            UUID c = carrier(text);
+            assertThat(seen(fx.viewer, c, text)).as(text).isEqualTo(new Seen(true, true));
+        }
+        assertThat(fx.services().history().forObject(fx.viewer, org.genealogyarchive.storage.StorageVolumeService.OBJECT_TYPE, fx.volumeId))
+                .as("non-File objects' identifiers stay visible")
+                .anyMatch(x -> x.fieldChanges().stream().anyMatch(c -> fx.volumeId.toString().equals(c.after())));
+    }
+
+    // ---- GAS-P2-FV03 (final verification): Unicode spellings cannot bypass the filter -----------------------
+
+    @Test
+    void gasP2_FV03_unicodeDigitSpellingsOfARestrictedFileAreWithheld() {
+        ArchivalFile secret = ingestAs(fx.editor, "later-restricted.jpg", b("unicode spelling"), Restriction.NORMAL, null, null);
+        String id = secret.fileId().toString();
+        StringBuilder fullWidth = new StringBuilder();
+        for (char c : id.toCharArray()) {
+            fullWidth.append(c >= '0' && c <= '9' ? (char) ('０' + (c - '0'))
+                    : c >= 'a' && c <= 'f' ? (char) ('ａ' + (c - 'a')) : c);
+        }
+        List<String> spellings = List.of(arabicDigits(id), fullWidth.toString(),
+                arabicDigits(id.substring(0, 18)) + id.substring(18), "ref:" + arabicDigits(id) + ";",
+                "xx" + arabicDigits(id) + "ff");
+        java.util.Map<String, UUID> carriers = new java.util.LinkedHashMap<>();
+        for (String s : spellings) {
+            if (!s.startsWith("ref") && !s.startsWith("xx")) {
+                assertThat(FileIdentifiers.uuid(s)).as("the web layer resolves %s", s).hasValue(secret.fileId());
+            }
+            carriers.put(s, carrier(s));
+        }
+        for (String s : spellings.subList(0, 4)) {
+            assertThat(seen(fx.viewer, carriers.get(s), s)).as("before restriction: %s", s).isEqualTo(new Seen(true, true));
+        }
+        restrict(secret);
+        for (String s : spellings) {
+            for (Actor reader : new Actor[]{fx.viewer, fx.editor}) {
+                assertThat(seen(reader, carriers.get(s), s)).as(s).isEqualTo(new Seen(false, false));
+            }
+            assertThat(seen(fx.admin, carriers.get(s), s)).isEqualTo(new Seen(true, true));
+        }
     }
 }

@@ -72,8 +72,8 @@ public record CoreServices(
         ChangeHistoryRepository historyRepository = new ChangeHistoryRepository(dataSource);
         ChangeRecorder recorder = new ChangeRecorder(historyRepository, clock);
         ArchivalFileRepository archivalFiles = new ArchivalFileRepository(dataSource);
-        // Restricted Files never appear in Change History for readers who may not see them (GAS-P2-003).
-        HistoryService history = new HistoryService(historyRepository, new RestrictedFileHistory(archivalFiles));
+        // Restricted Files never appear in Change History for readers who may not see them (GAS-P2-003, FV02).
+        HistoryService history = new HistoryService(historyRepository, new RestrictedFileHistory(archivalFiles, historyRepository));
         ArchiveInstanceRepository archiveRepository = new ArchiveInstanceRepository(dataSource);
         StorageVolumeRepository volumeRepository = new StorageVolumeRepository(dataSource);
         FriendlyIdSeriesRepository friendlyIds = new FriendlyIdSeriesRepository(dataSource);

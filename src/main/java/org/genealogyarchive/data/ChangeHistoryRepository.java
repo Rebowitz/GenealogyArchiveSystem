@@ -73,6 +73,20 @@ public final class ChangeHistoryRepository {
                 """).param("limit", limit).query((rs, n) -> row(rs)).list());
     }
 
+    /**
+     * Of the given ids, those of objects other than Archival Files that have Change History (archive,
+     * volumes, users): identifiers a reader legitimately sees in history values (GAS-P2-FV02).
+     */
+    public java.util.Set<UUID> historyObjectsOtherThan(String objectType, java.util.Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return java.util.Set.of();
+        }
+        return new java.util.HashSet<>(jdbc.sql("""
+                SELECT DISTINCT object_id FROM gas.change_history WHERE object_type <> :type AND object_id IN (:ids)
+                """).param("type", objectType).param("ids", List.copyOf(ids))
+                .query((rs, n) -> Rows.uuid(rs, "object_id")).list());
+    }
+
     public long count() {
         return jdbc.sql("SELECT count(*) FROM gas.change_history").query(Long.class).single();
     }

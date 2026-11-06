@@ -1,7 +1,8 @@
 # ADR-0009: File preservation — ingestion, operations, recovery, integrity and repair
 
 Status: Implemented for Phase 2 review (owner decisions P2-A … P2-K, B1 … B5), revised for the independent
-Phase 2 audit (GAS-P2-001 … GAS-P2-011) and its re-audit (GAS-P2-R01, GAS-P2-R02); see
+Phase 2 audit (GAS-P2-001 … GAS-P2-011), its re-audit (GAS-P2-R01, GAS-P2-R02) and final verification
+(GAS-P2-FV01 … FV03); see
 `docs/PHASE-2-AUDIT-CORRECTIONS.md`. Not yet accepted.
 
 ## Context
@@ -105,6 +106,12 @@ workers from driving the same operation.
   (interrupted moves are settled first). `BYTES_REMOVED` is recorded only after re-checking that none of
   those locations still holds bytes; otherwise the operation stays `CLEANUP_INCOMPLETE` and names what
   remains. Destroyed generations keep their quarantine path on record.
+- Physical-copy accounting (GAS-P2-FV01): every copy is accounted in exactly one place at every moment -
+  a content generation, the quarantine ledger, or the operation that owns it (`target_created`, set right
+  after its exclusive create). Ownership ends only in the same transaction that records where the copy
+  went: a confirmed quarantine move (or `SOURCE_ABSENT`), or destruction's verified removal. So a copy an
+  operation creates again at a location an earlier move vacated is owned again, and an object that appears
+  at a vacated location is not. A repair never writes a copy of content being destroyed.
 - Unfinished repairs of the content are part of that accounting (GAS-P2-R01). Removal first takes the lock
   of every unfinished operation on the content and of every owner of an unsettled quarantine move of it
   (if one is busy, removal waits and is retried), then stops each unfinished repair (`CANCELLED`, with the
@@ -135,10 +142,16 @@ answers exactly as for a nonexistent File.
   covers entries written before a File was restricted): entries about a restricted File are removed, and in
   the remaining entries a field or reason naming a restricted File (UUID or friendly ID) or content it
   uses is withheld - absent, exactly as if it had never been recorded. References are recognised by the
-  same rules that resolve File identifiers (`FileIdentifiers`, GAS-P2-R02): friendly IDs in any case and
-  with any number of leading zeros (`F00001`, `f00001`, `F1`), UUIDs in every spelling the web layer
-  accepts (any case, abbreviated groups), alone or embedded in text. Text that resolves to no hidden File
-  is never withheld.
+  same rules that resolve File identifiers (`FileIdentifiers`, GAS-P2-R02, GAS-P2-FV03), which are also the
+  web layer's UUID conversion: friendly IDs in any case and with any number of leading zeros (`F00001`,
+  `f00001`, `F1`); UUIDs in every spelling `UUID.fromString` accepts (any case, abbreviated or over-long
+  groups, any Unicode decimal digit, full-width letters), alone or embedded in text.
+- **No existence oracle (GAS-P2-FV02):** a value or reason is withheld when an identifier written in it as
+  a whole names nothing the reader may see - a restricted File and a nonexistent File are treated
+  identically - or when any embedded spelling is a restricted File's (or its content's) UUID. Writing a
+  guessed identifier into a reason or filename therefore shows the same result whether or not a
+  restricted File has it. References to unrestricted Files, their content, and other objects with history
+  (archive, volumes, users) are shown; text without identifiers is never affected.
 - **Inheritance (GAS-P2-004)** is a database invariant (V0014 triggers): restricting a File restricts every
   derivative at every depth in the same statement; a derivation recorded under a restricted parent
   (including one committed concurrently, ordered by a row lock) is restricted; a derivative of a

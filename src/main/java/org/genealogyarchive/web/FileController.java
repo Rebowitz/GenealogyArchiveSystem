@@ -324,10 +324,11 @@ public class FileController {
     }
 
     private static UUID uuid(String header) {
-        try {
-            return header == null || header.isBlank() ? null : UUID.fromString(header.strip());
-        } catch (IllegalArgumentException e) {
-            throw new NotFoundException("The parent file");
+        if (header == null || header.isBlank()) {
+            return null;
         }
+        // GAS-P2-FV03: the same UUID definition as every other identifier the application accepts.
+        return org.genealogyarchive.preservation.FileIdentifiers.uuid(header)
+                .orElseThrow(() -> new NotFoundException("The parent file"));
     }
 }

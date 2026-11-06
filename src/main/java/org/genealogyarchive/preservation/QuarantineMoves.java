@@ -26,6 +26,9 @@ import java.util.UUID;
  *   <li>both absent: record SOURCE_ABSENT (nothing to account for);</li>
  *   <li>both present: something unexplained is in the way; fail visibly, touch nothing.</li>
  * </ul>
+ * Confirming a move also ends the moving operation's ownership of the vacated location in the same
+ * transaction (GAS-P2-FV01): the copy is then accounted by the ledger, and a copy the operation later
+ * creates at the same location is owned again from its exclusive create.
  */
 final class QuarantineMoves {
 
@@ -78,7 +81,14 @@ final class QuarantineMoves {
             outcome = QuarantineRepository.State.SOURCE_ABSENT;
             detail = "nothing was found at " + entry.sourcePath() + " or in quarantine";
         }
-        ctx.quarantine().setState(entry.quarantineId(), QuarantineRepository.State.INTENDED, outcome, detail);
+        // GAS-P2-FV01: the object's new location (or its absence) and the end of the operation's ownership of
+        // the place it left are recorded together. The operation owns whatever it creates there later.
+        QuarantineRepository.State settled = outcome;
+        ctx.tx().executeWithoutResult(status -> {
+            if (ctx.quarantine().setState(entry.quarantineId(), QuarantineRepository.State.INTENDED, settled, detail)) {
+                ctx.operations().releaseTarget(entry.operationId(), entry.sourcePath());
+            }
+        });
         return ctx.quarantine().find(entry.volumeId(), entry.quarantinePath()).orElseThrow();
     }
 

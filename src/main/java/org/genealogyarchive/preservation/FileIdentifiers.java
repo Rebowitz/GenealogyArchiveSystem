@@ -9,26 +9,28 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
- * The one definition of which spellings identify an Archival File (GAS-P2-R02). Everything that accepts
- * a File identifier - the friendly-ID lookup and UUID request parameters - and everything that must
- * recognise one - Change History authorization - uses these rules, so a reference the application would
- * resolve can never escape the history filter.
+ * The one definition of which spellings identify an Archival File (GAS-P2-R02, GAS-P2-FV03). The
+ * friendly-ID lookup, every UUID request parameter (the web layer's String-to-UUID conversion is this
+ * class, see {@code IdentifierConversion}) and Change History authorization all use these rules, so a
+ * spelling the application resolves is always recognised as a reference.
  * <ul>
- *   <li>Friendly ID: as accepted by the lookup - surrounding whitespace ignored, letters in any case, any
- *       number of leading zeros ({@code F00042}, {@code f00042}, {@code F42}, {@code f42}).</li>
- *   <li>UUID: as accepted for request parameters ({@code java.util.UUID.fromString} after trimming, the
- *       conversion Spring applies) - any case and the abbreviated forms it accepts.</li>
+ *   <li><b>Friendly ID</b> - unchanged from the lookup's earlier behaviour: surrounding whitespace ignored,
+ *       letters in any case, ASCII digits with any number of leading zeros ({@code F00042}, {@code f42}).
+ *       Other scripts' digits were never accepted and still are not.</li>
+ *   <li><b>UUID</b> - unchanged from Spring's earlier conversion ({@code UUID.fromString} after trimming):
+ *       any case, abbreviated groups, a leading {@code +} on a group, over-long groups (the JDK keeps the
+ *       low-order digits), and any Unicode decimal digit or full-width Latin letter that
+ *       {@link Character#digit(char, int)} accepts. Narrowing this would change which URLs resolve, so it
+ *       is kept; reference detection instead covers all of it (FV03).</li>
  * </ul>
  */
 public final class FileIdentifiers {
 
-    /** Runs of characters that can belong to an identifier spelling; anything else separates them. */
-    private static final Pattern TOKEN = Pattern.compile("[A-Za-z0-9+-]+");
     private static final int UUID_GROUPS = 5;
+    /** {@code UUID.fromString} refuses longer input. */
+    private static final int UUID_MAX_LENGTH = 36;
 
     private FileIdentifiers() {
     }
@@ -46,49 +48,112 @@ public final class FileIdentifiers {
         }
     }
 
-    /** The UUID a request parameter resolves to, exactly as the web layer converts it. */
+    /** The UUID a request parameter resolves to; the web layer converts with exactly this. */
     public static Optional<UUID> uuid(String text) {
-        if (text == null || text.isBlank()) {
+        if (text == null) {
+            return Optional.empty();
+        }
+        String t = text.trim();
+        if (t.isEmpty() || t.length() > UUID_MAX_LENGTH) {
             return Optional.empty();
         }
         try {
-            return Optional.of(UUID.fromString(text.strip()));
+            return Optional.of(UUID.fromString(t));
         } catch (IllegalArgumentException e) {
             return Optional.empty();
         }
     }
 
-    /** Identifiers that text refers to, by the rules above. */
-    public record References(Set<UUID> uuids, Set<Long> friendlyNumbers) {
+    /**
+     * Identifiers that text refers to, by the rules above.
+     *
+     * @param uuids           every UUID any substring of the text resolves to (complete: used to withhold
+     *                        any text that contains a hidden File's identifier in any spelling)
+     * @param primaryUuids    UUIDs written as a whole, delimited identifier - a maximal run of identifier
+     *                        characters that resolves as it stands (what a reader takes to be "the" UUID)
+     * @param friendlyNumbers friendly numbers written as a whole, delimited identifier
+     */
+    public record References(Set<UUID> uuids, Set<UUID> primaryUuids, Set<Long> friendlyNumbers) {
         public boolean isEmpty() {
             return uuids.isEmpty() && friendlyNumbers.isEmpty();
         }
     }
 
     /**
-     * Every File identifier spelling embedded in free text: each run of letters, digits, '+' and '-' is
-     * tried whole, each of its parts between '+' and '-' is tried as a friendly ID, and each window of
-     * five consecutive hyphen-separated parts as a UUID. Ordinary words never resolve, so they are never reported.
+     * Every File identifier spelling contained in text.
+     * <ul>
+     *   <li>Friendly IDs: each maximal run of letters and digits (any script) that the lookup resolves.</li>
+     *   <li>UUIDs: every substring the UUID conversion resolves. Such a substring consists only of
+     *       characters {@link Character#digit(char, int)} accepts in base 16, {@code +} and {@code -}, so
+     *       each maximal run of those is examined: every five consecutive hyphen-separated groups, with
+     *       every suffix of the first group and every prefix of the last (groups in between are whole).
+     *       A run that resolves as a whole is also a primary reference.</li>
+     * </ul>
+     * Text that resolves to nothing yields no references.
      */
     public static References referencesIn(String text) {
         Set<UUID> uuids = new LinkedHashSet<>();
+        Set<UUID> primary = new LinkedHashSet<>();
         Set<Long> numbers = new LinkedHashSet<>();
         if (text == null || text.isEmpty()) {
-            return new References(uuids, numbers);
+            return new References(uuids, primary, numbers);
         }
-        Matcher m = TOKEN.matcher(text);
-        while (m.find()) {
-            String token = m.group();
-            friendlyNumber(token).ifPresent(numbers::add);
-            uuid(token).ifPresent(uuids::add);
-            for (String part : token.split("[+-]")) {
-                friendlyNumber(part).ifPresent(numbers::add);
+        int i = 0;
+        while (i < text.length()) {
+            if (!Character.isLetterOrDigit(text.charAt(i))) {
+                i++;
+                continue;
             }
-            String[] parts = token.split("-", -1);
-            for (int i = 0; i + UUID_GROUPS <= parts.length; i++) {
-                uuid(String.join("-", java.util.Arrays.copyOfRange(parts, i, i + UUID_GROUPS))).ifPresent(uuids::add);
+            int j = i;
+            while (j < text.length() && Character.isLetterOrDigit(text.charAt(j))) {
+                j++;
+            }
+            friendlyNumber(text.substring(i, j)).ifPresent(numbers::add);
+            i = j;
+        }
+        i = 0;
+        while (i < text.length()) {
+            if (!uuidChar(text.charAt(i))) {
+                i++;
+                continue;
+            }
+            int j = i;
+            while (j < text.length() && uuidChar(text.charAt(j))) {
+                j++;
+            }
+            String run = text.substring(i, j);
+            uuid(run).ifPresent(primary::add);
+            uuidsIn(run, uuids);
+            i = j;
+        }
+        uuids.addAll(primary);
+        return new References(uuids, primary, numbers);
+    }
+
+    private static boolean uuidChar(char c) {
+        return c == '-' || c == '+' || Character.digit(c, 16) >= 0;
+    }
+
+    private static void uuidsIn(String run, Set<UUID> out) {
+        String[] groups = run.split("-", -1);
+        for (int g = 0; g + UUID_GROUPS <= groups.length; g++) {
+            String first = groups[g];
+            String last = groups[g + UUID_GROUPS - 1];
+            String middle = String.join("-", groups[g + 1], groups[g + 2], groups[g + 3]);
+            if (middle.length() + 4 > UUID_MAX_LENGTH) {
+                continue;
+            }
+            // Only the last 36 characters of the first group and the first 36 of the last can fit.
+            for (int s = Math.max(0, first.length() - UUID_MAX_LENGTH); s < first.length(); s++) {
+                String head = first.substring(s);
+                for (int p = Math.min(last.length(), UUID_MAX_LENGTH); p > 0; p--) {
+                    int length = head.length() + middle.length() + p + 2;
+                    if (length > UUID_MAX_LENGTH) {
+                        continue;
+                    }
+                    uuid(head + "-" + middle + "-" + last.substring(0, p)).ifPresent(out::add);
+                }
             }
         }
-        return new References(uuids, numbers);
     }
 }

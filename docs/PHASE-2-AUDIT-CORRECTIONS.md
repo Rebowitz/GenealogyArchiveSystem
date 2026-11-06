@@ -58,6 +58,24 @@ Known consequence (by design, R02): because `F1` is a valid File identifier, a r
 standalone token `F1` (or `f1`) is withheld from non-Administrators when File F00001 is restricted, even if
 the writer meant something else. Only tokens that resolve to a currently restricted File are withheld.
 
+## Final verification corrections (audited revision `c58e6cd92602ba0a3a5f76657dc5230d8522a6a6`)
+
+Codex reported two MAJOR findings (FV01, FV02) and one MINOR (FV03). The thirteen earlier corrections and
+their tests are kept; no schema change (no new migration).
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **GAS-P2-FV01** (MAJOR) a recreated copy at a vacated target was ignored by destruction | Replaced R01's "moved away" special case with one accounting rule: a copy is accounted by a generation, the quarantine ledger, or its owning operation (`target_created`), and ownership ends only in the transaction that records where the copy went. `QuarantineMoves.settle` confirms a move and releases the mover's ownership of the vacated location together (`FileOperationRepository.releaseTarget`); the worker re-reads the operation after settling, so an object appearing at a vacated location is a `COLLISION`, never adopted; destruction counts every owned target and releases ownership in its completion transaction; a repair never writes a copy of content in `DESTROY_PENDING`/`DESTROYED`. | `Phase2AuditCorrectionsIT.gasP2_FV01_aCopyRecreatedWhereARecordedMoveVacatedIsRemovedByDestruction` (the audit's sequence), `…AfterAnUnconfirmedMoveWasSettled…`, `…AnUnconfirmedMoveSettledByDestructionLeavesNothingAndNoRepairWritesAgain`, `…AnUnknownObjectAtAVacatedTargetIsNeitherAdoptedNorRemoved`, `…CleanupInterruptedAfterEachRemovalNeverReportsCompletionEarly` (stop after the 1st, 2nd and 3rd removal). Each step checks the invariants independently: every object under `originals/`/`quarantine/` is accounted for, and `BYTES_REMOVED` never coexists with a remaining copy. |
+| **GAS-P2-FV02** (MAJOR) redaction revealed whether a guessed identifier was a restricted File | `RestrictedFileHistory` now decides by what the reader may see, not by what is hidden: a value or reason is withheld when an identifier written in it as a whole (friendly ID, delimited UUID) names no unrestricted File, content of only unrestricted Files, or other object with history - so a restricted and a nonexistent identifier give identical results - and also when any embedded spelling is a restricted File's (or its content's) UUID. | `gasP2_FV02_aGuessedIdentifierLooksTheSameWhetherItsFileIsRestrictedOrDoesNotExist` (restricted vs nonexistent vs unrestricted; canonical, short, embedded friendly IDs; canonical, upper-case, Arabic-Indic UUIDs; several identifiers in one text; a user-chosen filename; per-object and global; Viewer and Editor; Administrator sees all), `…TextWithoutIdentifiersAndReferencesToVisibleObjectsAreNotSuppressed` |
+| **GAS-P2-FV03** (MINOR) Unicode-digit UUIDs bypassed reference detection | Compatibility assessed: the JDK (and so Spring's conversion) has always resolved UUIDs written with any Unicode decimal digit or full-width letter, so URLs using them keep working. `FileIdentifiers.uuid` is now the web layer's String-to-UUID conversion (`IdentifierConversion`, same results as Spring's default) and the parsed-header path, and reference detection finds every substring that conversion resolves (any script, glued or over-long groups). Friendly IDs stay ASCII, as the lookup always required. | `FileIdentifiersTest.gasP2_FV03_*` (Arabic-Indic, Extended Arabic-Indic, Devanagari, Malayalam, full-width digits and letters, mixed scripts, Cyrillic/Greek look-alikes, Unicode hyphen, over-long groups, and a seeded generator checking every resolvable substring of 400 mixed texts); `IdentifierConversionTest` (agrees with Spring's default conversion); `FileWebIT.gasP2_FV03_aUnicodeDigitSpellingInTheUrlResolvesAsBeforeAndStillHidesRestrictedFiles`; `Phase2AuditCorrectionsIT.gasP2_FV03_unicodeDigitSpellingsOfARestrictedFileAreWithheld` |
+
+Consequences, by design: (FV02) text naming a File identifier that resolves to no visible File - including a
+nonexistent one such as a filename `F1.jpg` before any F00001 exists, or an unrelated UUID typed into a
+reason - is withheld from non-Administrators. (FV02) The embedded-spelling rule can only be triggered by
+someone who already knows a restricted File's UUID (UUIDs cannot be guessed); such a person already sees
+"not found" on that File's page, so history reveals nothing more. Content shared by a restricted and an
+unrestricted File stays withheld (GAS-P2-003 behaviour, unchanged).
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

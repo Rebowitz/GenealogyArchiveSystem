@@ -149,6 +149,14 @@ public final class OperationProcessor {
     // ---- PROMOTING ----------------------------------------------------------------------------
 
     private boolean promote(FileOperation op, Runnable guard) {
+        if (op.kind() == OperationKind.REPAIR) {
+            ContentState state = ctx.contents().find(op.contentId()).map(FileContent::state).orElse(ContentState.DESTROYED);
+            if (state == ContentState.DESTROY_PENDING || state == ContentState.DESTROYED) {
+                // GAS-P2-FV01: never write a new copy of content being destroyed; the destruction stops this
+                // repair under its lock and accounts for anything it already created.
+                return false;
+            }
+        }
         ManagedVolume volume;
         try {
             volume = ctx.openVolume(op.volumeId());
@@ -184,6 +192,8 @@ public final class OperationProcessor {
                 } catch (IOException e) {
                     return ioProblem(op, e);
                 }
+                // GAS-P2-FV01: settling released the operation's ownership of the location it vacated.
+                op = ctx.operations().find(op.operationId()).orElseThrow();
             }
         }
 
