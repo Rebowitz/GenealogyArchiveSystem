@@ -333,7 +333,13 @@ public final class OperationProcessor {
             } catch (ManagedVolume.VolumeUnavailableException | IOException e) {
                 continue;
             }
-            if (!SafeFiles.isReadOnly(existing)) {
+            boolean wasProtected;
+            try {
+                wasProtected = SafeFiles.isReadOnly(existing);
+            } catch (IOException e) {
+                continue;
+            }
+            if (!wasProtected) {
                 ctx.integrity().insertFindingIfNew(null, new IntegrityRepository.NewFinding(FindingKind.NOT_PROTECTED,
                         candidate.volumeId(), candidate.contentId(), candidate.currentGeneration(),
                         candidate.currentPath().value(), op.operationId(), null, null,
@@ -342,14 +348,14 @@ public final class OperationProcessor {
                 try {
                     ctx.faults().reach(FaultPoints.Point.BEFORE_PROTECT, op.operationId());
                     SafeFiles.makeReadOnly(existing);
+                    if (!SafeFiles.isReadOnly(existing)) {
+                        return block(op, BlockedReason.PROTECTION, "The identical stored original " + candidate.currentPath().value()
+                                + " is still not protected read-only. The upload is not reported as archived.");
+                    }
                 } catch (IOException e) {
                     return block(op, BlockedReason.PROTECTION, "The identical stored original " + candidate.currentPath().value()
                             + " is not protected read-only and protection could not be re-applied ("
                             + e.getClass().getSimpleName() + "). The upload is not reported as archived.");
-                }
-                if (!SafeFiles.isReadOnly(existing)) {
-                    return block(op, BlockedReason.PROTECTION, "The identical stored original " + candidate.currentPath().value()
-                            + " is still not protected read-only. The upload is not reported as archived.");
                 }
             }
             guard.run();
