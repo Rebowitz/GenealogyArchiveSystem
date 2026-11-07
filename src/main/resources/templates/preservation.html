@@ -10,7 +10,8 @@
         <p th:text="${status.ingestion()}">ingestion</p>
         <p>Blocked: <span th:text="${status.blocked()}">0</span> &middot; Waiting for volume: <span th:text="${status.waiting()}">0</span>
             &middot; Cleanup incomplete: <span th:text="${status.cleanupIncomplete()}">0</span>
-            &middot; Open integrity findings: <span th:text="${status.openFindings()}">0</span></p>
+            &middot; Open integrity findings: <span th:text="${status.openFindings()}">0</span>
+            &middot; Unresolved objects: <span th:text="${status.unresolvedObjects()}">0</span></p>
     </section>
     <section>
         <h2>Storage volumes</h2>
@@ -64,6 +65,35 @@
                     <a th:href="@{/preservation/contents/{c}/repair(c=${x.contentId()})}">Repair</a></td>
                 <td th:if="${x.contentId() == null and x.operationId() != null}">
                     <a th:href="@{/preservation/operations/{o}(o=${x.operationId()})}">Operation</a></td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+    <section>
+        <h2>Unresolved objects</h2>
+        <p class="muted">Objects at archive locations that the archive cannot identify as its own copy. They are never
+            moved or deleted automatically. Inspect each on its volume, then attest that it is the archive's copy (it is
+            moved to quarantine, or removed by a pending destruction, only while it still has the SHA-256 shown) or
+            release it as not the archive's (it stays where it is).</p>
+        <p class="muted" th:if="${#lists.isEmpty(unresolved)}">None.</p>
+        <table class="list" th:unless="${#lists.isEmpty(unresolved)}">
+            <thead><tr><th>Found</th><th>Kind</th><th>Location</th><th>Observed</th><th>Detail</th><th></th></tr></thead>
+            <tbody>
+            <tr th:each="u : ${unresolved}">
+                <td th:text="${u.detectedAt()}">when</td><td th:text="${u.kind()}">kind</td>
+                <td><code th:text="${u.path()}">path</code></td>
+                <td><span th:if="${u.observedSha256() != null}" th:text="${u.observedSize()} + ' bytes, SHA-256 ' + ${u.observedSha256()}">-</span>
+                    <strong th:if="${u.attested()}">Attested</strong></td>
+                <td th:text="${u.detail()}">detail</td>
+                <td>
+                    <form th:action="@{/preservation/unresolved/{id}/attest(id=${u.unresolvedId()})}" method="post" class="inline"
+                          th:if="${u.observedSha256() != null and !u.attested()}">
+                        <input type="text" name="reason" maxlength="2000" required placeholder="Reason">
+                        <button type="submit">Attest: archive's copy</button></form>
+                    <form th:action="@{/preservation/unresolved/{id}/release(id=${u.unresolvedId()})}" method="post" class="inline">
+                        <input type="text" name="reason" maxlength="2000" required placeholder="Reason">
+                        <button type="submit">Release: not the archive's</button></form>
+                </td>
             </tr>
             </tbody>
         </table>

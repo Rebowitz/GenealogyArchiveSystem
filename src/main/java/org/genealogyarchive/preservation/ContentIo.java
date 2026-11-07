@@ -111,6 +111,40 @@ final class ContentIo {
         }
     }
 
+    /**
+     * Whether every byte of {@code candidate} equals the byte at the same position of {@code full}, and
+     * {@code candidate} is no longer than {@code full}: the object is a (possibly complete) prefix of the bytes
+     * an operation was copying from {@code full}.
+     */
+    static boolean isPrefixOf(Path candidate, Path full) throws IOException {
+        try (FileChannel c = SafeFiles.openForRead(candidate); FileChannel f = SafeFiles.openForRead(full)) {
+            if (c.size() > f.size()) {
+                return false;
+            }
+            ByteBuffer bc = ByteBuffer.allocate(CHUNK);
+            ByteBuffer bf = ByteBuffer.allocate(CHUNK);
+            while (true) {
+                bc.clear();
+                int nc = readFully(c, bc);
+                if (nc <= 0) {
+                    // Every byte of the candidate was read and matched (bytes it gained while being read included).
+                    return true;
+                }
+                bf.clear();
+                bf.limit(nc);
+                int nf = readFully(f, bf);
+                if (nf != nc) {
+                    return false;
+                }
+                bc.flip();
+                bf.flip();
+                if (!bc.equals(bf)) {
+                    return false;
+                }
+            }
+        }
+    }
+
     private static int readFully(FileChannel channel, ByteBuffer buffer) throws IOException {
         int total = 0;
         while (buffer.hasRemaining()) {

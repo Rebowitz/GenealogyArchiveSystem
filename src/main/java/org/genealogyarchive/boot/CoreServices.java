@@ -86,7 +86,8 @@ public record CoreServices(
         JobQueue jobs = new JobQueue(jobRepository, clock);
         PreservationContext preservationContext = new PreservationContext(new FileOperationRepository(dataSource),
                 new FileContentRepository(dataSource), archivalFiles,
-                new IntegrityRepository(dataSource), new QuarantineRepository(dataSource), archiveRepository, volumeRepository, friendlyIds,
+                new IntegrityRepository(dataSource), new QuarantineRepository(dataSource),
+                new org.genealogyarchive.data.UnresolvedObjectRepository(dataSource), archiveRepository, volumeRepository, friendlyIds,
                 new OperationLocks(dataSource), tx, recorder, jobs, roots, fileSettings, clock, faults);
         return new CoreServices(
                 systemStatus,

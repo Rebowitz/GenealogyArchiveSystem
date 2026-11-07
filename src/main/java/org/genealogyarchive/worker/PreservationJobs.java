@@ -69,6 +69,11 @@ public class PreservationJobs {
     }
 
     @Bean
+    JobHandler quarantineAttestedHandler(PreservationServices p) {
+        return handler(PreservationContext.JOB_QUARANTINE_ATTESTED, (id, e) -> p.unresolved().quarantineAttested(id));
+    }
+
+    @Bean
     JobHandler reverifyHandler(PreservationServices p) {
         return handler(PreservationContext.JOB_REVERIFY, (id, e) -> p.integrity().reverify(id,
                 PreservationContext.fieldFromPayload(e.job().payloadJson(), "by")));

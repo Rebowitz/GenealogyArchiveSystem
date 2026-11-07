@@ -183,14 +183,50 @@ class RecoveryIT {
     }
 
     @Test
-    void cancellingABlockedOperationQuarantinesItsUncommittedCopyInTheWorker() throws Exception {
+    void cancellingAWaitingOperationQuarantinesItsVerifiedUncommittedCopyInTheWorker() throws Exception {
         byte[] bytes = content("cancel me");
         UUID id = fx.receive(fx.editor, "k.tif", bytes).operationId();
         fx.faults.arm(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT, op -> {
             throw new ScriptedFaults.SimulatedCrash(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT);
         });
         assertThatThrownBy(() -> fx.process(id)).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
-        // Simulate damage to the promoted copy so verification blocks.
+        // The volume goes away before the commit: the operation waits, owning its verified copy.
+        fx.servicesWithRoot(temp.resolve("away")).preservation().processor().process(id, () -> { });
+        assertThat(fx.operation(id).state()).isEqualTo(OperationState.WAITING_FOR_VOLUME);
+        Path target = PortableRelativePath.of(fx.operation(id).targetPath()).toNative(fx.volumeRoot);
+
+        fx.preservation().operations().cancel(fx.admin, id);
+        assertThat(fx.operation(id).state()).as("the web side only records the request").isEqualTo(OperationState.WAITING_FOR_VOLUME);
+        assertThat(Files.exists(target)).isTrue();
+
+        assertThat(fx.preservation().operations().performCancel(id, "admin1")).isTrue();
+        FileOperation cancelled = fx.operation(id);
+        assertThat(cancelled.state()).isEqualTo(OperationState.CANCELLED);
+        assertThat(Files.exists(target)).isFalse();
+        Path quarantined = PortableRelativePath.of(cancelled.quarantinePath()).toNative(fx.volumeRoot);
+        assertThat(quarantined).hasBinaryContent(bytes);
+        assertThat(fx.preservation().context().quarantine().forOperation(id)).singleElement().satisfies(e -> {
+            assertThat(e.basis()).isEqualTo(org.genealogyarchive.data.QuarantineRepository.Basis.OPERATION_COPY_VERIFIED);
+            assertThat(e.state()).isEqualTo(org.genealogyarchive.data.QuarantineRepository.State.QUARANTINED);
+        });
+        assertThat(cancelled.fileId()).isNull();
+        assertThat(cancelled.targetCreated()).isFalse();
+        assertThat(count(fx.staging)).isZero();
+    }
+
+    /**
+     * V0018 audit, finding 1: the claim says only that the operation once created a copy there. An object that is
+     * not that copy (here: rewritten after the copy was verified) is never moved, adopted or deleted - not by
+     * promotion, cancellation, recovery or destruction. It is left in place and recorded as unresolved.
+     */
+    @Test
+    void cancellingNeverMovesAReplacementOfItsUncommittedCopy() throws Exception {
+        byte[] bytes = content("cancel me, replaced");
+        UUID id = fx.receive(fx.editor, "k.tif", bytes).operationId();
+        fx.faults.arm(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT, op -> {
+            throw new ScriptedFaults.SimulatedCrash(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT);
+        });
+        assertThatThrownBy(() -> fx.process(id)).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         Path target = PortableRelativePath.of(fx.operation(id).targetPath()).toNative(fx.volumeRoot);
         SafeFiles.clearReadOnly(target);
         Files.write(target, new byte[]{1, 2, 3});
@@ -199,16 +235,22 @@ class RecoveryIT {
         assertThat(fx.operation(id).blockedReason()).isEqualTo(BlockedReason.VERIFY_MISMATCH);
 
         fx.preservation().operations().cancel(fx.admin, id);
-        assertThat(fx.operation(id).state()).as("the web side only records the request").isEqualTo(OperationState.BLOCKED);
-        assertThat(Files.exists(target)).isTrue();
-
         assertThat(fx.preservation().operations().performCancel(id, "admin1")).isTrue();
         FileOperation cancelled = fx.operation(id);
         assertThat(cancelled.state()).isEqualTo(OperationState.CANCELLED);
-        assertThat(Files.exists(target)).isFalse();
-        assertThat(Files.exists(PortableRelativePath.of(cancelled.quarantinePath()).toNative(fx.volumeRoot))).isTrue();
-        assertThat(cancelled.fileId()).isNull();
-        assertThat(count(fx.staging)).isZero();
+        assertThat(cancelled.message()).contains("not shown to be the copy this operation created", "left untouched");
+        assertThat(target).as("left exactly where it is").hasBinaryContent(new byte[]{1, 2, 3});
+        assertThat(cancelled.quarantinePath()).isNull();
+        assertThat(cancelled.targetCreated()).as("the claim became an unresolved record").isFalse();
+        var unresolved = fx.preservation().context().unresolved().openAt(fx.volumeId, cancelled.targetPath()).orElseThrow();
+        assertThat(unresolved.kind()).isEqualTo(org.genealogyarchive.data.UnresolvedObjectRepository.Kind.OPERATION_COPY);
+        assertThat(unresolved.operationId()).isEqualTo(id);
+        assertThat(fx.preservation().context().quarantine().forOperation(id)).isEmpty();
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().recovery().runOnce();
+            assertThat(target).hasBinaryContent(new byte[]{1, 2, 3});
+            assertThat(fx.preservation().context().unresolved().openAt(fx.volumeId, cancelled.targetPath())).isPresent();
+        }
     }
 
     @Test

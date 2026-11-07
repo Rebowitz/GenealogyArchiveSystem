@@ -50,7 +50,7 @@ class Phase2SchemaIT {
         SchemaMigrator.MigrationReport report = current.migrate();
 
         assertThat(report.fromVersion()).isEqualTo("0008");
-        assertThat(report.migrationsApplied()).as("V0009-V0018").isEqualTo(10);
+        assertThat(report.migrationsApplied()).as("V0009-V0019").isEqualTo(11);
         assertThat(current.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
         assertThat(new PostMigrationValidator(ds, current).validate()).isEmpty();
     }
@@ -93,7 +93,7 @@ class Phase2SchemaIT {
         execute("INSERT INTO storage_volume (volume_id, name, purpose, required) VALUES ('" + VOLUME + "', 'v', 'originals', true)");
         operationClaiming("22222222-2222-4222-8222-222222222222", "originals/aa/bb/one.g2");
         new SchemaMigrator(ds).migrate();
-        assertThat(version()).isEqualTo("0018");
+        assertThat(version()).isEqualTo("0019");
         try (Connection c = ds.getConnection(); Statement st = c.createStatement();
              ResultSet rs = st.executeQuery("SELECT owner_kind, operation_id FROM gas.physical_location_owner")) {
             assertThat(rs.next()).isTrue();
@@ -138,7 +138,51 @@ class Phase2SchemaIT {
         }
         execute("UPDATE file_operation SET target_created = false WHERE operation_id = '" + unrecorded + "'");
         new SchemaMigrator(ds).migrate();
-        assertThat(version()).isEqualTo("0018");
+        assertThat(version()).isEqualTo("0019");
+    }
+
+    /**
+     * V0019 (V0018 audit): an existing V0018 installation upgrades. Every quarantine move recorded before it is
+     * UNTRUSTED (its hash was an observation of whatever was at the source), a legacy QUARANTINE_PENDING
+     * generation is kept as it is, and the database refuses an UNRESOLVED generation without an open record.
+     */
+    @Test
+    void anExistingV0018InstallationUpgradesAndEarlierMoveEvidenceIsUntrusted() throws Exception {
+        SchemaMigrator.upTo(ds, "0018").migrate();
+        String operation = "22222222-2222-4222-8222-222222222222";
+        String content = "44444444-4444-4444-8444-444444444444";
+        execute("INSERT INTO storage_volume (volume_id, name, purpose, required) VALUES ('" + VOLUME + "', 'v', 'originals', true)");
+        execute("INSERT INTO file_operation (operation_id, kind, state, actor_kind, actor_label, volume_id) VALUES ('"
+                + operation + "', 'REPAIR', 'COMMITTED', 'SYSTEM', 'legacy', '" + VOLUME + "')");
+        execute("INSERT INTO file_content (content_id, volume_id, byte_size, sha256, state, created_by_operation) VALUES ('"
+                + content + "', '" + VOLUME + "', 3, decode(repeat('ab', 32), 'hex'), 'ACTIVE', '" + operation + "')");
+        execute("INSERT INTO file_content_generation (content_id, generation, volume_id, storage_path, state, operation_id) "
+                + "VALUES ('" + content + "', 1, '" + VOLUME + "', 'originals/44/44/c.g1', 'QUARANTINE_PENDING', '" + operation + "')");
+        execute("INSERT INTO file_content_generation (content_id, generation, volume_id, storage_path, state, operation_id) "
+                + "VALUES ('" + content + "', 2, '" + VOLUME + "', 'originals/44/44/c.g2', 'CURRENT', '" + operation + "')");
+        execute("INSERT INTO quarantine_object (quarantine_id, volume_id, operation_id, content_id, source_path, quarantine_path, "
+                + "reason, state, source_size, source_sha256) VALUES (gen_random_uuid(), '" + VOLUME + "', '" + operation + "', '"
+                + content + "', 'originals/44/44/c.g1', 'quarantine/x/damaged-g1', 'DAMAGED_GENERATION', 'INTENDED', 3, repeat('cd', 32))");
+
+        new SchemaMigrator(ds).migrate();
+        assertThat(version()).isEqualTo("0019");
+        try (Connection c = ds.getConnection(); Statement st = c.createStatement()) {
+            try (ResultSet rs = st.executeQuery("SELECT evidence_basis FROM gas.quarantine_object")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).isEqualTo("UNTRUSTED");
+            }
+            try (ResultSet rs = st.executeQuery("SELECT state FROM gas.file_content_generation WHERE generation = 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).isEqualTo("QUARANTINE_PENDING");
+            }
+        }
+        Throwable refused = org.assertj.core.api.Assertions.catchThrowable(() -> execute(
+                "UPDATE file_content_generation SET state = 'UNRESOLVED' WHERE content_id = '" + content + "' AND generation = 1"));
+        assertThat(refused).isNotNull();
+        assertThat(allMessages(refused)).contains("without an open unresolved-object record");
+        Throwable rewritten = org.assertj.core.api.Assertions.catchThrowable(() -> execute(
+                "UPDATE quarantine_object SET evidence_basis = 'ADMINISTRATOR_ATTESTED'"));
+        assertThat(rewritten).as("the basis recorded with a move is never rewritten").isNotNull();
     }
 
     @Test
@@ -165,7 +209,8 @@ class Phase2SchemaIT {
                 "relation integrity_finding kind=r",
                 "relation integrity_finding_observation kind=r",
                 "relation quarantine_object kind=r",
-                "relation physical_location_owner kind=r");
+                "relation physical_location_owner kind=r",
+                "relation unresolved_object kind=r");
     }
 
     @Test

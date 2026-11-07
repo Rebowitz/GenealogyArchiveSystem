@@ -16,7 +16,21 @@ import java.util.UUID;
 public final class QuarantineRepository {
 
     /** Why an object was set aside. */
-    public enum Reason { PARTIAL_COPY, UNVERIFIED_COPY, CANCELLED_COPY, DAMAGED_GENERATION }
+    public enum Reason { PARTIAL_COPY, UNVERIFIED_COPY, CANCELLED_COPY, DAMAGED_GENERATION, ATTESTED_OBJECT }
+
+    /**
+     * Whether the recorded size and SHA-256 identified the archive's object when they were recorded (V0019):
+     * the worker verified the operation's own copy, an Administrator attested the object, or neither (an
+     * observation - every move recorded before V0019). Only a trusted basis lets the hash authorise moving or
+     * deleting an object.
+     */
+    public enum Basis {
+        OPERATION_COPY_VERIFIED, ADMINISTRATOR_ATTESTED, UNTRUSTED;
+
+        public boolean trusted() {
+            return this != UNTRUSTED;
+        }
+    }
 
     /** Detail of an intent recorded when nothing was at the source. */
     public static final String ABSENT_AT_INTENT = "nothing was at the source when the move was intended";
@@ -29,13 +43,19 @@ public final class QuarantineRepository {
      * @param sourceModifiedMicros its last-modified time then, in microseconds (informational since V0017)
      * @param sourceSha256         SHA-256 of its bytes then (V0017): with the size, the evidence that an object
      *                             found later at either end is the same object
+     * @param basis                whether that evidence was trusted when recorded (V0019)
      */
     public record Entry(UUID quarantineId, UUID volumeId, UUID operationId, UUID contentId, String sourcePath,
                         String quarantinePath, Reason reason, State state, String detail, Long sourceSize,
-                        Long sourceModifiedMicros, String sourceSha256) {
+                        Long sourceModifiedMicros, String sourceSha256, Basis basis) {
         /** Content evidence (V0017): the SHA-256 and size of the object the move was recorded for. */
         public boolean hasEvidence() {
             return sourceSize != null && sourceSha256 != null;
+        }
+
+        /** Evidence that identified the archive's object when it was recorded (V0019). */
+        public boolean hasTrustedEvidence() {
+            return hasEvidence() && basis.trusted();
         }
 
         /** The intent was recorded (V0016 or later) when nothing was at the source. */
@@ -46,12 +66,13 @@ public final class QuarantineRepository {
 
     private static final String COLUMNS = """
             quarantine_id, volume_id, operation_id, content_id, source_path, quarantine_path, reason, state, detail,
-            source_size, source_modified_micros, source_sha256""";
+            source_size, source_modified_micros, source_sha256, evidence_basis""";
     private static final RowMapper<Entry> ENTRY = (rs, n) -> new Entry(Rows.uuid(rs, "quarantine_id"),
             Rows.uuid(rs, "volume_id"), Rows.uuid(rs, "operation_id"), Rows.uuid(rs, "content_id"),
             rs.getString("source_path"), rs.getString("quarantine_path"), Reason.valueOf(rs.getString("reason")),
             State.valueOf(rs.getString("state")), rs.getString("detail"), rs.getObject("source_size", Long.class),
-            rs.getObject("source_modified_micros", Long.class), rs.getString("source_sha256"));
+            rs.getObject("source_modified_micros", Long.class), rs.getString("source_sha256"),
+            Basis.valueOf(rs.getString("evidence_basis")));
 
     private final JdbcClient jdbc;
 
@@ -61,17 +82,18 @@ public final class QuarantineRepository {
 
     /** Records the intent to move {@code sourcePath} to {@code quarantinePath}, or returns the existing entry. */
     public Entry intend(UUID volumeId, UUID operationId, UUID contentId, String sourcePath, String quarantinePath,
-                        Reason reason, Long sourceSize, Long sourceModifiedMicros, String sourceSha256) {
+                        Reason reason, Long sourceSize, Long sourceModifiedMicros, String sourceSha256, Basis basis) {
         jdbc.sql("""
                 INSERT INTO gas.quarantine_object (quarantine_id, volume_id, operation_id, content_id, source_path,
-                                                   quarantine_path, reason, state, source_size, source_modified_micros, source_sha256, detail)
-                VALUES (:id, :vol, :op, :content, :src, :q, :reason, 'INTENDED', :size, :mtime, :sha,
+                                                   quarantine_path, reason, state, source_size, source_modified_micros, source_sha256,
+                                                   evidence_basis, detail)
+                VALUES (:id, :vol, :op, :content, :src, :q, :reason, 'INTENDED', :size, :mtime, :sha, :basis,
                         CASE WHEN CAST(:size AS bigint) IS NULL THEN :absent END)
                 ON CONFLICT (volume_id, quarantine_path) DO NOTHING
                 """).param("id", org.genealogyarchive.identity.GlobalIds.newId()).param("vol", volumeId)
                 .param("op", operationId).param("content", contentId).param("src", sourcePath).param("q", quarantinePath)
                 .param("reason", reason.name()).param("size", sourceSize).param("mtime", sourceModifiedMicros)
-                .param("sha", sourceSha256).param("absent", ABSENT_AT_INTENT).update();
+                .param("sha", sourceSha256).param("basis", basis.name()).param("absent", ABSENT_AT_INTENT).update();
         return find(volumeId, quarantinePath).orElseThrow();
     }
 

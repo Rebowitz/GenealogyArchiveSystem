@@ -6,6 +6,7 @@ import org.genealogyarchive.config.InstallationConfig.FileSettings;
 import org.genealogyarchive.data.ArchivalFileRepository;
 import org.genealogyarchive.data.FileContentRepository;
 import org.genealogyarchive.data.QuarantineRepository;
+import org.genealogyarchive.data.UnresolvedObjectRepository;
 import org.genealogyarchive.files.ManagedVolume;
 import org.genealogyarchive.files.PortableRelativePath;
 import org.genealogyarchive.history.ChangeRecord;
@@ -317,10 +318,56 @@ class Phase2AuditCorrectionsIT {
         return fx.preservation().files().destroy(fx.admin, f.fileId(), deleted.version(), "uploaded in error", null);
     }
 
+    /** Like {@link #corruptAndRepair}, but the original is lost (recorded MISSING) instead of damaged. */
+    private Repaired lostAndRepair(String name, byte[] bytes) throws Exception {
+        ArchivalFile f = ingestAs(fx.editor, name, bytes, Restriction.NORMAL, null, null);
+        Path stored = fx.storedPath(f);
+        SafeFiles.clearReadOnly(stored);
+        Files.delete(stored);
+        fx.scan(fx.services(), "QUICK");
+        assertThat(fx.preservation().context().contents().find(f.contentId()).orElseThrow().state())
+                .isEqualTo(ContentState.MISSING);
+        FileOperation repair = fx.preservation().repair().receive(fx.admin, f.contentId(), "good.tif", bytes.length,
+                new ByteArrayInputStream(bytes));
+        return new Repaired(f, repair.operationId());
+    }
+
+    /** The open unresolved-object record at a location (V0019). */
+    private UnresolvedObjectRepository.Entry openRecordAt(String path) {
+        return fx.preservation().context().unresolved().openAt(fx.volumeId, path)
+                .orElseThrow(() -> new AssertionError("no open unresolved record at " + path));
+    }
+
+    private boolean openRecordExistsAt(String path) {
+        return fx.preservation().context().unresolved().openAt(fx.volumeId, path).isPresent();
+    }
+
+    /**
+     * After a repair left the superseded damaged copy UNRESOLVED (V0018 audit), an Administrator inspects it and
+     * attests that the recorded object is the archive's damaged copy.
+     */
+    private UnresolvedObjectRepository.Entry attestGeneration(UUID contentId, int generation) {
+        FileContentRepository.Generation g = generation(contentId, generation);
+        assertThat(g.state()).isEqualTo(GenerationState.UNRESOLVED);
+        UnresolvedObjectRepository.Entry u = openRecordAt(g.storagePath());
+        UnresolvedObjectRepository.Entry attested = fx.preservation().unresolved().attest(fx.admin, u.unresolvedId(),
+                "inspected on the volume: this is the damaged copy");
+        assertThat(attested.attested()).isTrue();
+        return attested;
+    }
+
+    /** The attestation and the worker's quarantine move of the attested object, uninterrupted. */
+    private void attestAndQuarantine(UUID contentId, int generation) {
+        UnresolvedObjectRepository.Entry u = attestGeneration(contentId, generation);
+        assertThat(fx.preservation().unresolved().quarantineAttested(u.unresolvedId())).isTrue();
+        assertThat(generation(contentId, generation).state()).isEqualTo(GenerationState.QUARANTINED);
+    }
+
     @Test
     void gasP2_006_destroyingAfterARepairRemovesTheQuarantinedGenerationToo() throws Exception {
         Repaired f = corruptAndRepair("will.tif", b("last will and testament"));
         fx.process(f.repairOperation());
+        attestAndQuarantine(f.contentId(), 1);
         FileContentRepository.Generation damaged = fx.preservation().context().contents().generations(f.contentId())
                 .stream().filter(g -> g.generation() == 1).findFirst().orElseThrow();
         assertThat(damaged.state()).isEqualTo(GenerationState.QUARANTINED);
@@ -342,8 +389,11 @@ class Phase2AuditCorrectionsIT {
     @Test
     void gasP2_006_destructionFinishesAndRemovesAQuarantineMoveThatWasInterrupted() throws Exception {
         Repaired f = corruptAndRepair("deed.tif", b("deed of sale 1802"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
         fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_MOVE);
-        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(u.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         List<QuarantineRepository.Entry> ledger = fx.preservation().context().quarantine().forContent(f.contentId());
         assertThat(ledger).singleElement().satisfies(e -> {
             assertThat(e.state()).isEqualTo(QuarantineRepository.State.INTENDED);
@@ -698,7 +748,7 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_R01_aRepairCopyVerifiedButNotCommittedIsRemovedByDestructionAndRecovery() throws Exception {
-        Repaired f = corruptAndRepair("survey.tif", b("land survey, 1791"));
+        Repaired f = lostAndRepair("survey.tif", b("land survey, 1791"));
         FileOperation repair = repairStoppedBeforeCommit(f);
 
         FileOperation op = destroy(f.file());
@@ -715,9 +765,12 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_R01_cleanupInterruptedBeforeAndDuringRemovalIsFinishedByRepeatedRecovery() throws Exception {
-        Repaired f = corruptAndRepair("plat.tif", b("plat of the mill tract"));
+        byte[] bytes = b("plat of the mill tract");
+        Repaired f = lostAndRepair("plat.tif", bytes);
         FileOperation repair = repairStoppedBeforeCommit(f);
+        // The verified original put back at its recorded location: a second known copy (authoritative bytes).
         Path damaged = onVolume(fx.preservation().context().contents().generations(f.contentId()).get(0).storagePath());
+        Files.write(damaged, bytes);
         FileOperation op = destroy(f.file());
 
         // Stop after the repair was stopped, before anything was removed.
@@ -746,9 +799,9 @@ class Phase2AuditCorrectionsIT {
     @Test
     void gasP2_R01_removalWaitsWhileTheRepairIsBusyElsewhere() throws Exception {
         // IV03: an unfinished repair is now stopped by the destruction intent itself, so removal can only meet
-        // a busy repair that had already committed (finishing the quarantine of the damaged generation).
-        Repaired f = corruptAndRepair("bible.tif", b("family bible register"));
-        fx.faults.crashAt(FaultPoints.Point.BEFORE_QUARANTINE_MOVE);
+        // a busy repair that had already committed (finishing its clean-up).
+        Repaired f = lostAndRepair("bible.tif", b("family bible register"));
+        fx.faults.crashAt(FaultPoints.Point.AFTER_COMMIT_BEFORE_CLEANUP);
         assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         FileOperation repair = fx.operation(f.repairOperation());
         assertThat(repair.state()).isEqualTo(OperationState.COMMITTED);
@@ -761,7 +814,7 @@ class Phase2AuditCorrectionsIT {
             FileOperation waiting = fx.operation(op.operationId());
             assertThat(waiting.state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
             assertThat(waiting.message()).contains("waits for operation " + repair.operationId());
-            assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).hasSize(2);
+            assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).hasSize(1);
         }
         fx.preservation().recovery().runOnce();
         fx.preservation().recovery().runOnce();
@@ -775,7 +828,7 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_R01_anObjectTheRepairNeverCreatedIsLeftUntouched() throws Exception {
-        Repaired f = corruptAndRepair("muster.tif", b("militia muster roll"));
+        Repaired f = lostAndRepair("muster.tif", b("militia muster roll"));
         fx.faults.crashAt(FaultPoints.Point.BEFORE_TARGET_CREATE);
         assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         FileOperation repair = fx.operation(f.repairOperation());
@@ -897,7 +950,10 @@ class Phase2AuditCorrectionsIT {
             if (w.targetCreated()) {
                 accounted.add(onVolume(w.targetPath()));
             }
+            ctx.unresolved().openForOperation(w.operationId()).forEach(u -> accounted.add(onVolume(u.path())));
         }
+        // V0019: an object the archive cannot identify is accounted for by its open unresolved record.
+        ctx.unresolved().openForContent(contentId).forEach(u -> accounted.add(onVolume(u.path())));
         List<Path> onDisk = new java.util.ArrayList<>(filesUnder(fx.volumeRoot.resolve("originals")));
         onDisk.addAll(filesUnder(fx.volumeRoot.resolve("quarantine")));
         assertThat(accounted).as("every copy on the volume is accounted for").containsAll(onDisk);
@@ -943,7 +999,7 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_FV01_aCopyRecreatedWhereARecordedMoveVacatedIsRemovedByDestruction() throws Exception {
-        Repaired f = corruptAndRepair("census.tif", large("1850 census, recreated after a recorded move"));
+        Repaired f = lostAndRepair("census.tif", large("1850 census, recreated after a recorded move"));
         FileOperation repair = recreatedAtTheVacatedTarget(f, FaultPoints.Point.AFTER_QUARANTINE_RECORDED);
 
         FileOperation op = destroy(f.file());
@@ -958,7 +1014,7 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_FV01_aCopyRecreatedAfterAnUnconfirmedMoveWasSettledIsRemovedByDestruction() throws Exception {
-        Repaired f = corruptAndRepair("tax.tif", large("tax list, recreated after an unconfirmed move"));
+        Repaired f = lostAndRepair("tax.tif", large("tax list, recreated after an unconfirmed move"));
         FileOperation repair = recreatedAtTheVacatedTarget(f, FaultPoints.Point.AFTER_QUARANTINE_MOVE);
 
         FileOperation op = destroy(f.file());
@@ -971,7 +1027,7 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_FV01_anUnconfirmedMoveSettledByDestructionLeavesNothingAndNoRepairWritesAgain() throws Exception {
-        Repaired f = corruptAndRepair("deed2.tif", large("deed, move unconfirmed when destroyed"));
+        Repaired f = lostAndRepair("deed2.tif", large("deed, move unconfirmed when destroyed"));
         fx.faults.crashAt(FaultPoints.Point.DURING_COPY);
         assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_MOVE);
@@ -997,7 +1053,7 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_FV01_anUnknownObjectAtAVacatedTargetIsNeitherAdoptedNorRemoved() throws Exception {
-        Repaired f = corruptAndRepair("roll.tif", large("tithe roll, foreign object at a vacated target"));
+        Repaired f = lostAndRepair("roll.tif", large("tithe roll, foreign object at a vacated target"));
         fx.faults.crashAt(FaultPoints.Point.DURING_COPY);
         assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_RECORDED);
@@ -1028,10 +1084,10 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_FV01_cleanupInterruptedAfterEachRemovalNeverReportsCompletionEarly() throws Exception {
-        Repaired f = corruptAndRepair("will2.tif", large("will, interrupted at every removal"));
+        Repaired f = lostAndRepair("will2.tif", large("will, interrupted at every removal"));
         FileOperation repair = recreatedAtTheVacatedTarget(f, FaultPoints.Point.AFTER_QUARANTINE_RECORDED);
         FileOperation op = destroy(f.file());
-        // Known locations: the damaged generation, the quarantined partial copy and the recreated copy.
+        // Known locations: the recreated copy, the (lost) original's location and the quarantined partial copy.
         for (int k = 1; k <= 3; k++) {
             // Stop right after the k-th location is removed.
             AtomicInteger reached = new AtomicInteger();
@@ -1210,10 +1266,12 @@ class Phase2AuditCorrectionsIT {
 
     // ---- GAS-P2-IV01: historical locations never authorize deletion ---------------------------------------
 
+    /** A damaged content repaired, and its superseded damaged copy attested and moved to quarantine. */
     private ArchivalFile repairedCompletely(String name, byte[] bytes) throws Exception {
         Repaired f = corruptAndRepair(name, bytes);
         FileOperation done = fx.process(f.repairOperation());
         assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
+        attestAndQuarantine(f.contentId(), 1);
         return fx.file(f.fileId());
     }
 
@@ -1250,10 +1308,14 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_IV01_destructionBeforeTheDamagedGenerationWasMovedRemovesItWhereItIs() throws Exception {
+        // V0019: the damaged copy is attested by an Administrator but the worker stopped before moving it.
         Repaired f = corruptAndRepair("lease.tif", b("lease, stopped before the quarantine move"));
+        assertThat(fx.process(f.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
         fx.faults.crashAt(FaultPoints.Point.BEFORE_QUARANTINE_MOVE);
-        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
-        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.QUARANTINE_PENDING);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(u.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.UNRESOLVED);
         assertEveryCopyAccounted(f.contentId());
 
         FileOperation op = destroy(f.file());
@@ -1261,8 +1323,11 @@ class Phase2AuditCorrectionsIT {
         FileOperation d = fx.operation(op.operationId());
         assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
         assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+        assertThat(fx.preservation().context().unresolved().find(u.unresolvedId()).orElseThrow().resolution())
+                .isEqualTo(UnresolvedObjectRepository.Resolution.DESTROYED);
         for (int i = 0; i < 2; i++) {
             fx.preservation().recovery().runOnce();
+            assertThat(fx.preservation().unresolved().quarantineAttested(u.unresolvedId())).isTrue();
         }
         assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
@@ -1272,10 +1337,13 @@ class Phase2AuditCorrectionsIT {
     @Test
     void gasP2_IV01_aMoveInterruptedBeforeItWasRecordedFailsVisiblyIfSomethingAppearedAtItsSource() throws Exception {
         Repaired f = corruptAndRepair("bond.tif", b("bond, move done but not recorded"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
         fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_MOVE);
-        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(u.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         FileContentRepository.Generation g1 = generation(f.contentId(), 1);
-        assertThat(g1.state()).isEqualTo(GenerationState.QUARANTINE_PENDING);
+        assertThat(g1.state()).isEqualTo(GenerationState.UNRESOLVED);
         Path source = onVolume(g1.storagePath());
         assertThat(source).doesNotExist();
         Files.write(source, b("appeared at the old location"));
@@ -1304,8 +1372,11 @@ class Phase2AuditCorrectionsIT {
     @Test
     void gasP2_IV01_aMoveSettledAfterAnInterruptionRetiresTheSourceSoAForeignObjectThereSurvives() throws Exception {
         Repaired f = corruptAndRepair("poll.tif", b("poll book, move settled by recovery"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
         fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_MOVE);
-        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(u.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         fx.preservation().recovery().runOnce();
         FileContentRepository.Generation g1 = generation(f.contentId(), 1);
         assertThat(g1.state()).as("settling retired the source in the same transaction").isEqualTo(GenerationState.QUARANTINED);
@@ -1424,7 +1495,7 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_IV03_destructionIntentCannotCommitWhileARepairThatPassedItsCheckIsWriting() throws Exception {
-        Repaired f = corruptAndRepair("plat2.tif", large("plat, repair writing during destruction request"));
+        Repaired f = lostAndRepair("plat2.tif", large("plat, repair writing during destruction request"));
         java.util.concurrent.atomic.AtomicReference<Throwable> attempt = new java.util.concurrent.atomic.AtomicReference<>();
         AtomicInteger calls = new AtomicInteger();
         ArchivalFile deleted = fx.preservation().files().delete(fx.editor, f.fileId(), fx.file(f.fileId()).version(), null);
@@ -1513,7 +1584,7 @@ class Phase2AuditCorrectionsIT {
 
     @Test
     void gasP2_IV03_destructionIntentStopsARepairThatIsNotRunningSoItNeverWrites() throws Exception {
-        Repaired f = corruptAndRepair("plat5.tif", b("plat, repair planned but idle"));
+        Repaired f = lostAndRepair("plat5.tif", b("plat, repair planned but idle"));
         fx.faults.crashAt(FaultPoints.Point.BEFORE_TARGET_CREATE);
         assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         FileOperation planned = fx.operation(f.repairOperation());
@@ -1609,14 +1680,23 @@ class Phase2AuditCorrectionsIT {
         assertOwnershipConsistent(f.contentId());
 
         FileOperation op = destroy(f);
+        // V0018 audit: present-but-unverified bytes at a current location are unresolved, never "removed".
         for (int i = 0; i < 3; i++) {
             fx.preservation().recovery().runOnce();
-            assertNotCompleteWhileACopyRemains(op.operationId(), current);
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+            assertThat(current).hasBinaryContent(b("not the archived bytes"));
         }
+        assertThat(onVolume(repair.targetPath())).as("the repair's own copy").doesNotExist();
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION);
+        // An Administrator inspects it and releases it as not the archive's: it stays, and removal completes.
+        fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "a scanner test file, not ours");
+        fx.preservation().recovery().runOnce();
         FileOperation d = fx.operation(op.operationId());
         assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
         assertThat(current).hasBinaryContent(b("not the archived bytes"));
-        assertThat(onVolume(repair.targetPath())).as("the repair's own copy").doesNotExist();
         assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).containsExactly(current);
     }
 
@@ -1783,7 +1863,10 @@ class Phase2AuditCorrectionsIT {
         }
         FileOperation repair = fx.process(repairOf(f, bytes).operationId());
         assertThat(repair.state()).isEqualTo(OperationState.COMPLETED);
-        assertThat(generation(f.contentId(), 1).state()).as("retired, not quarantined").isEqualTo(GenerationState.MISSING);
+        // V0018 audit: the occupied former location is never "safely vacated": UNRESOLVED, untouched, recorded.
+        assertThat(generation(f.contentId(), 1).state()).as("not quarantined, not MISSING").isEqualTo(GenerationState.UNRESOLVED);
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION);
         assertThat(location).hasBinaryContent(b("something else entirely, longer than the original bytes were"));
         assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
         assertOwnershipInvariants();
@@ -1791,8 +1874,12 @@ class Phase2AuditCorrectionsIT {
         FileOperation op = destroy(fx.file(f.fileId()));
         for (int i = 0; i < 3; i++) {
             fx.preservation().recovery().runOnce();
+            assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
             assertNotCompleteWhileACopyRemains(op.operationId(), location);
+            assertThat(openRecordAt(u.path()).unresolvedId()).isEqualTo(u.unresolvedId());
         }
+        fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "inspected: not the archive's copy");
+        fx.preservation().recovery().runOnce();
         assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(location).hasBinaryContent(b("something else entirely, longer than the original bytes were"));
         assertOwnershipInvariants();
@@ -1801,10 +1888,13 @@ class Phase2AuditCorrectionsIT {
     @Test
     void v0016_anObjectSwappedInDuringAnInterruptedQuarantineMoveIsNotMovedOrAdopted() throws Exception {
         Repaired f = corruptAndRepair("swap.tif", b("land grant, swapped during quarantine"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
         fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_INTENT);
-        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(u.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         FileContentRepository.Generation g1 = generation(f.contentId(), 1);
-        assertThat(g1.state()).isEqualTo(GenerationState.QUARANTINE_PENDING);
+        assertThat(g1.state()).isEqualTo(GenerationState.UNRESOLVED);
         QuarantineRepository.Entry intent = fx.preservation().context().quarantine().forContent(f.contentId()).get(0);
         assertThat(intent.state()).isEqualTo(QuarantineRepository.State.INTENDED);
         assertThat(intent.hasEvidence()).isTrue();
@@ -1815,11 +1905,12 @@ class Phase2AuditCorrectionsIT {
 
         for (int i = 0; i < 2; i++) {
             fx.preservation().recovery().runOnce();
+            assertThat(fx.preservation().unresolved().quarantineAttested(u.unresolvedId())).isFalse();
             assertThat(source).hasBinaryContent(b("a different object put here meanwhile"));
             assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
             assertThat(fx.preservation().context().quarantine().forContent(f.contentId()).get(0).state())
                     .isEqualTo(QuarantineRepository.State.INTENDED);
-            assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMMITTED);
+            assertThat(openRecordAt(u.path()).attested()).as("still unresolved").isTrue();
         }
         FileOperation op = destroy(fx.file(f.fileId()));
         fx.preservation().destruction().process(op.operationId());
@@ -1833,7 +1924,8 @@ class Phase2AuditCorrectionsIT {
         for (int i = 0; i < 3; i++) {
             fx.preservation().recovery().runOnce();
         }
-        assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(fx.preservation().context().unresolved().find(u.unresolvedId()).orElseThrow().resolution())
+                .isEqualTo(UnresolvedObjectRepository.Resolution.ABSENT);
         assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
         assertOwnershipInvariants();
@@ -1842,11 +1934,15 @@ class Phase2AuditCorrectionsIT {
     @Test
     void v0016_anInterruptedQuarantineMoveOfTheRecordedObjectIsStillFinished() throws Exception {
         Repaired f = corruptAndRepair("same.tif", b("deed, same object after interruption"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
         fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_INTENT);
-        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(u.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         fx.preservation().recovery().runOnce();
         fx.preservation().recovery().runOnce();
-        assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(fx.preservation().context().unresolved().find(u.unresolvedId()).orElseThrow().resolution())
+                .isEqualTo(UnresolvedObjectRepository.Resolution.QUARANTINED);
         assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.QUARANTINED);
         assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).hasSize(1);
         assertOwnershipInvariants();
@@ -1898,7 +1994,12 @@ class Phase2AuditCorrectionsIT {
         FileOperation op = destroy(fx.file(f.fileId()));
         for (int i = 0; i < 2; i++) {
             fx.preservation().recovery().runOnce();
+            assertThat(fx.operation(op.operationId()).state()).as("present but unverified at the current location")
+                    .isEqualTo(OperationState.CLEANUP_INCOMPLETE);
         }
+        fx.preservation().unresolved().release(fx.admin, openRecordAt(generation(f.contentId(), 1).storagePath()).unresolvedId(),
+                "inspected: unrelated");
+        fx.preservation().recovery().runOnce();
         assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(stored).hasBinaryContent(b("unrelated legacy object"));
     }
@@ -1910,12 +2011,19 @@ class Phase2AuditCorrectionsIT {
         FileOperation op = destroy(f);
         fx.preservation().destruction().process(op.operationId());
         FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+        assertThat(d.message()).contains("left untouched");
+        assertThat(stored).hasBinaryContent(b("unrelated object 2"));
+        assertThat(sql().sql("SELECT vacated FROM gas.file_content_generation WHERE content_id = :c AND generation = 1")
+                .param("c", f.contentId()).query(Boolean.class).single()).as("reconciled before removal").isTrue();
+        fx.preservation().unresolved().release(fx.admin, openRecordAt(generation(f.contentId(), 1).storagePath()).unresolvedId(),
+                "inspected: unrelated");
+        fx.preservation().destruction().process(op.operationId());
+        d = fx.operation(op.operationId());
         assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
         assertThat(d.message()).contains("left untouched");
         assertThat(stored).hasBinaryContent(b("unrelated object 2"));
         assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.DESTROYED);
-        assertThat(sql().sql("SELECT vacated FROM gas.file_content_generation WHERE content_id = :c AND generation = 1")
-                .param("c", f.contentId()).query(Boolean.class).single()).as("reconciled before removal").isTrue();
     }
 
     // ---- V0017: structural audit corrections -----------------------------------------------------------
@@ -1944,15 +2052,21 @@ class Phase2AuditCorrectionsIT {
 
         FileOperation repaired = fx.process(f.repairOperation());
         assertThat(repaired.state()).isEqualTo(OperationState.COMPLETED);
-        assertThat(generation(f.contentId(), 1).state()).as("vacated: retired, not quarantined").isEqualTo(GenerationState.MISSING);
+        assertThat(generation(f.contentId(), 1).state()).as("occupied: unresolved, not quarantined").isEqualTo(GenerationState.UNRESOLVED);
+        assertThat(openRecordAt(generation(f.contentId(), 1).storagePath()).kind())
+                .isEqualTo(UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION);
         assertThat(location).hasBinaryContent(b("an unrelated object at the old location"));
         assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
 
         FileOperation op = destroy(fx.file(f.fileId()));
         for (int i = 0; i < 2; i++) {
             fx.preservation().recovery().runOnce();
+            assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
             assertNotCompleteWhileACopyRemains(op.operationId(), location);
         }
+        fx.preservation().unresolved().release(fx.admin, openRecordAt(generation(f.contentId(), 1).storagePath()).unresolvedId(),
+                "inspected: unrelated");
+        fx.preservation().recovery().runOnce();
         assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(location).hasBinaryContent(b("an unrelated object at the old location"));
         assertOwnershipInvariants();
@@ -1985,7 +2099,9 @@ class Phase2AuditCorrectionsIT {
         fx.preservation().recovery().runOnce();
         fx.preservation().recovery().runOnce();
         assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
-        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.UNRESOLVED);
+        assertThat(openRecordAt(generation(f.contentId(), 1).storagePath()).kind())
+                .isEqualTo(UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION);
         assertThat(location).hasBinaryContent(b("appeared after the bytes left"));
         assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
         assertOwnershipInvariants();
@@ -2000,17 +2116,16 @@ class Phase2AuditCorrectionsIT {
 
         FileOperation repaired = fx.process(f.repairOperation());
         assertThat(repaired.state()).isEqualTo(OperationState.COMPLETED);
-        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.UNRESOLVED);
         assertThat(location).hasBinaryContent(b("replacement put here after the damage was recorded"));
         assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
-        assertThat(fx.preservation().integrity().openFindings(fx.admin, 50))
-                .anyMatch(x -> x.kind() == FindingKind.UNEXPECTED_OBJECT && location.equals(onVolume(x.storagePath())));
-        assertThat(fx.preservation().operations().events(fx.admin, f.repairOperation()))
-                .anyMatch(e -> e.detail() != null && e.detail().contains("left untouched"));
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.DAMAGED_COPY);
+        assertThat(u.detail()).contains("left untouched");
 
         FileOperation op = destroy(fx.file(f.fileId()));
         fx.preservation().destruction().process(op.operationId());
-        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
         assertThat(location).hasBinaryContent(b("replacement put here after the damage was recorded"));
         assertOwnershipInvariants();
     }
@@ -2018,8 +2133,11 @@ class Phase2AuditCorrectionsIT {
     @Test
     void v0017_anObjectWithTheSameSizeAndTimestampButDifferentBytesIsNotMoved() throws Exception {
         Repaired f = corruptAndRepair("grant2.tif", b("land grant, same size and time"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
         fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_INTENT);
-        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(u.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         QuarantineRepository.Entry intent = fx.preservation().context().quarantine().forContent(f.contentId()).get(0);
         assertThat(intent.hasEvidence()).isTrue();
         Path source = onVolume(intent.sourcePath());
@@ -2036,6 +2154,7 @@ class Phase2AuditCorrectionsIT {
 
         for (int i = 0; i < 2; i++) {
             fx.preservation().recovery().runOnce();
+            assertThat(fx.preservation().unresolved().quarantineAttested(u.unresolvedId())).as("the job retried").isFalse();
             assertThat(source).hasBinaryContent(lookalike);
             assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
             assertThat(fx.preservation().context().quarantine().forContent(f.contentId()).get(0).state())
@@ -2049,13 +2168,36 @@ class Phase2AuditCorrectionsIT {
         assertThat(source).hasBinaryContent(lookalike);
     }
 
+    /**
+     * The state a repair left before V0019: committed, its superseded damaged generation QUARANTINE_PENDING
+     * (awaiting an automatic move) and no unresolved record. Built from a V0019 repair by closing its record and
+     * restoring the legacy generation state in one transaction.
+     */
+    private FileContentRepository.Generation legacyQuarantinePending(Repaired f) throws SQLException {
+        fx.faults.crashAt(FaultPoints.Point.AFTER_COMMIT_BEFORE_CLEANUP);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMMITTED);
+        try (Connection c = fx.ds.getConnection()) {
+            c.setAutoCommit(false);
+            try (Statement st = c.createStatement()) {
+                st.executeUpdate("UPDATE gas.unresolved_object SET status = 'RESOLVED', resolution = 'NOT_ARCHIVAL', "
+                        + "resolution_detail = 'simulating a pre-V0019 database', resolved_at = now() WHERE content_id = '"
+                        + f.contentId() + "' AND status = 'OPEN'");
+                st.executeUpdate("UPDATE gas.file_content_generation SET state = 'QUARANTINE_PENDING' WHERE content_id = '"
+                        + f.contentId() + "' AND generation = 1");
+            }
+            c.commit();
+            c.setAutoCommit(true);
+        }
+        FileContentRepository.Generation g1 = generation(f.contentId(), 1);
+        assertThat(g1.state()).isEqualTo(GenerationState.QUARANTINE_PENDING);
+        return g1;
+    }
+
     @Test
     void v0017_aLegacyIntentWithoutContentEvidenceIsNeverFinishedSilently() throws Exception {
         Repaired f = corruptAndRepair("legacy3.tif", b("legacy intent without evidence"));
-        fx.faults.crashAt(FaultPoints.Point.BEFORE_QUARANTINE_MOVE);
-        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
-        FileContentRepository.Generation g1 = generation(f.contentId(), 1);
-        assertThat(g1.state()).isEqualTo(GenerationState.QUARANTINE_PENDING);
+        FileContentRepository.Generation g1 = legacyQuarantinePending(f);
         String q = org.genealogyarchive.files.ManagedVolume.quarantinePath(f.repairOperation(), "damaged-g1").value();
         // As written before V0017: no size, time or hash of the object.
         sql().sql("""
@@ -2080,17 +2222,19 @@ class Phase2AuditCorrectionsIT {
     @Test
     void v0017_anObjectSwappedInBetweenTheCheckAndTheRenameIsPutBackUntouched() throws Exception {
         Repaired f = corruptAndRepair("toctou.tif", b("deed, swapped between check and rename"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
         Path source = onVolume(generation(f.contentId(), 1).storagePath());
         byte[] swapped = b("swapped in at the last moment");
         fx.faults.armSticky(FaultPoints.Point.BEFORE_QUARANTINE_RENAME, id -> {
             SafeFiles.clearReadOnly(source);
             Files.write(source, swapped);
         });
-        fx.process(f.repairOperation());
+        assertThat(fx.preservation().unresolved().quarantineAttested(u.unresolvedId())).isFalse();
         fx.faults.clear();
         assertThat(source).as("returned where it was").hasBinaryContent(swapped);
         assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
-        assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMMITTED);
+        assertThat(openRecordAt(u.path()).attested()).as("still unresolved").isTrue();
         assertThat(fx.preservation().operations().events(fx.admin, f.repairOperation()))
                 .anyMatch(e -> e.detail() != null && e.detail().contains("returned to where it was"));
         fx.preservation().recovery().runOnce();
@@ -2272,7 +2416,7 @@ class Phase2AuditCorrectionsIT {
         FileOperation d = fx.operation(op.operationId());
         assertThat(d.state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
         assertThat(d.message()).contains(generation(f.contentId(), 1).storagePath(), "left untouched",
-                "matches neither the authoritative SHA-256");
+                "does not have the authoritative SHA-256");
         assertThat(d.message()).doesNotContain("rotten.tif");
         assertStaysIncomplete(op.operationId(), stored, corrupted, f);
         assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.CURRENT);
@@ -2326,7 +2470,7 @@ class Phase2AuditCorrectionsIT {
         fx.preservation().destruction().process(op.operationId());
         FileOperation d = fx.operation(op.operationId());
         assertThat(d.state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
-        assertThat(d.message()).contains(q, "before content evidence was recorded");
+        assertThat(d.message()).contains(q, "no trusted hash of what was moved to quarantine identifies it");
         assertThat(fx.storedPath(f)).as("the verified original was removed").doesNotExist();
         assertStaysIncomplete(op.operationId(), atQ, replacement, f);
 
@@ -2344,7 +2488,7 @@ class Phase2AuditCorrectionsIT {
         Files.write(quarantined, other);
         FileOperation op = destroy(f);
         fx.preservation().destruction().process(op.operationId());
-        assertThat(fx.operation(op.operationId()).message()).contains("does not have the SHA-256 recorded for the copy moved");
+        assertThat(fx.operation(op.operationId()).message()).contains("no trusted hash of what was moved to quarantine identifies it");
         assertStaysIncomplete(op.operationId(), quarantined, other, f);
         assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).as("the verified current copy was removed").isEmpty();
     }
@@ -2374,23 +2518,363 @@ class Phase2AuditCorrectionsIT {
 
         FileOperation repaired = fx.process(r.repairOperation());
         assertThat(repaired.state()).isEqualTo(OperationState.COMPLETED);
-        assertThat(generation(r.contentId(), 1).state()).as("retired, not quarantined").isEqualTo(GenerationState.MISSING);
+        assertThat(generation(r.contentId(), 1).state()).as("unresolved, not quarantined").isEqualTo(GenerationState.UNRESOLVED);
+        UnresolvedObjectRepository.Entry u = openRecordAt(g1.storagePath());
+        assertThat(u.observedSha256()).as("what is there now is only observed").isNotEqualTo(g1.damagedSha256());
+        assertThat(u.attested()).isFalse();
         assertThat(location).hasBinaryContent(replacement);
         assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
         assertOwnershipInvariants();
     }
 
     @Test
-    void v0018_quarantineIntentsCarryTheTrustedDamageEvidenceNotAFreshHash() throws Exception {
+    void v0018_quarantineIntentsCarryTheAttestedEvidenceNotAFreshHash() throws Exception {
+        // V0019: the only move of a damaged copy is the one an Administrator attested; its intent records the
+        // attested size and SHA-256 with the ADMINISTRATOR_ATTESTED basis.
         Repaired r = corruptAndRepair("intent.tif", b("will, intent evidence"));
+        fx.process(r.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(r.contentId(), 1);
         fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_INTENT);
-        assertThatThrownBy(() -> fx.process(r.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(u.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
         QuarantineRepository.Entry intent = fx.preservation().context().quarantine().forContent(r.contentId()).get(0);
-        FileContentRepository.Generation g1 = generation(r.contentId(), 1);
-        assertThat(intent.sourceSha256()).isEqualTo(g1.damagedSha256());
-        assertThat(intent.sourceSize()).isEqualTo(g1.damagedSize());
+        assertThat(intent.sourceSha256()).isEqualTo(u.observedSha256());
+        assertThat(intent.sourceSize()).isEqualTo(u.observedSize());
+        assertThat(intent.basis()).isEqualTo(QuarantineRepository.Basis.ADMINISTRATOR_ATTESTED);
+        assertThat(intent.reason()).isEqualTo(QuarantineRepository.Reason.ATTESTED_OBJECT);
         fx.preservation().recovery().runOnce();
-        assertThat(fx.operation(r.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(generation(r.contentId(), 1).state()).isEqualTo(GenerationState.QUARANTINED);
+        assertThat(fx.preservation().context().unresolved().find(u.unresolvedId()).orElseThrow().resolution())
+                .isEqualTo(UnresolvedObjectRepository.Resolution.QUARANTINED);
+    }
+
+    // ---- V0019 (V0018 audit): trusted identity evidence and durable unresolved presence -----------------------
+
+    private static String sha256(byte[] bytes) {
+        return Sha256.hex(Sha256.digest().digest(bytes));
+    }
+
+    private void assertUntouchedAndUnresolved(Path location, byte[] bytes, UUID recordId) throws IOException {
+        assertThat(location).as("left exactly where it is").hasBinaryContent(bytes);
+        UnresolvedObjectRepository.Entry u = fx.preservation().context().unresolved().find(recordId).orElseThrow();
+        assertThat(u.open()).as("still unresolved").isTrue();
+    }
+
+    /** Finding 1: an operation's claimed partial copy is replaced (by an unrelated object) after it was created. */
+    @Test
+    void v0019_aReplacementAtAnOperationsClaimedTargetIsNeitherMovedNorAdoptedAndStaysUnresolved() throws Exception {
+        byte[] bytes = large("census, replaced at the claimed target");
+        UUID id = partialCopy("rep.tif", bytes);
+        FileOperation claimed = fx.operation(id);
+        assertThat(claimed.targetCreated()).as("the interrupted creation left a claim").isTrue();
+        Path target = onVolume(claimed.targetPath());
+        byte[] replacement = b("an unrelated object put at the operation's target");
+        Files.write(target, replacement);
+
+        UUID recordId = null;
+        for (int i = 0; i < 3; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            FileOperation now = fx.operation(id);
+            assertThat(now.state()).isEqualTo(OperationState.BLOCKED);
+            assertThat(now.blockedReason()).isEqualTo(BlockedReason.STATE_UNKNOWN);
+            assertThat(now.message()).contains("not shown to be that copy", "left untouched");
+            assertThat(now.targetCreated()).as("the claim became an unresolved record").isFalse();
+            assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+            assertThat(fx.preservation().context().quarantine().forOperation(id)).isEmpty();
+            UnresolvedObjectRepository.Entry u = openRecordAt(claimed.targetPath());
+            assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.OPERATION_COPY);
+            assertThat(u.operationId()).isEqualTo(id);
+            assertThat(u.observedSha256()).isEqualTo(sha256(replacement));
+            if (recordId != null) {
+                assertThat(u.unresolvedId()).as("one durable record, kept across restarts").isEqualTo(recordId);
+            }
+            recordId = u.unresolvedId();
+            assertUntouchedAndUnresolved(target, replacement, recordId);
+        }
+        IntegrityScan scan = fx.preservation().integrity().requestScan(fx.admin, "FULL");
+        fx.preservation().integrity().run(scan.scanId());
+        assertThat(fx.preservation().integrity().scan(fx.admin, scan.scanId()).message()).contains("still unresolved");
+        assertThat(fx.preservation().integrity().findingsOfScan(fx.admin, scan.scanId()))
+                .as("recorded as unresolved, not as an unaccounted object").noneMatch(x -> x.kind() == FindingKind.UNEXPECTED_OBJECT);
+
+        // Retrying meets an object the operation did not create: a collision; still untouched.
+        fx.preservation().operations().retry(fx.admin, id);
+        assertThat(fx.process(id).blockedReason()).isEqualTo(BlockedReason.COLLISION);
+        assertUntouchedAndUnresolved(target, replacement, recordId);
+    }
+
+    @Test
+    void v0019_withoutItsStagedUploadAClaimedPartialCopyCannotBeIdentifiedAndIsLeftUntouched() throws Exception {
+        byte[] bytes = large("tax list, staged upload lost");
+        UUID id = partialCopy("lost-staging.tif", bytes);
+        Path target = onVolume(fx.operation(id).targetPath());
+        byte[] partial = Files.readAllBytes(target);
+        assertThat(fx.preservation().context().staging().orElseThrow().delete(id)).isTrue();
+
+        FileOperation blocked = fx.process(id);
+        assertThat(blocked.state()).isEqualTo(OperationState.BLOCKED);
+        assertThat(blocked.message()).contains("staged upload it was copied from is gone");
+        assertThat(target).hasBinaryContent(partial);
+        assertThat(openRecordAt(blocked.targetPath()).kind()).isEqualTo(UnresolvedObjectRepository.Kind.OPERATION_COPY);
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+    }
+
+    @Test
+    void v0019_aGenuinePartialCopyIsIdentifiedByItsStagedUploadAndMovedToQuarantine() throws Exception {
+        byte[] bytes = large("will book, genuine partial copy");
+        UUID id = partialCopy("genuine.tif", bytes);
+        assertThat(fx.process(id).state()).isEqualTo(OperationState.COMPLETED);
+        QuarantineRepository.Entry moved = fx.preservation().context().quarantine().forOperation(id).get(0);
+        assertThat(moved.reason()).isEqualTo(QuarantineRepository.Reason.PARTIAL_COPY);
+        assertThat(moved.basis()).isEqualTo(QuarantineRepository.Basis.OPERATION_COPY_VERIFIED);
+        byte[] partial = Files.readAllBytes(onVolume(moved.quarantinePath()));
+        assertThat(partial.length).isPositive().isLessThan(bytes.length);
+        assertThat(java.util.Arrays.copyOf(bytes, partial.length)).as("a prefix of the staged upload").isEqualTo(partial);
+        assertThat(moved.sourceSha256()).isEqualTo(sha256(partial));
+
+        FileOperation op = destroy(fx.file(fx.operation(id).fileId()));
+        fx.preservation().destruction().process(op.operationId());
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).as("trusted evidence: removed").isEmpty();
+    }
+
+    /** Finding 1, cancellation: a move interrupted after its intent never moves an object put there since. */
+    @Test
+    void v0019_aCancellationInterruptedAfterItsIntentNeverMovesAReplacement() throws Exception {
+        byte[] bytes = large("land grant, cancellation interrupted");
+        UUID id = partialCopy("cancel.tif", bytes);
+        fx.servicesWithRoot(temp.resolve("away")).preservation().processor().process(id, () -> { });
+        assertThat(fx.operation(id).state()).isEqualTo(OperationState.WAITING_FOR_VOLUME);
+        fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_INTENT);
+        assertThatThrownBy(() -> fx.preservation().operations().performCancel(id, "admin1"))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        QuarantineRepository.Entry intent = fx.preservation().context().quarantine().forOperation(id).get(0);
+        assertThat(intent.state()).isEqualTo(QuarantineRepository.State.INTENDED);
+        assertThat(intent.basis()).isEqualTo(QuarantineRepository.Basis.OPERATION_COPY_VERIFIED);
+        Path target = onVolume(intent.sourcePath());
+        byte[] replacement = b("put at the target while the cancellation was interrupted");
+        Files.write(target, replacement);
+
+        // The retried cancellation (the worker's job) refuses, visibly, and touches nothing.
+        for (int i = 0; i < 2; i++) {
+            assertThatThrownBy(() -> fx.preservation().operations().performCancel(id, "admin1"))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThat(target).hasBinaryContent(replacement);
+            assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        }
+        assertThat(fx.preservation().operations().events(fx.admin, id))
+                .anyMatch(e -> e.detail() != null && e.detail().contains("SHA-256"));
+        // Recovery (settling the intent, resuming the operation) refuses as well.
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().recovery().runOnce();
+            assertThat(target).hasBinaryContent(replacement);
+            assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+            assertThat(fx.preservation().context().quarantine().forOperation(id).get(0).state())
+                    .isEqualTo(QuarantineRepository.State.INTENDED);
+            assertThat(fx.operation(id).state()).isNotIn(OperationState.COMPLETED, OperationState.CANCELLED);
+        }
+    }
+
+    /** Finding 1, destruction: a stopped repair's verified copy replaced before removal is never deleted. */
+    @Test
+    void v0019_destructionNeverDeletesAReplacementOfAStoppedRepairsCopy() throws Exception {
+        byte[] bytes = b("tax roll, the repair's copy replaced");
+        Repaired f = lostAndRepair("taxr.tif", bytes);
+        FileOperation repair = repairStoppedBeforeCommit(f);
+        Path copy = onVolume(repair.targetPath());
+        SafeFiles.clearReadOnly(copy);
+        byte[] replacement = b("replacement of the repair's verified copy");
+        Files.write(copy, replacement);
+
+        FileOperation op = destroy(f.file());
+        fx.faults.crashAt(FaultPoints.Point.BEFORE_PHYSICAL_DELETE);
+        assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(fx.operation(repair.operationId()).state()).isEqualTo(OperationState.CANCELLED);
+        assertThat(fx.operation(repair.operationId()).stagingCleaned()).as("kept as the evidence of its copy").isFalse();
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(op.operationId());
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+            assertThat(d.message()).contains(repair.targetPath(), "left untouched");
+            assertThat(copy).hasBinaryContent(replacement);
+            assertThat(content(f.file()).state()).isEqualTo(ContentState.DESTROY_PENDING);
+        }
+        UnresolvedObjectRepository.Entry u = openRecordAt(repair.targetPath());
+        assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.OPERATION_COPY);
+        assertThat(fx.operation(repair.operationId()).targetCreated()).isFalse();
+
+        fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "inspected: not the repair's copy");
+        fx.preservation().recovery().runOnce();
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(copy).as("released, never deleted").hasBinaryContent(replacement);
+        assertThat(content(f.file()).state()).isEqualTo(ContentState.DESTROYED);
+    }
+
+    /**
+     * Finding 2: the archival object is replaced before any scan has seen it. The first damage scan only
+     * observes the replacement; nothing moves or deletes it on the strength of that observation.
+     */
+    @Test
+    void v0019_anObjectReplacedBeforeTheFirstDamageScanIsNeverMovedOrDeleted() throws Exception {
+        byte[] bytes = b("will, replaced before any scan saw it");
+        ArchivalFile f = ingestAs(fx.editor, "first.tif", bytes, Restriction.NORMAL, null, null);
+        Path stored = fx.storedPath(f);
+        SafeFiles.clearReadOnly(stored);
+        byte[] replacement = b("an unrelated object, put in place of the original before any scan");
+        Files.write(stored, replacement);
+
+        fx.scan(fx.services(), "FULL");
+        assertThat(content(f).state()).isEqualTo(ContentState.DAMAGED);
+        assertThat(generation(f.contentId(), 1).damagedSha256()).as("an observation, diagnostic only")
+                .isEqualTo(sha256(replacement));
+
+        assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.UNRESOLVED);
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.DAMAGED_COPY);
+        assertThat(u.attested()).isFalse();
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        for (int i = 0; i < 3; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.scan(fx.services(), "QUICK");
+            assertUntouchedAndUnresolved(stored, replacement, u.unresolvedId());
+        }
+
+        FileOperation op = destroy(fx.file(f.fileId()));
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+            assertUntouchedAndUnresolved(stored, replacement, u.unresolvedId());
+        }
+        assertThat(onVolume(generation(f.contentId(), 2).storagePath())).as("the verified repaired copy was removed")
+                .doesNotExist();
+        fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "inspected: not the archive's will");
+        fx.preservation().recovery().runOnce();
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(stored).hasBinaryContent(replacement);
+    }
+
+    @Test
+    void v0019_anAttestedObjectThatChangedAfterwardsIsNeitherMovedNorDeleted() throws Exception {
+        Repaired f = corruptAndRepair("changed.tif", b("deed, changed after the attestation"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
+        Path location = onVolume(u.path());
+        byte[] changed = b("changed after an Administrator attested the object");
+        Files.write(location, changed);
+
+        assertThat(fx.preservation().unresolved().quarantineAttested(u.unresolvedId())).isFalse();
+        assertUntouchedAndUnresolved(location, changed, u.unresolvedId());
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        FileOperation op = destroy(fx.file(f.fileId()));
+        fx.preservation().destruction().process(op.operationId());
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+        assertThat(d.message()).contains("no longer the object an Administrator attested");
+        assertUntouchedAndUnresolved(location, changed, u.unresolvedId());
+    }
+
+    /**
+     * Finding 3: a repair of missing content whose former location is occupied keeps that presence durably;
+     * repeated recovery keeps it unresolved; destruction never reports BYTES_REMOVED while it is there; it closes
+     * only when the object is verifiably gone.
+     */
+    @Test
+    void v0019_anUnresolvedObjectAtAFormerGenerationLocationSurvivesRepeatedRecoveryUntilItIsGone() throws Exception {
+        byte[] bytes = b("muster roll, object at the former location");
+        ArchivalFile f = ingestedThenMissing("muster3.tif", bytes);
+        Path former = onVolume(generation(f.contentId(), 1).storagePath());
+        byte[] other = b("left there by a restore tool");
+        Files.write(former, other);
+
+        assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(generation(f.contentId(), 1).state()).as("present but unverified, not vacated")
+                .isEqualTo(GenerationState.UNRESOLVED);
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        for (int i = 0; i < 3; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.UNRESOLVED);
+            assertUntouchedAndUnresolved(former, other, u.unresolvedId());
+        }
+        IntegrityScan scan = fx.preservation().integrity().requestScan(fx.admin, "QUICK");
+        fx.preservation().integrity().run(scan.scanId());
+        assertThat(fx.preservation().integrity().scan(fx.admin, scan.scanId()).message())
+                .doesNotContain("No problems found").contains("still unresolved");
+
+        FileOperation op = destroy(fx.file(f.fileId()));
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+            assertThat(d.message()).contains(u.path(), "left untouched");
+            assertUntouchedAndUnresolved(former, other, u.unresolvedId());
+        }
+        // Removed outside the application after inspection: the next scan sees it gone and closes the record.
+        Files.delete(former);
+        fx.scan(fx.services(), "QUICK");
+        UnresolvedObjectRepository.Entry closed = fx.preservation().context().unresolved().find(u.unresolvedId()).orElseThrow();
+        assertThat(closed.resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.ABSENT);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
+        fx.preservation().recovery().runOnce();
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+    }
+
+    @Test
+    void v0019_onlyANamedAdministratorResolvesAnUnresolvedObjectAndAResolutionIsFinal() throws Exception {
+        Repaired f = corruptAndRepair("resolve.tif", b("bond, resolution rules"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        assertThatThrownBy(() -> fx.preservation().unresolved().attest(fx.editor, u.unresolvedId(), "mine"))
+                .isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().release(fx.viewer, u.unresolvedId(), "mine"))
+                .isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().attest(Actor.commandLine(), u.unresolvedId(), "system"))
+                .isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), " "))
+                .isInstanceOf(RuleViolationException.class);
+        assertThat(openRecordAt(u.path()).attested()).isFalse();
+
+        UnresolvedObjectRepository.Entry released = fx.preservation().unresolved().release(fx.admin, u.unresolvedId(),
+                "inspected: a copy someone made, not the archive's");
+        assertThat(released.resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.NOT_ARCHIVAL);
+        assertThat(released.resolvedBy()).isEqualTo(fx.admin.userId());
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
+        assertThat(onVolume(u.path())).as("released objects stay where they are").exists();
+        assertThatThrownBy(() -> fx.preservation().unresolved().attest(fx.admin, u.unresolvedId(), "again"))
+                .isInstanceOf(RuleViolationException.class);
+        assertThatThrownBy(() -> sql().sql("UPDATE gas.unresolved_object SET resolution = 'ABSENT' WHERE unresolved_id = :id")
+                .param("id", u.unresolvedId()).update()).hasMessageContaining("never changed");
+        // From now on the object is an unexpected object in managed storage, reported and never touched.
+        assertThat(fx.scan(fx.services(), "QUICK"))
+                .anyMatch(x -> x.kind() == FindingKind.UNEXPECTED_OBJECT && onVolume(u.path()).equals(onVolume(x.storagePath())));
+    }
+
+    /** No code path promotes an observed hash to deletion authority: the ledger says how each move's hash was known. */
+    @Test
+    void v0019_everyMoveRecordsTheBasisOfItsEvidence() throws Exception {
+        UUID partial = partialCopy("basis.tif", large("basis of evidence"));
+        fx.process(partial);
+        assertThat(fx.preservation().context().quarantine().forOperation(partial))
+                .allSatisfy(e -> assertThat(e.basis()).isEqualTo(QuarantineRepository.Basis.OPERATION_COPY_VERIFIED));
+        ArchivalFile done = repairedCompletely("basis2.tif", b("basis, attested damaged copy"));
+        assertThat(fx.preservation().context().quarantine().forContent(done.contentId()))
+                .singleElement().satisfies(e -> {
+                    assertThat(e.basis()).isEqualTo(QuarantineRepository.Basis.ADMINISTRATOR_ATTESTED);
+                    assertThat(e.reason()).isEqualTo(QuarantineRepository.Reason.ATTESTED_OBJECT);
+                });
+        assertThat(sql().sql("SELECT count(*) FROM gas.quarantine_object WHERE evidence_basis = 'UNTRUSTED'")
+                .query(Long.class).single()).as("nothing this version records is an observation").isZero();
     }
 }

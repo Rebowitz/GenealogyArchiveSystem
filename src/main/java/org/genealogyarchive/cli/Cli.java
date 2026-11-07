@@ -244,7 +244,8 @@ public final class Cli {
                 out.println("File ops    : " + p.operations(org.genealogyarchive.preservation.OperationState.BLOCKED) + " blocked, "
                         + p.operations(org.genealogyarchive.preservation.OperationState.WAITING_FOR_VOLUME) + " waiting for a volume, "
                         + p.operations(org.genealogyarchive.preservation.OperationState.CLEANUP_INCOMPLETE) + " cleanup incomplete");
-                out.println("Integrity   : " + p.openFindings() + " open finding(s); last completed scan "
+                out.println("Integrity   : " + p.openFindings() + " open finding(s), " + p.unresolvedObjects()
+                        + " unresolved object(s); last completed scan "
                         + p.lastScan().map(sc -> sc.kind() + " at " + sc.finishedAt()).orElse("never"));
             }
             out.println("Ready       : " + (s.ready() ? "yes" : "NO"));

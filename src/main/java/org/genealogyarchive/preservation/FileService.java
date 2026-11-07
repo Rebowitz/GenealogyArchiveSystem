@@ -217,8 +217,12 @@ public final class FileService {
         // works on the operation), waiting only briefly; a repair that is writing makes the request fail visibly.
         List<UUID> cancelled = new java.util.ArrayList<>();
         FileOperation op = destroyHolding(actor, fileId, expectedVersion, why, replacementFileId, operationId, cancelled);
-        // Staged bytes of the repairs stopped by the intent are no longer needed.
+        // Staged bytes of the repairs stopped by the intent are no longer needed - except where a repair still owns
+        // a copy: its staged upload is the evidence that identifies that copy (OperationCopies), kept until removal.
         for (UUID repair : cancelled) {
+            if (ctx.operations().find(repair).map(FileOperation::targetCreated).orElse(false)) {
+                continue;
+            }
             ctx.staging().ifPresent(staging -> {
                 try {
                     if (staging.delete(repair)) {

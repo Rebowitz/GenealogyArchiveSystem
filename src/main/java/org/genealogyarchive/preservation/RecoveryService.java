@@ -84,7 +84,8 @@ public final class RecoveryService {
     }
 
     private void cleanStaging(FileOperation op) {
-        if (op.stagingName() == null || op.stagingCleaned()) {
+        // A final operation that still owns a copy keeps its staged upload: it identifies that copy (V0018 audit).
+        if (op.stagingName() == null || op.stagingCleaned() || op.targetCreated()) {
             return;
         }
         ctx.staging().ifPresent(staging -> {

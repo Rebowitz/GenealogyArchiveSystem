@@ -12,6 +12,7 @@ import org.genealogyarchive.history.FieldClass;
 import org.genealogyarchive.identity.GlobalIds;
 import org.genealogyarchive.data.IntegrityRepository;
 import org.genealogyarchive.data.QuarantineRepository;
+import org.genealogyarchive.data.UnresolvedObjectRepository;
 import org.genealogyarchive.platform.SafeFiles;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -243,19 +244,32 @@ public final class OperationProcessor {
                 return block(op, BlockedReason.COLLISION, "An object already exists at the planned location "
                         + op.targetPath() + " although this operation never created it. It was not touched.");
             }
-            ContentIo.Measurement m;
+            // V0018 audit: the claim says only that this operation once created an object here. The object now
+            // here is its copy only if it is the received bytes or a prefix of the (re-verified) staged upload.
+            OperationCopies.Check own;
             try {
-                m = ContentIo.measure(target);
+                own = OperationCopies.check(op, target, Optional.ofNullable(staged));
             } catch (SafeFiles.UnsafePathException e) {
                 return block(op, BlockedReason.UNSAFE_PATH, "The planned location holds a link or reparse point; it was not touched.");
             } catch (IOException e) {
                 return ioProblem(op, e);
             }
-            if (matchesExpected(op, m)) {
-                return protectAndPromote(op, target, "a complete copy from an earlier attempt was found and verified");
+            switch (own.verdict()) {
+                case COMPLETE -> {
+                    return protectAndPromote(op, target, "a complete copy from an earlier attempt was found and verified");
+                }
+                case PARTIAL -> {
+                    guard.run();
+                    return quarantinePartialAndReplan(op, volume, own.observed());
+                }
+                case UNVERIFIED -> {
+                    return unverifiedOwnCopy(op, own);
+                }
+                default -> {
+                    // ABSENT: vanished since the check above; the next pass creates the copy again.
+                    return true;
+                }
             }
-            guard.run();
-            return quarantinePartialAndReplan(op, volume, target);
         }
 
         if (staged == null) {
@@ -283,8 +297,10 @@ public final class OperationProcessor {
         if (!matchesExpected(op, copied)) {
             String where;
             try {
+                // The bytes this worker just wrote, measured while writing them, identify the copy (V0019).
                 where = quarantine.move(volume, op.operationId(), op.contentId(), PortableRelativePath.of(op.targetPath()),
-                        "unverified-copy-" + (op.attempts() + 1), QuarantineRepository.Reason.UNVERIFIED_COPY).quarantinePath();
+                        "unverified-copy-" + (op.attempts() + 1), QuarantineMoves.Evidence.operationCopy(copied),
+                        QuarantineRepository.Reason.UNVERIFIED_COPY).quarantinePath();
             } catch (IOException e) {
                 where = null;
                 log.warn("Operation {}: unverified copy could not be moved to quarantine yet; its intent is recorded",
@@ -323,14 +339,19 @@ public final class OperationProcessor {
      * confirmed after it; if the process stops between the move and this transition, the next attempt
      * settles the ledger entry first (see promote) and then simply writes the target again.
      */
-    private boolean quarantinePartialAndReplan(FileOperation op, ManagedVolume volume, Path target) {
+    private boolean quarantinePartialAndReplan(FileOperation op, ManagedVolume volume, ContentIo.Measurement partial) {
         QuarantineRepository.Entry moved;
         try {
+            // The partial copy was identified as a prefix of the verified staged upload (OperationCopies).
             moved = quarantine.move(volume, op.operationId(), op.contentId(), PortableRelativePath.of(op.targetPath()),
-                    "partial-" + op.attempts(), QuarantineRepository.Reason.PARTIAL_COPY);
+                    "partial-" + op.attempts(), QuarantineMoves.Evidence.operationCopy(partial),
+                    QuarantineRepository.Reason.PARTIAL_COPY);
         } catch (FileAlreadyExistsException e) {
             return block(op, BlockedReason.STATE_UNKNOWN, "The partial copy at " + op.targetPath()
                     + " cannot be moved to quarantine because its destination already exists. Nothing was moved.");
+        } catch (QuarantineMoves.UnexplainedObjectException e) {
+            return block(op, BlockedReason.STATE_UNKNOWN, "The partial copy at " + op.targetPath() + " was not moved: "
+                    + e.getMessage() + ".");
         } catch (IOException e) {
             return ioProblem(op, e);
         }
@@ -350,6 +371,26 @@ public final class OperationProcessor {
         return ctx.operations().transition(op.operationId(), OperationState.PROMOTING, OperationState.PROMOTING,
                 "partial copy from an interrupted attempt moved to " + moved.quarantinePath() + "; next attempt writes "
                         + path.value(), set);
+    }
+
+    /**
+     * The object at this operation's claimed target is not shown to be its copy (V0018 audit): it is never
+     * moved, adopted or deleted. In one transaction the claim ends, the object is recorded as unresolved and
+     * the operation blocks visibly; an Administrator investigates.
+     */
+    private boolean unverifiedOwnCopy(FileOperation op, OperationCopies.Check own) {
+        String message = "The object at " + op.targetPath() + ", where this operation created its copy, is not shown to "
+                + "be that copy (" + own.reason() + "). It was left untouched and is recorded as unresolved; nothing was "
+                + "archived.";
+        log.warn("File operation {} blocked ({}): {}", op.operationId(), BlockedReason.STATE_UNKNOWN, message);
+        ctx.tx().executeWithoutResult(status -> {
+            OperationCopies.claimBecomesUnresolved(ctx, op, own);
+            if (!ctx.operations().transition(op.operationId(), op.state(), OperationState.BLOCKED, message,
+                    Map.of("blocked_reason", BlockedReason.STATE_UNKNOWN, "message", message))) {
+                status.setRollbackOnly();
+            }
+        });
+        return false;
     }
 
     // ---- exact duplicates (P2-B) ----------------------------------------------------------------
@@ -486,7 +527,32 @@ public final class OperationProcessor {
             return ioProblem(op, e);
         }
         guard.run();
-        return op.kind() == OperationKind.REPAIR ? commitRepair(op) : commitNewContent(op, MediaTypes.sniff(m.head()));
+        if (op.kind() != OperationKind.REPAIR) {
+            return commitNewContent(op, MediaTypes.sniff(m.head()));
+        }
+        Superseded old;
+        try {
+            old = inspectSuperseded(op, volume);
+        } catch (IOException e) {
+            return ioProblem(op, e);
+        }
+        return commitRepair(op, old);
+    }
+
+    /** What occupies the location of the generation a repair supersedes, looked at just before the commit. */
+    private record Superseded(int generation, boolean present, ContentIo.Measurement observed) {
+    }
+
+    private Superseded inspectSuperseded(FileOperation op, ManagedVolume volume) throws IOException {
+        FileContent content = ctx.contents().find(op.contentId()).orElseThrow();
+        Optional<Path> at = content.currentPath() == null ? Optional.empty() : volume.locate(content.currentPath());
+        if (at.isEmpty() || !Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
+            return new Superseded(content.currentGeneration(), false, null);
+        }
+        if (SafeFiles.isLinkOrReparsePoint(at.get()) || !Files.isRegularFile(at.get(), LinkOption.NOFOLLOW_LINKS)) {
+            return new Superseded(content.currentGeneration(), true, null);
+        }
+        return new Superseded(content.currentGeneration(), true, ContentIo.measure(at.get()));
     }
 
     private boolean commitNewContent(FileOperation op, String mediaType) {
@@ -543,7 +609,7 @@ public final class OperationProcessor {
                 ChangeKinds.CREATED, fields, null);
     }
 
-    private boolean commitRepair(FileOperation op) {
+    private boolean commitRepair(FileOperation op, Superseded inspected) {
         Boolean done = ctx.tx().execute(status -> {
             if (!ctx.operations().transition(op.operationId(), OperationState.PROMOTED, OperationState.COMMITTED,
                     "repaired generation " + op.targetGeneration() + " verified against the authoritative SHA-256",
@@ -557,14 +623,33 @@ public final class OperationProcessor {
                 return false;
             }
             int old = content.currentGeneration();
-            // V0016: only a location the archive still holds bytes at (damaged, not vacated) has a copy to
-            // quarantine. A vacated location is retired as MISSING whatever is found there now: an object that
-            // appeared after the bytes left is not the archive's and is never moved or adopted.
+            if (old != inspected.generation()) {
+                status.setRollbackOnly();
+                return false;
+            }
+            // V0018 audit: the superseded location is retired by what is physically there. Nothing there: MISSING
+            // (truly absent). Anything there - the damaged copy, or something that appeared where the bytes left -
+            // cannot be shown to be the archive's (an observed mismatch identifies nothing), so it is UNRESOLVED:
+            // left untouched, recorded durably, never moved or deleted without trusted evidence.
             boolean vacated = ctx.contents().generations(content.contentId()).stream()
                     .anyMatch(g -> g.generation() == old && g.vacated());
-            ctx.contents().setGenerationState(content.contentId(), old, GenerationState.CURRENT,
-                    content.state() == ContentState.DAMAGED && !vacated ? GenerationState.QUARANTINE_PENDING
-                            : GenerationState.MISSING, null);
+            if (inspected.present()) {
+                FileContentRepository.Generation g = ctx.contents().generation(content.contentId(), old).orElseThrow();
+                ctx.unresolved().recordIfAbsent(new UnresolvedObjectRepository.NewEntry(g.volumeId(), g.storagePath(),
+                        content.contentId(), old, op.operationId(),
+                        vacated ? UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION
+                                : UnresolvedObjectRepository.Kind.DAMAGED_COPY,
+                        inspected.observed() == null ? null : inspected.observed().size(),
+                        inspected.observed() == null ? null : inspected.observed().sha256(),
+                        "Repair " + op.operationId() + " superseded generation " + old + " (content " + content.state()
+                                + "). An object is at " + g.storagePath() + " that the archive cannot identify as its copy"
+                                + (vacated ? " (the archive recorded the bytes leaving this location)" : "")
+                                + ". It was left untouched. An Administrator may attest that it is the archive's damaged "
+                                + "copy (it is then moved to quarantine) or that it is not (it is released)."));
+                ctx.contents().setGenerationState(content.contentId(), old, GenerationState.CURRENT, GenerationState.UNRESOLVED, null);
+            } else {
+                ctx.contents().setGenerationState(content.contentId(), old, GenerationState.CURRENT, GenerationState.MISSING, null);
+            }
             // One owner at a time: the committed copy now belongs to its generation, not to this operation.
             ctx.operations().releaseTarget(op.operationId(), op.targetPath());
             ctx.contents().addGeneration(content.contentId(), op.targetGeneration(), content.volumeId(),
@@ -572,7 +657,8 @@ public final class OperationProcessor {
             ctx.contents().setState(content.contentId(), content.state(), ContentState.ACTIVE);
             ctx.contents().markVerified(content.contentId(), ctx.clock().instant());
             String resolution = "Repaired by operation " + op.operationId() + ": generation " + op.targetGeneration()
-                    + " written from Administrator-supplied bytes and verified against the authoritative SHA-256.";
+                    + " written from Administrator-supplied bytes and verified against the authoritative SHA-256."
+                    + (inspected.present() ? " The object at the superseded location is recorded as unresolved." : "");
             for (IntegrityFinding f : ctx.integrity().openFindingsFor(content.contentId())) {
                 ctx.integrity().resolve(f.findingId(), resolution, op.operationId());
             }
@@ -608,7 +694,12 @@ public final class OperationProcessor {
         return false;
     }
 
-    /** Moves the damaged generation(s) superseded by this repair into quarantine and records where. */
+    /**
+     * Legacy QUARANTINE_PENDING generations (recorded before V0019, when a repair moved the superseded damaged
+     * copy automatically). Their identity evidence was an observation, so nothing is moved (V0018 audit): an
+     * interrupted move recorded earlier is settled under its own rules, and then the location is retired by what
+     * is there - MISSING if nothing, otherwise UNRESOLVED with a durable record, untouched.
+     */
     private boolean quarantineSuperseded(FileOperation op) {
         List<FileContentRepository.Generation> pending = ctx.contents().generations(op.contentId()).stream()
                 .filter(g -> g.state() == GenerationState.QUARANTINE_PENDING).toList();
@@ -619,88 +710,47 @@ public final class OperationProcessor {
         try {
             volume = ctx.openVolume(op.volumeId());
         } catch (ManagedVolume.VolumeUnavailableException e) {
-            ctx.operations().note(op.operationId(), "damaged copy awaits quarantine: " + e.getMessage());
+            ctx.operations().note(op.operationId(), "superseded generation awaits retirement: " + e.getMessage());
             return false;
         }
         for (FileContentRepository.Generation g : pending) {
             try {
-                String suffix = "damaged-g" + g.generation();
-                boolean intended = ctx.quarantine().find(volume.volumeId(),
-                        ManagedVolume.quarantinePath(op.operationId(), suffix).value()).isPresent();
-                if (!intended) {
-                    Optional<String> notOurs = notTheRecordedDamagedCopy(volume, g);
-                    if (notOurs.isPresent()) {
-                        retireUnexplained(op, g, notOurs.get());
-                        continue;
+                for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(g.contentId())) {
+                    if (entry.state() == QuarantineRepository.State.INTENDED && entry.sourcePath().equals(g.storagePath())) {
+                        quarantine.settle(volume, entry);
                     }
                 }
-                ctx.faults().reach(FaultPoints.Point.BEFORE_QUARANTINE_MOVE, op.operationId());
-                // Ledger intent first (GAS-P2-006/-008): the damaged copy is accounted for at every moment.
-                // The intent records the trusted damage evidence, not a fresh hash of the object (V0018).
-                QuarantineRepository.Entry moved = quarantine.move(volume, op.operationId(), g.contentId(),
-                        PortableRelativePath.of(g.storagePath()), suffix,
-                        g.hasDamageEvidence() ? new QuarantineMoves.Evidence(g.damagedSize(), g.damagedSha256()) : null,
-                        QuarantineRepository.Reason.DAMAGED_GENERATION);
-                if (moved.state() == QuarantineRepository.State.QUARANTINED) {
-                    ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
-                            GenerationState.QUARANTINED, moved.quarantinePath());
-                    ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " is in "
-                            + moved.quarantinePath());
-                } else {
-                    ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
-                            GenerationState.MISSING, null);
-                    ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " was no longer present");
+                FileContentRepository.Generation now = ctx.contents().generation(g.contentId(), g.generation()).orElseThrow();
+                if (now.state() != GenerationState.QUARANTINE_PENDING) {
+                    continue;
                 }
+                Optional<Path> at = volume.locate(PortableRelativePath.of(g.storagePath()));
+                boolean present = at.isPresent() && Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS);
+                ContentIo.Measurement observed = present && Files.isRegularFile(at.get(), LinkOption.NOFOLLOW_LINKS)
+                        && !SafeFiles.isLinkOrReparsePoint(at.get()) ? ContentIo.measure(at.get()) : null;
+                ctx.tx().executeWithoutResult(status -> {
+                    if (present) {
+                        ctx.unresolved().recordIfAbsent(new UnresolvedObjectRepository.NewEntry(g.volumeId(), g.storagePath(),
+                                g.contentId(), g.generation(), op.operationId(), UnresolvedObjectRepository.Kind.DAMAGED_COPY,
+                                observed == null ? null : observed.size(), observed == null ? null : observed.sha256(),
+                                "Generation " + g.generation() + " was superseded by repair " + op.operationId() + " and was "
+                                        + "awaiting quarantine. The object at " + g.storagePath() + " cannot be identified as the "
+                                        + "archive's damaged copy (only an observation was recorded), so it was left untouched."));
+                    }
+                    ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
+                            present ? GenerationState.UNRESOLVED : GenerationState.MISSING, null);
+                });
+                ctx.operations().note(op.operationId(), "superseded generation " + g.generation() + (present
+                        ? " is recorded as unresolved; the object at " + g.storagePath() + " was left untouched"
+                        : " was no longer present"));
             } catch (IOException e) {
-                ctx.operations().note(op.operationId(), "damaged generation " + g.generation()
-                        + " could not be moved to quarantine yet (" + e.getClass().getSimpleName()
+                ctx.operations().note(op.operationId(), "superseded generation " + g.generation()
+                        + " could not be retired yet (" + e.getClass().getSimpleName()
                         + (e.getMessage() == null ? "" : ": " + e.getMessage()) + "); it remains accounted for");
                 return false;
             }
         }
         return true;
-    }
-
-    /**
-     * Before a damaged generation's copy is moved to quarantine (V0017): the object at its location must be the
-     * damaged copy integrity checking recorded - same size and SHA-256 as the latest damage finding for that
-     * generation. Without such evidence, or if something else is there now, it is not shown to be the
-     * archive's.
-     *
-     * @return why the object there is not shown to be the recorded damaged copy; empty if it is, or if nothing
-     *         is there (the move then records that the source was absent)
-     */
-    private Optional<String> notTheRecordedDamagedCopy(ManagedVolume volume, FileContentRepository.Generation g) throws IOException {
-        Optional<Path> at = volume.locate(PortableRelativePath.of(g.storagePath()));
-        if (at.isEmpty() || !Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
-            return Optional.empty();
-        }
-        // V0018: only the evidence recorded when the damage was first found identifies the damaged copy; the hash
-        // of whatever occupies the location now never does.
-        if (!g.hasDamageEvidence()) {
-            return Optional.of("no evidence of the damaged copy was recorded when the damage was found");
-        }
-        SafeFiles.requirePlainFile(at.get());
-        ContentIo.Measurement m = ContentIo.measure(at.get());
-        if (m.size() != g.damagedSize() || !m.sha256().equals(g.damagedSha256())) {
-            return Optional.of("the object there does not have the size and SHA-256 recorded when the damage was found");
-        }
-        return Optional.empty();
-    }
-
-    /** The superseded location holds something not shown to be the archive's: retire it untouched and report. */
-    private void retireUnexplained(FileOperation op, FileContentRepository.Generation g, String why) {
-        ctx.tx().executeWithoutResult(status -> {
-            if (ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
-                    GenerationState.MISSING, null)) {
-                ctx.integrity().insertFindingIfNew(null, new org.genealogyarchive.data.IntegrityRepository.NewFinding(
-                        FindingKind.UNEXPECTED_OBJECT, g.volumeId(), null, null, g.storagePath(), op.operationId(), null, null,
-                        "Repair " + op.operationId() + " did not quarantine the object at the damaged generation's location: "
-                        + why + ". It was left untouched."));
-            }
-        });
-        ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " retired without moving anything: "
-                + why + "; the object at " + g.storagePath() + " was left untouched and reported");
     }
 
     // ---- WAITING_FOR_VOLUME / final ----------------------------------------------------------------
@@ -717,7 +767,8 @@ public final class OperationProcessor {
     }
 
     private boolean cleanupFinal(FileOperation op) {
-        if (op.state().isFinal() && op.stagingName() != null && !op.stagingCleaned()) {
+        // The staged upload is the evidence of a copy the operation still owns (OperationCopies): kept until then.
+        if (op.state().isFinal() && op.stagingName() != null && !op.stagingCleaned() && !op.targetCreated()) {
             ctx.staging().ifPresent(staging -> deleteStaging(op.operationId(), staging));
         }
         return false;

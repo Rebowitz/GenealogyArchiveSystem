@@ -1,6 +1,7 @@
 package org.genealogyarchive.preservation;
 
 import org.genealogyarchive.data.QuarantineRepository;
+import org.genealogyarchive.data.UnresolvedObjectRepository;
 import org.genealogyarchive.files.ManagedVolume;
 import org.genealogyarchive.files.PortableRelativePath;
 import org.genealogyarchive.platform.SafeFiles;
@@ -28,6 +29,9 @@ import java.util.UUID;
  *   <li>both absent: record SOURCE_ABSENT (nothing to account for);</li>
  *   <li>both present: something unexplained is in the way; fail visibly, touch nothing.</li>
  * </ul>
+ * Only an object identified by trusted evidence is ever moved (V0019): the operation's own verified copy or
+ * an object an Administrator attested. An intent whose evidence was only an observation is never finished
+ * for an object still at its source.
  * Confirming a move also retires the vacated location in the same transaction (GAS-P2-FV01, IV01): every
  * operation's ownership of it ends and a superseded generation stored there becomes QUARANTINED (or
  * MISSING). The copy is then accounted by the ledger alone; the vacated path is only historical, and a
@@ -43,51 +47,48 @@ final class QuarantineMoves {
         this.ctx = ctx;
     }
 
-    /** Records the intent, moves {@code source} into quarantine, and confirms it. */
-    QuarantineRepository.Entry move(ManagedVolume volume, UUID operationId, UUID contentId, PortableRelativePath source,
-                                    String suffix, QuarantineRepository.Reason reason) throws IOException {
-        return move(volume, operationId, contentId, source, suffix, null, reason);
-    }
+    /** Evidence, established before this move, of the object it is meant to move (V0018, V0019). */
+    record Evidence(long size, String sha256, QuarantineRepository.Basis basis) {
+        Evidence {
+            if (!basis.trusted()) {
+                throw new IllegalArgumentException("a move needs evidence that identifies the archive's object");
+            }
+        }
 
-    /** Evidence, recorded before this move, of the object it is meant to move (V0018). */
-    record Evidence(long size, String sha256) {
+        /** The operation's own copy, identified by {@link OperationCopies} or measured while it was written. */
+        static Evidence operationCopy(ContentIo.Measurement m) {
+            return new Evidence(m.size(), m.sha256(), QuarantineRepository.Basis.OPERATION_COPY_VERIFIED);
+        }
     }
 
     /**
-     * Moves an object to quarantine. With {@code trusted} evidence - recorded earlier, such as when a damaged
-     * copy was found - the object must still match it: otherwise nothing is recorded or moved and the
-     * discrepancy is reported, and the intent carries the trusted evidence, never a fresh hash of the object.
-     * Without it, the object is the operation's own copy (its claim is the ownership evidence) and its hash
-     * at intent time identifies it for recovery.
+     * Moves an object to quarantine (V0019). The caller supplies trusted evidence of which object it means -
+     * the operation's verified own copy, or an Administrator's attestation - and the object must still match it:
+     * otherwise nothing is recorded or moved and the discrepancy is reported. The intent records that evidence
+     * and its basis, never a fresh hash of whatever is at the source.
      */
     QuarantineRepository.Entry move(ManagedVolume volume, UUID operationId, UUID contentId, PortableRelativePath source,
                                     String suffix, Evidence trusted, QuarantineRepository.Reason reason) throws IOException {
         PortableRelativePath q = ManagedVolume.quarantinePath(operationId, suffix);
-        // V0017: the intent records which object is moved - its size and the SHA-256 of its bytes (with its
-        // last-modified time, for information) - so an interrupted move is only ever finished for an object with
-        // those bytes, never for a different object that appeared at either end later.
         Optional<Path> at = volume.locate(source);
         QuarantineRepository.Entry entry;
-        if (at.isPresent() && Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
+        Optional<QuarantineRepository.Entry> recorded = ctx.quarantine().find(volume.volumeId(), q.value());
+        if (recorded.isPresent()) {
+            // Already intended: its recorded evidence governs (settle verifies the object against it).
+            entry = recorded.get();
+        } else if (at.isPresent() && Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
             SafeFiles.requirePlainFile(at.get());
             BasicFileAttributes seen = Files.readAttributes(at.get(), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            Optional<QuarantineRepository.Entry> recorded = ctx.quarantine().find(volume.volumeId(), q.value());
-            if (recorded.isPresent()) {
-                // Already intended: its recorded evidence governs (settle verifies the object against it).
-                entry = recorded.get();
-            } else {
-                ContentIo.Measurement m = ContentIo.measure(at.get());
-                if (trusted != null && (m.size() != trusted.size() || !m.sha256().equals(trusted.sha256()))) {
-                    throw new UnexplainedObjectException("the object at " + source.value() + " is not the copy recorded "
-                            + "earlier (size and SHA-256 differ); it was not moved");
-                }
-                entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId, source.value(), q.value(), reason,
-                        trusted != null ? trusted.size() : m.size(), seen.lastModifiedTime().to(TimeUnit.MICROSECONDS),
-                        trusted != null ? trusted.sha256() : m.sha256());
+            ContentIo.Measurement m = ContentIo.measure(at.get());
+            if (m.size() != trusted.size() || !m.sha256().equals(trusted.sha256())) {
+                throw new UnexplainedObjectException("the object at " + source.value() + " is not the object identified "
+                        + "earlier (size and SHA-256 differ); it was not moved");
             }
+            entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId, source.value(), q.value(), reason,
+                    trusted.size(), seen.lastModifiedTime().to(TimeUnit.MICROSECONDS), trusted.sha256(), trusted.basis());
         } else {
             entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId, source.value(), q.value(), reason,
-                    null, null, null);
+                    null, null, null, trusted.basis());
         }
         ctx.faults().reach(FaultPoints.Point.AFTER_QUARANTINE_INTENT, operationId);
         return settle(volume, entry);
@@ -118,8 +119,12 @@ final class QuarantineMoves {
         if (entry.recordedAbsent()) {
             return "nothing was at " + entry.sourcePath() + " when this move was recorded";
         }
-        return entry.hasEvidence() ? "it does not have the recorded size and SHA-256"
-                : "this move was recorded without content evidence (before V0017); an Administrator must verify it";
+        if (!entry.hasEvidence()) {
+            return "this move was recorded without content evidence (before V0017); an Administrator must verify it";
+        }
+        return entry.basis().trusted() ? "it does not have the recorded size and SHA-256"
+                : "this move recorded only an observation of whatever was there (before V0019), which does not identify "
+                + "the archive's object; an Administrator must verify it";
     }
 
     /** Finishes an INTENDED entry from the state on disk; other states are returned unchanged. */
@@ -136,7 +141,8 @@ final class QuarantineMoves {
             throw new FileAlreadyExistsException(entry.quarantinePath(), entry.sourcePath(),
                     "both the object and its quarantine destination exist; nothing was moved");
         }
-        if (sourcePresent && !isRecordedObject(entry, source.get())) {
+        // V0019: only a move whose evidence identified the archive's object when it was recorded may move anything.
+        if (sourcePresent && (!entry.hasTrustedEvidence() || !isRecordedObject(entry, source.get()))) {
             throw new UnexplainedObjectException("the object now at " + entry.sourcePath() + " is not shown to be the one this "
                     + "move to " + entry.quarantinePath() + " was recorded for (" + unverifiedReason(entry)
                     + "); it was not moved or adopted");
@@ -181,8 +187,17 @@ final class QuarantineMoves {
         ctx.tx().executeWithoutResult(status -> {
             if (ctx.quarantine().setState(entry.quarantineId(), QuarantineRepository.State.INTENDED, settled, detail)) {
                 ctx.operations().releaseTargetsAt(entry.volumeId(), entry.sourcePath());
-                ctx.contents().retireGenerationAt(entry.contentId(), entry.sourcePath(),
-                        settled == QuarantineRepository.State.QUARANTINED ? entry.quarantinePath() : null);
+                // V0019: an unresolved record at the source closes with the move: the object it described was
+                // identified by trusted evidence and is now in quarantine, or nothing is there any more.
+                ctx.unresolved().openAt(entry.volumeId(), entry.sourcePath()).ifPresent(u -> ctx.unresolved().resolve(
+                        u.unresolvedId(), settled == QuarantineRepository.State.QUARANTINED
+                                ? UnresolvedObjectRepository.Resolution.QUARANTINED : UnresolvedObjectRepository.Resolution.ABSENT,
+                        settled == QuarantineRepository.State.QUARANTINED ? "moved to " + entry.quarantinePath()
+                                + " (" + entry.basis() + ")" : "nothing was at " + entry.sourcePath() + " any more", null));
+                if (entry.contentId() != null) {
+                    ctx.contents().retireGenerationAt(entry.contentId(), entry.sourcePath(),
+                            settled == QuarantineRepository.State.QUARANTINED ? entry.quarantinePath() : null);
+                }
             }
         });
         return ctx.quarantine().find(entry.volumeId(), entry.quarantinePath()).orElseThrow();

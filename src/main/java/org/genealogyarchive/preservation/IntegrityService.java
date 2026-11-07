@@ -5,6 +5,7 @@ import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.access.Permission;
 import org.genealogyarchive.data.FileContentRepository;
 import org.genealogyarchive.data.IntegrityRepository;
+import org.genealogyarchive.data.UnresolvedObjectRepository;
 import org.genealogyarchive.files.ManagedVolume;
 import org.genealogyarchive.files.StagingArea;
 import org.genealogyarchive.identity.GlobalIds;
@@ -117,6 +118,7 @@ public final class IntegrityService {
                     checkUnexpected(scanId, volume.get(), counts);
                 }
             }
+            checkUnresolved(scanId, volumes, counts);
             checkStaging(scanId, counts);
             int observed = counts[1] + counts[2];
             ctx.integrity().finishScan(scanId, "COMPLETED", counts[0], observed, summary(counts));
@@ -234,8 +236,7 @@ public final class IntegrityService {
             }
             long size = Files.size(path);
             if (size != content.byteSize()) {
-                // V0017: the damaged object's SHA-256 is recorded too - the evidence a later repair needs to show
-                // that what it moves to quarantine is this damaged copy and not something put there since.
+                // The observed SHA-256 is recorded too (diagnostic: it identifies what was seen, not whose it is).
                 ContentIo.Measurement damaged = ContentIo.measure(path);
                 damaged(scanId, content, damaged, finding(FindingKind.SIZE_MISMATCH, content, damaged.size(), damaged.sha256(),
                         "Stored size " + size + " differs from the authoritative " + content.byteSize() + " bytes"), counts);
@@ -264,10 +265,11 @@ public final class IntegrityService {
     }
 
     /**
-     * Records damage. When ACTIVE content first becomes DAMAGED, the copy's size and SHA-256 are recorded on its
-     * generation in the same transaction (V0018): the trusted evidence of which object the damaged copy is.
-     * Never from MISSING (V0016), and never replacing evidence already recorded: if the bytes at a DAMAGED
-     * content's location are no longer the recorded damaged copy, that change is reported instead.
+     * Records damage. When ACTIVE content first becomes DAMAGED, what this scan observed (size and SHA-256) is
+     * recorded on its generation in the same transaction (V0018). It is an observation of a mismatch, not
+     * evidence of which object is the archive's: the object may have been replaced before this scan ran, so
+     * nothing moves or deletes bytes on its strength (V0018 audit, V0019). Never from MISSING (V0016), never
+     * replaced; if the bytes at a DAMAGED content's location change again, that change is reported.
      */
     private void damaged(UUID scanId, FileContent content, ContentIo.Measurement observed, IntegrityRepository.NewFinding f,
                          int[] counts) {
@@ -284,10 +286,36 @@ public final class IntegrityService {
                 record(scanId, new IntegrityRepository.NewFinding(FindingKind.UNEXPECTED_OBJECT, content.volumeId(), null, null,
                         content.currentPath().value(), null, observed.size(), observed.sha256(),
                         "The object at the location of damaged content " + content.contentId() + " is no longer the damaged "
-                        + "copy recorded when the damage was found; that evidence is kept and this object is not the "
-                        + "archive's copy"), counts);
+                        + "object observed when the damage was found; that observation is kept and this object is not "
+                        + "treated as the archive's copy"), counts);
             }
         });
+    }
+
+    /**
+     * Unresolved objects (V0019) stay problems until they are resolved: each open record whose object is still
+     * there counts as unresolved in this scan's outcome; one whose object is verifiably gone is closed (ABSENT).
+     * Nothing is moved, adopted or deleted.
+     */
+    private void checkUnresolved(UUID scanId, Map<UUID, Optional<ManagedVolume>> volumes, int[] counts) {
+        for (UnresolvedObjectRepository.Entry u : ctx.unresolved().open()) {
+            Optional<ManagedVolume> volume = volumes.computeIfAbsent(u.volumeId(), id -> openOrReport(scanId, id, counts));
+            if (volume.isEmpty()) {
+                counts[2]++;
+                continue;
+            }
+            try {
+                Optional<Path> at = volume.get().locate(org.genealogyarchive.files.PortableRelativePath.of(u.path()));
+                if (at.isEmpty() || !Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
+                    UnresolvedObjects.resolveAbsent(ctx, u, "nothing was at " + u.path() + " when integrity scan " + scanId
+                            + " checked");
+                } else {
+                    counts[2]++;
+                }
+            } catch (IOException e) {
+                counts[2]++;
+            }
+        }
     }
 
     private void reappeared(FileContent content, String resolution) {
@@ -305,6 +333,8 @@ public final class IntegrityService {
     private void checkUnexpected(UUID scanId, ManagedVolume volume, int[] counts) {
         Set<String> accounted = new HashSet<>(ctx.contents().accountedPaths(volume.volumeId()));
         accounted.addAll(ctx.operations().plannedTargets(volume.volumeId()));
+        // Unresolved objects are already recorded (and counted by checkUnresolved), not unaccounted for.
+        accounted.addAll(ctx.unresolved().openPaths(volume.volumeId()));
         try {
             for (ManagedVolume.Entry entry : volume.listOriginals()) {
                 if (entry.kind() == ManagedVolume.Entry.Kind.LINK_OR_REPARSE) {

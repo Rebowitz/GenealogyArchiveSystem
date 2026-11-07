@@ -50,6 +50,7 @@ public class PreservationController {
         model.addAttribute("status", preservation.operations().status(actor, preservation.volumes()));
         model.addAttribute("scans", preservation.integrity().recentScans(actor, 20));
         model.addAttribute("findings", preservation.integrity().openFindings(actor, 200));
+        model.addAttribute("unresolved", preservation.unresolved().open(actor));
         model.addAttribute("operations", preservation.operations().recent(actor, 100));
         model.addAttribute("archive", archives.view(actor));
         return "preservation";
@@ -81,6 +82,20 @@ public class PreservationController {
         // Runs in the worker: restoring lost protection changes managed storage, which the web process cannot do.
         preservation.integrity().requestReverify(actors.require(authentication), contentId);
         return "redirect:/preservation?reverifyRequested";
+    }
+
+    /** The Administrator has inspected the object and says it is not the archive's copy; it stays where it is. */
+    @PostMapping("/preservation/unresolved/{unresolvedId}/release")
+    public String releaseUnresolved(@PathVariable UUID unresolvedId, @RequestParam String reason, Authentication authentication) {
+        preservation.unresolved().release(actors.require(authentication), unresolvedId, reason);
+        return "redirect:/preservation";
+    }
+
+    /** The Administrator attests that the recorded object is the archive's copy; the worker quarantines it. */
+    @PostMapping("/preservation/unresolved/{unresolvedId}/attest")
+    public String attestUnresolved(@PathVariable UUID unresolvedId, @RequestParam String reason, Authentication authentication) {
+        preservation.unresolved().attest(actors.require(authentication), unresolvedId, reason);
+        return "redirect:/preservation";
     }
 
     @GetMapping("/preservation/operations/{operationId}")

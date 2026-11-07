@@ -160,21 +160,26 @@ workers from driving the same operation.
     copy is vouched for by its claim. Anything else is left and reported.
   - A MISSING original is restored to ACTIVE only when its bytes verify and it is already protected
     read-only; scans never change protection. Worker re-verification checks the bytes before it protects.
-- **Deletion and quarantine authorization (V0018).** For every physical copy:
+- **Deletion and quarantine authorization (V0019, replacing the V0018 table).** Bytes are moved or deleted only
+  on evidence the archive established before the object could have been replaced. An observed hash - including
+  the one the first damage scan records (`damaged_sha256`, now diagnostic only) - and a claim alone are never
+  evidence. For every physical copy:
 
-  | Copy | Record claiming it | Evidence identifying the object | Recorded | Destructive action allowed when |
+  | Copy | Record claiming it | Evidence identifying the object | Established | Move / delete allowed when |
   |---|---|---|---|---|
-  | Current generation, content ACTIVE/DAMAGED | generation (CURRENT) | authoritative SHA-256; damaged-copy SHA-256 | at ingestion; at first damage detection (never replaced) | object absent, or its SHA-256 is one of these |
-  | Current generation, content MISSING (vacated) | none (location vacated) | authoritative SHA-256 only | at ingestion | object verifies; otherwise it is not the archive's: left, reported |
-  | Superseded damaged generation (QUARANTINE_PENDING) | generation | damaged-copy SHA-256 | at first damage detection | quarantine/delete only if it matches; otherwise left and reported |
-  | Quarantined generation / ledger entry | ledger (QUARANTINED) | hash recorded with the move (the damage evidence for damaged copies) | before the move | object absent or matches; a pre-V0017 record without a hash authorises nothing |
-  | Uncommitted copy of an operation | operation claim (`physical_location_owner`) | its exclusive create | at creation | deletion by destruction of the content |
-  | Anything else at a recorded or vacated location | none | - | - | never |
+  | Current generation (content ACTIVE, DAMAGED, or MISSING/vacated) | generation (CURRENT) | authoritative size + SHA-256 | at ingestion (never changes) | object absent, or it has the authoritative SHA-256; otherwise recorded unresolved, untouched |
+  | Uncommitted copy of an operation | operation claim (`physical_location_owner`) | the receiver's size + SHA-256 (complete copy), or byte prefix of the staged upload after the staged upload re-verifies against them; for a copy the worker just wrote, the size + SHA-256 measured while writing | at receipt / while writing | promotion, cancellation, recovery and destruction move or delete it only when verified; otherwise the claim becomes an unresolved record, the object is untouched |
+  | Superseded generation whose location is occupied (UNRESOLVED) | generation + `unresolved_object` | none until an Administrator attests the recorded observation | at attestation | attested and still matching: quarantined (`ADMINISTRATOR_ATTESTED`) or removed by destruction; otherwise untouched |
+  | Superseded generation, nothing at its location | none (MISSING) | - | - | nothing to act on |
+  | Quarantined object | ledger entry (QUARANTINED) | the move's size + SHA-256 when its `evidence_basis` is `OPERATION_COPY_VERIFIED` or `ADMINISTRATOR_ATTESTED` | at the move's intent | object absent or matches; `UNTRUSTED` (all moves before V0019) authorises nothing - recorded unresolved |
+  | Unresolved object (any of the above) | `unresolved_object` (open) | an Administrator's attestation of its observed SHA-256 | at attestation | as above; released objects are never touched; verified absence closes the record |
+  | Anything else at a historical location | none | - | - | never (reported) |
 
-  A claimed copy that cannot be shown to be the content's keeps destruction `CLEANUP_INCOMPLETE` (naming the
-  path and reason, visible only to Administrators); `BYTES_REMOVED` is recorded only when no claimed copy
-  remains. Path occupancy, a fresh hash of the current object, and historical ledger status are never
-  evidence.
+  Destruction records `BYTES_REMOVED` only when no open unresolved record remains for the content or its
+  operations; an unidentified object keeps it `CLEANUP_INCOMPLETE`, naming the path and why, on every retry,
+  until the object is verifiably gone or an Administrator resolves it (Preservation page: attest or release).
+  The database enforces that an UNRESOLVED generation always has its open record, that records are never
+  deleted and a resolution never changes, and that a move's `evidence_basis` is never rewritten.
 - Unfinished repairs of the content are part of that accounting (GAS-P2-R01). Removal first takes the lock
   of every unfinished operation on the content and of every owner of an unsettled quarantine move of it
   (if one is busy, removal waits and is retried), then stops each unfinished repair (`CANCELLED`, with the
@@ -195,6 +200,11 @@ workers from driving the same operation.
 - Repair accepts Administrator-supplied bytes only if size and SHA-256 equal the authoritative values
   recorded at ingestion (which never change), writes a new generation through the same protocol, and
   keeps the damaged copy in quarantine.
+  *Amended by V0019 (V0018 audit; recorded for owner review in PHASE-2-AUDIT-CORRECTIONS.md):* a scan's
+  observation of a mismatch cannot identify which object is the damaged copy, so the repair keeps the
+  superseded copy accountable where it is - generation `UNRESOLVED`, durable `unresolved_object` record,
+  untouched and recoverable - and moves it to quarantine only after an Administrator attests the recorded
+  object (the move verifies it still has the attested SHA-256). An empty former location is retired MISSING.
 
 ### Restriction (P2-H, B2)
 Restricted Files are visible only to Administrators. For everyone else every path (page, friendly-ID

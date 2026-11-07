@@ -66,16 +66,18 @@ class RepairLockPoolIT {
         return bytes;
     }
 
+    /**
+     * Content whose original was lost (recorded MISSING), so it needs repair. (A damaged original would stay at
+     * its location as an unresolved object after destruction - V0018 audit - which these tests are not about.)
+     */
     private ArchivalFile damaged(String name, byte[] bytes) throws Exception {
         ArchivalFile f = fx.ingest(fx.editor, name, bytes);
         Path stored = fx.storedPath(f);
         SafeFiles.clearReadOnly(stored);
-        byte[] rotten = bytes.clone();
-        rotten[0] ^= 1;
-        Files.write(stored, rotten);
-        fx.scan(fx.services(), "FULL");
+        Files.delete(stored);
+        fx.scan(fx.services(), "QUICK");
         assertThat(fx.preservation().context().contents().find(f.contentId()).orElseThrow().state())
-                .isEqualTo(ContentState.DAMAGED);
+                .isEqualTo(ContentState.MISSING);
         return f;
     }
 

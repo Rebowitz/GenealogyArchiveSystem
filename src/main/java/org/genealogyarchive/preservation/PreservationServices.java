@@ -12,7 +12,8 @@ public record PreservationServices(
         RepairService repair,
         OperationAdminService operations,
         VolumePreservationService volumes,
-        ThumbnailService thumbnails) {
+        ThumbnailService thumbnails,
+        UnresolvedObjects unresolved) {
 
     public static PreservationServices create(PreservationContext ctx) {
         IngestionService ingestion = new IngestionService(ctx);
@@ -21,6 +22,6 @@ public record PreservationServices(
         return new PreservationServices(ctx, ingestion, processor, destruction,
                 new RecoveryService(ctx, processor, destruction), new FileService(ctx), new IntegrityService(ctx),
                 new RepairService(ctx, ingestion), new OperationAdminService(ctx), new VolumePreservationService(ctx),
-                new ThumbnailService(ctx));
+                new ThumbnailService(ctx), new UnresolvedObjects(ctx));
     }
 }

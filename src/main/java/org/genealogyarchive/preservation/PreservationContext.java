@@ -10,6 +10,7 @@ import org.genealogyarchive.data.IntegrityRepository;
 import org.genealogyarchive.data.QuarantineRepository;
 import org.genealogyarchive.data.OperationLocks;
 import org.genealogyarchive.data.StorageVolumeRepository;
+import org.genealogyarchive.data.UnresolvedObjectRepository;
 import org.genealogyarchive.files.ManagedVolume;
 import org.genealogyarchive.files.StagingArea;
 import org.genealogyarchive.files.VolumeRoots;
@@ -32,6 +33,7 @@ public record PreservationContext(
         ArchivalFileRepository files,
         IntegrityRepository integrity,
         QuarantineRepository quarantine,
+        UnresolvedObjectRepository unresolved,
         ArchiveInstanceRepository archives,
         StorageVolumeRepository volumes,
         FriendlyIdSeriesRepository friendlyIds,
@@ -51,6 +53,7 @@ public record PreservationContext(
     public static final String JOB_INTEGRITY_SCAN = "file.integrity-scan";
     public static final String JOB_REVERIFY = "file.reverify";
     public static final String JOB_CANCEL = "file.cancel";
+    public static final String JOB_QUARANTINE_ATTESTED = "file.quarantine-attested";
 
     /** The staging area, if configured. */
     public Optional<StagingArea> staging() {

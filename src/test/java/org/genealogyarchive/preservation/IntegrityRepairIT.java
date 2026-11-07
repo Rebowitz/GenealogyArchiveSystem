@@ -123,6 +123,17 @@ class IntegrityRepairIT {
         FileOperation good = repair(f, bytes);
         assertThat(good.state()).isEqualTo(OperationState.COMPLETED);
         assertThat(content(f).sha256()).isEqualTo(authoritative);
+        // V0018 audit: a scan's observation of a mismatch does not identify which object is the damaged copy, so
+        // the repair leaves it in place, UNRESOLVED and accounted for. It is kept untouched (recoverable) until an
+        // Administrator attests that it is the archive's damaged copy; it is then moved to quarantine.
+        FileContentRepository.Generation superseded = fx.preservation().context().contents().generations(f.contentId())
+                .stream().filter(g -> g.generation() == 1).findFirst().orElseThrow();
+        assertThat(superseded.state()).isEqualTo(GenerationState.UNRESOLVED);
+        assertThat(Files.readAllBytes(stored)).as("left untouched").isEqualTo(rotten);
+        var unresolvedRecord = fx.preservation().context().unresolved().openAt(fx.volumeId, superseded.storagePath()).orElseThrow();
+        assertThat(scan("FULL")).as("accounted for, not reported as unexpected").isEmpty();
+        fx.preservation().unresolved().attest(fx.admin, unresolvedRecord.unresolvedId(), "inspected: the damaged scan");
+        assertThat(fx.preservation().unresolved().quarantineAttested(unresolvedRecord.unresolvedId())).isTrue();
         var gens = fx.preservation().context().contents().generations(f.contentId());
         FileContentRepository.Generation damaged = gens.stream().filter(g -> g.generation() == 1).findFirst().orElseThrow();
         assertThat(damaged.state()).isEqualTo(GenerationState.QUARANTINED);
@@ -136,6 +147,8 @@ class IntegrityRepairIT {
 
     @Test
     void requirement4_aCrashBeforeTheQuarantineMoveKeepsTheDamagedGenerationAccountedFor() throws Exception {
+        // V0019: the move of the damaged copy is the attested one (see iv003); a crash before it keeps the
+        // generation UNRESOLVED and accounted for, and the retried job finishes it.
         byte[] bytes = b("census return, household 17");
         ArchivalFile f = fx.ingest(fx.editor, "h.tif", bytes);
         Path stored = fx.storedPath(f);
@@ -145,19 +158,24 @@ class IntegrityRepairIT {
 
         FileOperation op = fx.preservation().repair().receive(fx.admin, f.contentId(), "good.tif", bytes.length,
                 new ByteArrayInputStream(bytes));
-        fx.faults.crashAt(FaultPoints.Point.BEFORE_QUARANTINE_MOVE);
-        assertThatThrownBy(() -> fx.process(op.operationId())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
-
-        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMMITTED);
+        assertThat(fx.process(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
         var pending = fx.preservation().context().contents().generations(f.contentId()).stream()
                 .filter(g -> g.generation() == 1).findFirst().orElseThrow();
-        assertThat(pending.state()).isEqualTo(GenerationState.QUARANTINE_PENDING);
+        var unresolvedRecord = fx.preservation().context().unresolved().openAt(fx.volumeId, pending.storagePath()).orElseThrow();
+        fx.preservation().unresolved().attest(fx.admin, unresolvedRecord.unresolvedId(), "inspected");
+        fx.faults.crashAt(FaultPoints.Point.BEFORE_QUARANTINE_MOVE);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(unresolvedRecord.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+
+        pending = fx.preservation().context().contents().generations(f.contentId()).stream()
+                .filter(g -> g.generation() == 1).findFirst().orElseThrow();
+        assertThat(pending.state()).isEqualTo(GenerationState.UNRESOLVED);
         assertThat(Files.exists(stored)).isTrue();
         assertThat(scan("QUICK")).as("the pending damaged copy is accounted for, not 'unexpected'")
                 .noneMatch(x -> x.kind() == FindingKind.UNEXPECTED_OBJECT);
 
         fx.preservation().recovery().runOnce();
-        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(fx.preservation().unresolved().quarantineAttested(unresolvedRecord.unresolvedId())).as("the job retried").isTrue();
         assertThat(fx.preservation().context().contents().generations(f.contentId()).stream()
                 .filter(g -> g.generation() == 1).findFirst().orElseThrow().state()).isEqualTo(GenerationState.QUARANTINED);
     }

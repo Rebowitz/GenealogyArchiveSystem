@@ -38,13 +38,15 @@ public final class FileContentRepository {
     /**
      * @param vacated        the archive recorded that the bytes left {@code storagePath} (content MISSING); an object
      *                       found there later is not this generation's copy until verified (V0016)
-     * @param damagedSize    size of the copy when it was first found damaged (V0018)
-     * @param damagedSha256  its SHA-256 then - the trusted evidence of which object the damaged copy is
+     * @param damagedSize    size observed by the scan that first found the generation damaged (V0018) -
+     *                       diagnostic only (V0019)
+     * @param damagedSha256  SHA-256 observed then - diagnostic only: an observation of a mismatch never identifies
+     *                       the archive's object, so nothing moves or deletes bytes on its strength (V0019)
      */
     public record Generation(UUID contentId, int generation, UUID volumeId, String storagePath, GenerationState state,
                              String quarantinePath, UUID operationId, boolean vacated, Long damagedSize,
                              String damagedSha256) {
-        /** Evidence recorded when this generation's copy was first found damaged (V0018); never replaced. */
+        /** An observation recorded when this generation was first found damaged (V0018); diagnostic only. */
         public boolean hasDamageEvidence() {
             return damagedSize != null && damagedSha256 != null;
         }
@@ -100,14 +102,15 @@ public final class FileContentRepository {
 
     /**
      * Retires a superseded generation's storage location once the move of its bytes is settled
-     * (GAS-P2-IV01): QUARANTINE_PENDING becomes QUARANTINED at {@code quarantinePath}, or MISSING when
-     * the bytes were no longer there. Its storage path is then only a historical location.
+     * (GAS-P2-IV01): QUARANTINE_PENDING (legacy) or UNRESOLVED (V0019, after an Administrator's attestation)
+     * becomes QUARANTINED at {@code quarantinePath}, or MISSING when the bytes were no longer there. Its storage
+     * path is then only a historical location.
      */
     public boolean retireGenerationAt(UUID contentId, String storagePath, String quarantinePath) {
         return jdbc.sql("""
                 UPDATE gas.file_content_generation
                    SET state = :to, quarantine_path = :qpath, updated_at = clock_timestamp()
-                 WHERE content_id = :id AND storage_path = :path AND state = 'QUARANTINE_PENDING'
+                 WHERE content_id = :id AND storage_path = :path AND state IN ('QUARANTINE_PENDING', 'UNRESOLVED')
                 """).param("to", quarantinePath == null ? GenerationState.MISSING.name() : GenerationState.QUARANTINED.name())
                 .param("qpath", quarantinePath).param("id", contentId).param("path", storagePath).update() > 0;
     }
@@ -162,8 +165,8 @@ public final class FileContentRepository {
     }
 
     /**
-     * Records the damaged copy's evidence once, when the damage is first detected (V0018). Never replaces
-     * evidence already recorded (the database refuses that too).
+     * Records, once, what the scan that first found the damage observed (V0018). Never replaced (the database
+     * refuses that too). Diagnostic only (V0019).
      */
     public void recordDamageEvidence(UUID contentId, int generation, long size, String sha256) {
         jdbc.sql("""
@@ -191,6 +194,15 @@ public final class FileContentRepository {
                                 WHERE f.content_id = c.content_id AND f.kind = 'MISSING' AND f.status = 'OPEN'
                                   AND f.storage_path = g.storage_path)
                 """).query(CONTENT).list();
+    }
+
+    /** One generation, if it exists. */
+    public Optional<Generation> generation(UUID contentId, int generation) {
+        return jdbc.sql("""
+                SELECT content_id, generation, volume_id, storage_path, state, quarantine_path, operation_id, vacated,
+                       damaged_size, damaged_sha256
+                  FROM gas.file_content_generation WHERE content_id = :id AND generation = :gen
+                """).param("id", contentId).param("gen", generation).query(GENERATION).optional();
     }
 
     /** Generations awaiting confirmation that their damaged bytes are in quarantine. */

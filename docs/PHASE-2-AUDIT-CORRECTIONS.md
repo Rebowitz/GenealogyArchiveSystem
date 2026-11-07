@@ -177,6 +177,80 @@ replaced before any scan saw the damage cannot be told apart from damage); an op
 is identified by its exclusive-create claim, not by a hash; pre-V0017 quarantined copies without a hash
 need Administrator resolution before their content can be fully destroyed.
 
+## V0018 audit corrections (audited revision `70efeef37bff567fc76bbb6813b704750d2c8fa7`)
+
+Three MAJOR findings. The three causes were reproduced from the source before any change:
+
+1. **Stale operation claims.** `DestructionProcessor.ownedTargets` deleted whatever was at a claimed target
+   (`target_created`) with no check of the bytes. In `promote`, the "partial copy" branch and the
+   unverified-copy branch, and in cancellation, the object at the claimed target was hashed *at move time*
+   and that fresh hash became the ledger evidence that destruction later deleted against. A replacement at
+   a claimed location was therefore moved and later deleted.
+2. **First damage observation.** `IntegrityService.damaged` copied the hash observed by the first scan that
+   saw a mismatch into `damaged_sha256`, and repair (`notTheRecordedDamagedCopy`, the quarantine intent),
+   recovery (settle against that intent) and destruction (`vouched`, `classifyQuarantined`) treated it as
+   proof. An object swapped in before that scan became "the damaged copy".
+3. **Retirement of occupied locations.** `commitRepair` retired a vacated generation as `MISSING` without
+   looking, and `retireUnexplained` set an occupied, unverifiable location to `MISSING`. Both locations
+   became historical, so destruction recorded `BYTES_REMOVED` while the object was still there.
+
+### Correction design (documented before coding)
+
+One rule replaces the three special cases. **Bytes are moved or deleted only on evidence the archive
+established itself before the object could have been replaced. An object that cannot be shown that way is
+left exactly where it is, and its presence is recorded durably as unresolved.** The evidence is:
+
+| Object | Ownership record | Trusted identity evidence | Physical disposition |
+|---|---|---|---|
+| Current generation copy | generation (CURRENT) | authoritative size + SHA-256 | kept; destroyed only when it matches |
+| Operation's uncommitted copy | operation claim (`target_created`) | equals the received bytes (receiver's SHA-256), or is a byte prefix of the staged upload after the staged upload re-verifies against that hash; or the size + hash measured by the worker while it wrote it | verified: moved to quarantine / deleted. Otherwise: unresolved, untouched |
+| Damaged copy of a superseded generation | generation | **none** - an observation of a mismatch identifies nothing. Only an Administrator's attestation of the recorded observation (or verified absence) resolves it | unresolved, untouched, unless attested (then quarantined against that hash) |
+| Object at a vacated location | none (bytes left) | authoritative hash only | verified: destroyed with the content. Otherwise unresolved, untouched |
+| Quarantined object | ledger entry (QUARANTINED) | the move's hash, *only* if the entry records that it was trusted when recorded (`evidence_basis`) | trusted and matching: destroyed. Otherwise unresolved, untouched |
+
+What this changes:
+
+* **Operation copies** (finding 1): one check, used by promotion, cancellation, recovery (which drives the
+  same code) and destruction. Staged uploads of operations that still own a copy are kept until the copy is
+  resolved, because they are the evidence. A replacement is never moved, adopted or deleted: the claim
+  becomes an unresolved record and the operation blocks (promotion) or completes its cancellation with the
+  object left in place.
+* **Damage observations** (finding 2): `damaged_size`/`damaged_sha256` stay, but only as a diagnostic
+  observation (the database comment says so; the column cannot be rewritten in a historical migration). No
+  code path uses them, or any other observed hash, to authorize a move or deletion. A repair no longer
+  quarantines the superseded damaged copy automatically: if nothing is at the old location the generation
+  is `MISSING`; if anything is there it is `UNRESOLVED`, untouched, until an Administrator attests that the
+  recorded observation is the archive's damaged copy (it is then quarantined against that hash, which must
+  still match) or that it is not (it is released and left in place), or it is verifiably gone.
+* **Unresolved presence** (finding 3): a durable `unresolved_object` record per occupied location. Repair
+  retirement, cancellation, promotion and destruction create it; destruction never completes while one is
+  open for the content; scans, recovery and destruction re-check it and keep it open while anything is there;
+  it closes only on verified absence or an Administrator's resolution (who, when, why).
+* **Specification note.** ADR-0009 P2-I said repair "keeps the damaged copy in quarantine", and Phase 2
+  decision 4 that repair "retains accountable references to damaged generations until quarantine is
+  confirmed". With an untrusted observation the archive cannot confirm which object is the damaged copy;
+  the audit itself allows "remain recoverable or explicitly unresolved". The damaged copy is therefore kept
+  accountable as `UNRESOLVED` in place (still recoverable), and quarantine happens on an Administrator's
+  attestation. This is a narrowing of P2-I recorded here for owner review; the governing documents are not
+  rewritten.
+
+### Why a schema migration (V0019) is necessary
+
+* Unresolved presence must survive restarts and repeated recovery, and must be visible to destruction and
+  scans independent of any operation; no existing table can hold it without overloading `MISSING` (which
+  means "bytes absent") or a finding (which is not tied to the disposition of a location). New table
+  `unresolved_object`, at most one open record per location.
+* A superseded generation whose location is occupied but unverifiable needs a state that is neither
+  `MISSING` (absent) nor `QUARANTINE_PENDING` (which a vacated generation may not be, V0016): new generation
+  state `UNRESOLVED`, which the database allows only while an open record exists.
+* Ledger hashes recorded before this correction were fresh hashes of whatever was at a claimed path, so the
+  ledger must say whether its hash was trusted when recorded: `quarantine_object.evidence_basis`
+  (`OPERATION_COPY_VERIFIED`, `ADMINISTRATOR_ATTESTED`, or `UNTRUSTED`; existing rows are `UNTRUSTED`),
+  immutable like the other evidence columns.
+
+V0001–V0018 are unchanged; the V0016 single-owner and vacated rules, the V0017 claims table and move
+evidence, and the V0018 evidence-once trigger and claims audit all remain in force.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

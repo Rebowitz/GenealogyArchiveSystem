@@ -36,7 +36,8 @@ public final class OperationAdminService {
     /** Preservation conditions for the Operations page and the status command (BUILD-SPEC s.58, OP-005). */
     public record PreservationStatus(List<VolumePreservationService.VolumePreservation> volumes,
                                      Map<OperationState, Long> operationCounts, long openFindings,
-                                     java.util.Optional<IntegrityScan> lastScan, String ingestion) {
+                                     java.util.Optional<IntegrityScan> lastScan, String ingestion,
+                                     long unresolvedObjects) {
 
         public long operations(OperationState state) {
             return operationCounts.getOrDefault(state, 0L);
@@ -54,10 +55,10 @@ public final class OperationAdminService {
             return operations(OperationState.CLEANUP_INCOMPLETE);
         }
 
-        /** Operations that need a person or are waiting for storage. */
+        /** Operations that need a person or are waiting for storage, and unresolved objects (V0019). */
         public long attentionNeeded() {
             return operations(OperationState.BLOCKED) + operations(OperationState.CLEANUP_INCOMPLETE)
-                    + operations(OperationState.WAITING_FOR_VOLUME);
+                    + operations(OperationState.WAITING_FOR_VOLUME) + unresolvedObjects;
         }
     }
 
@@ -74,7 +75,7 @@ public final class OperationAdminService {
                         : "to volume '" + v.volume().name() + "', which is NOT usable now: " + v.markerStatus())
                 .orElse("no ingestion volume chosen");
         return new PreservationStatus(list, ctx.operations().countsByState(), ctx.integrity().openCount(),
-                ctx.integrity().lastCompleted(), ingestion);
+                ctx.integrity().lastCompleted(), ingestion, ctx.unresolved().openCount());
     }
 
     public List<FileOperation> recent(Actor actor, int limit) {
@@ -178,20 +179,41 @@ public final class OperationAdminService {
         UUID operationId = op.operationId();
         String quarantine = null;
         String leftInPlace = null;
+        OperationCopies.Check unverified = null;
+        boolean releaseOnly = false;
         // GAS-P2-009: only a copy this operation's own exclusive create produced may be moved. Anything else
         // at the planned location (never created by this operation: zero attempts, a recorded collision, or
         // an object that appeared while the volume was away) is left exactly where it is and reported.
+        // V0018 audit: and the claim alone is not enough - the object must still be shown to be that copy
+        // (OperationCopies); otherwise it is left untouched and recorded as unresolved.
         if (op.targetPath() != null && op.targetCreated()) {
             try {
                 ManagedVolume volume = ctx.openVolume(op.volumeId());
-                QuarantineRepository.Entry moved = new QuarantineMoves(ctx).move(volume, operationId, op.contentId(),
-                        PortableRelativePath.of(op.targetPath()), "cancelled", QuarantineRepository.Reason.CANCELLED_COPY);
-                if (moved.state() == QuarantineRepository.State.QUARANTINED) {
-                    quarantine = moved.quarantinePath();
+                OperationCopies.Check own = OperationCopies.check(ctx, op, volume);
+                if (own.verdict() == OperationCopies.Verdict.UNVERIFIED) {
+                    unverified = own;
+                    leftInPlace = op.targetPath();
+                } else if (own.verdict() == OperationCopies.Verdict.ABSENT
+                        && (op.expectedSize() == null || op.expectedSha256() == null)) {
+                    // Nothing there and nothing to identify a copy by: the claim simply ends with the cancellation.
+                    releaseOnly = true;
+                } else {
+                    // ABSENT: the move records that nothing was there and ends the claim. Should a complete copy appear
+                    // in between, only the received bytes themselves (the receiver's hash) would be moved.
+                    QuarantineMoves.Evidence evidence = own.verified() ? QuarantineMoves.Evidence.operationCopy(own.observed())
+                            : new QuarantineMoves.Evidence(op.expectedSize(), op.expectedSha256(),
+                            QuarantineRepository.Basis.OPERATION_COPY_VERIFIED);
+                    QuarantineRepository.Entry moved = new QuarantineMoves(ctx).move(volume, operationId, op.contentId(),
+                            PortableRelativePath.of(op.targetPath()), "cancelled", evidence,
+                            QuarantineRepository.Reason.CANCELLED_COPY);
+                    if (moved.state() == QuarantineRepository.State.QUARANTINED) {
+                        quarantine = moved.quarantinePath();
+                    }
                 }
             } catch (ManagedVolume.VolumeUnavailableException | IOException e) {
                 ctx.operations().note(operationId, "cancellation by " + requestedBy + " is waiting: the uncommitted copy "
-                        + "could not be moved to quarantine yet (" + e.getClass().getSimpleName() + ")");
+                        + "could not be moved to quarantine yet (" + e.getClass().getSimpleName()
+                        + (e.getMessage() == null ? "" : ": " + e.getMessage()) + ")");
                 throw new IllegalStateException("uncommitted copy of " + operationId + " could not be quarantined yet", e);
             }
         } else if (op.targetPath() != null) {
@@ -209,14 +231,30 @@ public final class OperationAdminService {
         if (quarantine != null) {
             set.put("quarantine_path", quarantine);
         }
+        String untouched = unverified != null
+                ? "the object at " + leftInPlace + " is not shown to be the copy this operation created (" + unverified.reason()
+                + "); it was left untouched and is recorded as unresolved"
+                : "an object this operation did not create is at " + leftInPlace + " and was left untouched";
         if (leftInPlace != null) {
-            set.put("message", "cancelled by " + requestedBy + "; an object this operation did not create is at "
-                    + leftInPlace + " and was left untouched");
+            set.put("message", "cancelled by " + requestedBy + "; " + untouched);
         }
-        if (!ctx.operations().transition(operationId, op.state(), OperationState.CANCELLED,
-                "cancelled by " + requestedBy + (quarantine == null ? "" : "; uncommitted copy moved to " + quarantine)
-                        + (leftInPlace == null ? "" : "; object at " + leftInPlace + " not created by this operation, left untouched"),
-                set)) {
+        OperationCopies.Check unresolved = unverified;
+        boolean release = releaseOnly;
+        String detail = "cancelled by " + requestedBy + (quarantine == null ? "" : "; uncommitted copy moved to " + quarantine)
+                + (leftInPlace == null ? "" : "; " + untouched);
+        Boolean cancelled = ctx.tx().execute(status -> {
+            if (unresolved != null) {
+                OperationCopies.claimBecomesUnresolved(ctx, op, unresolved);
+            } else if (release) {
+                ctx.operations().releaseTarget(operationId, op.targetPath());
+            }
+            if (!ctx.operations().transition(operationId, op.state(), OperationState.CANCELLED, detail, set)) {
+                status.setRollbackOnly();
+                return false;
+            }
+            return true;
+        });
+        if (!Boolean.TRUE.equals(cancelled)) {
             return false;
         }
         ctx.staging().ifPresent(staging -> {
