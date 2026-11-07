@@ -358,6 +358,16 @@ public final class FileOperationRepository {
     }
 
     /**
+     * Tries to take an operation's lock for the rest of the current transaction, on the transaction's own
+     * connection (GAS-P2 pool exhaustion). It conflicts with the session lock a worker holds while working on
+     * the operation ({@link OperationLocks}, same key) and is released at commit or rollback.
+     */
+    public boolean tryLockForTransaction(UUID operationId) {
+        return Boolean.TRUE.equals(jdbc.sql("SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 7340))")
+                .param("key", OperationLocks.key("file-operation", operationId)).query(Boolean.class).single());
+    }
+
+    /**
      * Ends every operation's ownership of the object at {@code path} on a volume (GAS-P2-IV01): called in
      * the transaction that records that the object there was moved away, so the location becomes
      * historical for all of them - an object that later appears there is not theirs.

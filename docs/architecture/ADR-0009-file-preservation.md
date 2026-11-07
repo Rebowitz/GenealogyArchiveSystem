@@ -113,12 +113,18 @@ workers from driving the same operation.
   same transaction: every operation's ownership of that location ends and a superseded generation stored
   there becomes `QUARANTINED` (or `MISSING`). Locations bytes were moved from, never reached, or already
   removed are historical: destruction never deletes there, and reports any object it finds there as left
-  untouched. Interrupted moves are settled before anything is deleted; if a move's source and destination
+  untouched. The database keeps generation state and operation ownership from contradicting one another
+  (V0015): retiring a generation (QUARANTINED, MISSING, DESTROYED) or recording content as MISSING ends every
+  operation's ownership of that location in the same transaction, and no operation can take ownership of a
+  retired generation's location. A current location recorded as missing is removed only if the object
+  there is verifiably the content (authoritative size and SHA-256); otherwise it is left and reported. Interrupted moves are settled before anything is deleted; if a move's source and destination
   both exist, nothing is deleted and the operation stays `CLEANUP_INCOMPLETE`. Generation, ledger and
   content states are retired in the completion transaction.
-- Destruction intent and repairs (GAS-P2-IV03): the intent first takes the lock of every unfinished repair of
-  the content (a worker holds it for as long as it works on the operation), waiting at most two seconds and
-  otherwise failing visibly ("being written right now"); in its transaction it locks the content row,
+- Destruction intent and repairs (GAS-P2-IV03): inside the intent transaction, on its own connection, the
+  intent first takes every unfinished repair's lock for the transaction (`pg_try_advisory_xact_lock`, the
+  same key a worker holds as a session lock for as long as it works on the operation), waiting at most two
+  seconds and otherwise failing visibly ("being written right now"); so any number of repairs costs one
+  pooled connection. Removal holds all other writers' locks together on one connection; in its transaction it locks the content row,
   refuses if an unheld repair has started, and cancels unfinished repairs. A repair creates its copy and
   records ownership in one transaction holding the content row in share mode after re-reading its state, so
   no repair byte is created after the intent commits.

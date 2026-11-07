@@ -1531,4 +1531,144 @@ class Phase2AuditCorrectionsIT {
         assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
     }
+
+    // ---- IV01 (final outstanding): stale ownership after a missing-content repair ------------------------
+
+    /** Ingests content and makes its stored original missing (recorded by a scan). */
+    private ArchivalFile ingestedThenMissing(String name, byte[] bytes) throws Exception {
+        ArchivalFile f = ingestAs(fx.editor, name, bytes, Restriction.NORMAL, null, null);
+        Path stored = fx.storedPath(f);
+        SafeFiles.clearReadOnly(stored);
+        Files.delete(stored);
+        fx.scan(fx.services(), "QUICK");
+        assertThat(content(f).state()).isEqualTo(ContentState.MISSING);
+        assertOwnershipConsistent(f.contentId());
+        return f;
+    }
+
+    /**
+     * The invariant, checked independently of the scenario: no operation owns the location of a retired
+     * generation, nor the current location of content recorded as missing.
+     */
+    private void assertOwnershipConsistent(UUID contentId) {
+        var ctx = fx.preservation().context();
+        boolean missing = ctx.contents().find(contentId).map(c -> c.state() == ContentState.MISSING).orElse(false);
+        for (FileContentRepository.Generation g : ctx.contents().generations(contentId)) {
+            boolean historical = g.state() == GenerationState.QUARANTINED || g.state() == GenerationState.MISSING
+                    || g.state() == GenerationState.DESTROYED || (missing && g.state() == GenerationState.CURRENT);
+            if (historical) {
+                assertThat(ctx.operations().writersOfContent(contentId))
+                        .as("no operation owns %s (generation %s, %s)", g.storagePath(), g.generation(), g.state())
+                        .noneMatch(w -> w.targetCreated() && g.storagePath().equals(w.targetPath()));
+            }
+        }
+    }
+
+    private FileOperation repairOf(ArchivalFile f, byte[] bytes) {
+        return fx.preservation().repair().receive(fx.admin, f.contentId(), "good.tif", bytes.length,
+                new ByteArrayInputStream(bytes));
+    }
+
+    @Test
+    void gasP2_IV01_anUnrelatedObjectAtAMissingGenerationsOldPathSurvivesDestruction() throws Exception {
+        byte[] bytes = b("parish register, missing then repaired");
+        ArchivalFile f = ingestedThenMissing("register.tif", bytes);
+        FileOperation repair = fx.process(repairOf(f, bytes).operationId());
+        assertThat(repair.state()).isEqualTo(OperationState.COMPLETED);
+        FileContentRepository.Generation g1 = generation(f.contentId(), 1);
+        assertThat(g1.state()).isEqualTo(GenerationState.MISSING);
+        assertOwnershipConsistent(f.contentId());
+        Path old = onVolume(g1.storagePath());
+        Files.write(old, b("unrelated object"));
+
+        FileOperation op = destroy(f);
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            assertNotCompleteWhileACopyRemains(op.operationId(), old);
+            assertOwnershipConsistent(f.contentId());
+        }
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(d.message()).contains("left untouched", g1.storagePath());
+        assertThat(old).hasBinaryContent(b("unrelated object"));
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).containsExactly(old);
+    }
+
+    @Test
+    void gasP2_IV01_anUnrelatedObjectAtTheLocationOfContentRecordedMissingIsNotRemoved() throws Exception {
+        byte[] bytes = b("tax roll, missing, repair stopped before commit");
+        ArchivalFile f = ingestedThenMissing("taxroll.tif", bytes);
+        fx.faults.crashAt(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT);
+        UUID repairId = repairOf(f, bytes).operationId();
+        assertThatThrownBy(() -> fx.process(repairId)).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileOperation repair = fx.operation(repairId);
+        assertThat(repair.targetCreated()).isTrue();
+        Path current = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(current, b("not the archived bytes"));
+        assertOwnershipConsistent(f.contentId());
+
+        FileOperation op = destroy(f);
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            assertNotCompleteWhileACopyRemains(op.operationId(), current);
+        }
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(current).hasBinaryContent(b("not the archived bytes"));
+        assertThat(onVolume(repair.targetPath())).as("the repair's own copy").doesNotExist();
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).containsExactly(current);
+    }
+
+    @Test
+    void gasP2_IV01_theVerifiedOriginalBackAtAMissingLocationIsRemoved() throws Exception {
+        byte[] bytes = b("muster roll, original put back without re-verification");
+        ArchivalFile f = ingestedThenMissing("muster2.tif", bytes);
+        Path current = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(current, bytes);
+
+        FileOperation op = destroy(f);
+        fx.preservation().destruction().process(op.operationId());
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).as("verifiably the content's own bytes").isEmpty();
+    }
+
+    @Test
+    void gasP2_IV01_aRepairStoppedAfterItsCommitLeavesAnUnrelatedObjectAtTheOldPathUntouched() throws Exception {
+        byte[] bytes = b("bond, missing, stopped after commit");
+        ArchivalFile f = ingestedThenMissing("bond2.tif", bytes);
+        fx.faults.crashAt(FaultPoints.Point.AFTER_COMMIT_BEFORE_CLEANUP);
+        UUID repairId = repairOf(f, bytes).operationId();
+        assertThatThrownBy(() -> fx.process(repairId)).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(fx.operation(repairId).state()).isEqualTo(OperationState.COMMITTED);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
+        assertOwnershipConsistent(f.contentId());
+        Path old = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(old, b("unrelated"));
+
+        FileOperation op = destroy(fx.file(f.fileId()));
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            assertNotCompleteWhileACopyRemains(op.operationId(), old);
+        }
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(fx.operation(repairId).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(old).hasBinaryContent(b("unrelated"));
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).containsExactly(old);
+    }
+
+    @Test
+    void gasP2_IV01_theDatabaseRefusesOwnershipOfARetiredLocation() throws Exception {
+        byte[] bytes = b("deed, ownership of a retired path");
+        ArchivalFile f = ingestedThenMissing("deed4.tif", bytes);
+        fx.process(repairOf(f, bytes).operationId());
+        FileContentRepository.Generation g1 = generation(f.contentId(), 1);
+        FileOperation ingest = fx.preservation().context().operations().writersOfContent(f.contentId()).stream()
+                .filter(w -> w.kind() == OperationKind.INGEST).findFirst().orElseThrow();
+        assertThat(ingest.targetPath()).isEqualTo(g1.storagePath());
+        assertThat(ingest.targetCreated()).as("released when the content was recorded missing").isFalse();
+        assertThatThrownBy(() -> fx.preservation().context().operations().markTargetCreated(ingest.operationId(), g1.storagePath()))
+                .hasMessageContaining("retired generation");
+    }
 }

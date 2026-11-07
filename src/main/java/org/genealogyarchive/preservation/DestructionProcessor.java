@@ -88,29 +88,23 @@ public final class DestructionProcessor {
             return;
         }
         // GAS-P2-R01: no other operation may write, commit or move bytes of this content while it is removed.
-        List<OperationLocks.Held> writers = new ArrayList<>();
-        try {
-            Optional<UUID> busy = holdWriters(op, writers);
-            if (busy.isPresent()) {
-                incomplete(op, "Removal waits for operation " + busy.get() + ", which is still working on this content's "
-                        + "bytes. The File is retired; removal is retried.");
-                return;
-            }
+        // All of their locks are held together on one pooled connection, however many there are.
+        OperationLocks.AllOrBusy writers = ctx.locks().tryLockAll("file-operation", otherWriters(op));
+        if (writers.busy().isPresent()) {
+            incomplete(op, "Removal waits for operation " + writers.busy().get() + ", which is still working on this content's "
+                    + "bytes. The File is retired; removal is retried.");
+            return;
+        }
+        try (OperationLocks.Held held = writers.held().orElseThrow()) {
             removeBytes(op, volume);
-        } finally {
-            for (OperationLocks.Held held : writers) {
-                held.close();
-            }
         }
     }
 
     /**
-     * Takes the lock of every other operation that could still touch this content's bytes: unfinished
-     * ingests/repairs of the content and owners of unsettled quarantine moves of it.
-     *
-     * @return the first operation that is busy elsewhere, if any (nothing is then removed)
+     * Every other operation that could still touch this content's bytes: unfinished ingests/repairs of the
+     * content and owners of unsettled quarantine moves of it.
      */
-    private Optional<UUID> holdWriters(FileOperation op, List<OperationLocks.Held> held) {
+    private Set<UUID> otherWriters(FileOperation op) {
         Set<UUID> ids = new LinkedHashSet<>();
         for (FileOperation w : ctx.operations().writersOfContent(op.contentId())) {
             if (!w.state().isFinal()) {
@@ -123,42 +117,7 @@ public final class DestructionProcessor {
             }
         }
         ids.remove(op.operationId());
-        for (UUID id : ids) {
-            Optional<OperationLocks.Held> lock = ctx.locks().tryLock("file-operation", id);
-            if (lock.isEmpty()) {
-                return Optional.of(id);
-            }
-            held.add(lock.get());
-        }
-        return Optional.empty();
-    }
-
-    /**
-     * Stops every unfinished repair of the destroyed content (GAS-P2-R01), under its lock, so none can
-     * write, commit or move bytes after removal. A copy one of them created (and only such a copy) is
-     * removed below with the content's other copies; an object it did not create is left untouched.
-     */
-    private void stopUnfinishedRepairs(FileOperation op) {
-        for (FileOperation w : ctx.operations().writersOfContent(op.contentId())) {
-            if (w.kind() != OperationKind.REPAIR || !STOPPABLE.contains(w.state())) {
-                continue;
-            }
-            String message = stoppedRepairMessage(op.operationId(), w);
-            if (ctx.operations().transition(w.operationId(), w.state(), OperationState.CANCELLED, message,
-                    Map.of("message", message))) {
-                ctx.operations().note(op.operationId(), "unfinished repair " + w.operationId() + " (" + w.state()
-                        + ") stopped");
-                ctx.staging().ifPresent(staging -> {
-                    try {
-                        if (staging.delete(w.operationId())) {
-                            ctx.operations().markStagingCleaned(w.operationId());
-                        }
-                    } catch (IOException e) {
-                        // recovery retries the clean-up of a final operation's staged bytes
-                    }
-                });
-            }
-        }
+        return ids;
     }
 
     /** Why an unfinished repair was stopped by destruction (intent or removal), and what of it remains. */
@@ -212,9 +171,24 @@ public final class DestructionProcessor {
             }
             // Current physical inventory only: a location counts if a record says the bytes are there now.
             // Locations bytes were moved away from (or never reached) are historical and never deleted.
+            // A current location the archive recorded as missing is not evidence that whatever is there now is
+            // the content (IV01): it is removed only if it is verifiably the content's own bytes.
+            Set<String> recordedMissing = new java.util.HashSet<>();
+            for (IntegrityFinding finding : ctx.integrity().openFindingsFor(op.contentId())) {
+                if (finding.kind() == FindingKind.MISSING && finding.storagePath() != null) {
+                    recordedMissing.add(finding.storagePath());
+                }
+            }
+            FileContent content = ctx.contents().find(op.contentId()).orElseThrow();
             for (FileContentRepository.Generation g : ctx.contents().generations(op.contentId())) {
                 switch (g.state()) {
-                    case CURRENT, QUARANTINE_PENDING -> known.add(g.storagePath());
+                    case CURRENT, QUARANTINE_PENDING -> {
+                        if (!recordedMissing.contains(g.storagePath()) || isTheContent(volume, g.storagePath(), content)) {
+                            known.add(g.storagePath());
+                        } else {
+                            historical.add(g.storagePath());
+                        }
+                    }
                     case QUARANTINED -> {
                         known.add(g.quarantinePath());
                         historical.add(g.storagePath());
@@ -304,6 +278,17 @@ public final class DestructionProcessor {
                 ctx.operations().releaseTarget(o.operationId(), o.path());
             }
         });
+    }
+
+    /** Whether the object at a location is verifiably this content's bytes (authoritative size and SHA-256). */
+    private static boolean isTheContent(ManagedVolume volume, String location, FileContent content) throws IOException {
+        Optional<Path> p = volume.locate(PortableRelativePath.of(location));
+        if (p.isEmpty() || !Files.exists(p.get(), LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+        SafeFiles.requirePlainFile(p.get());
+        ContentIo.Measurement m = ContentIo.measure(p.get());
+        return m.size() == content.byteSize() && m.sha256().equalsIgnoreCase(content.sha256());
     }
 
     private static boolean present(ManagedVolume volume, String location) throws IOException {

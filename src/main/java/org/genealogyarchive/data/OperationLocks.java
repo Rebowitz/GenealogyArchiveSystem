@@ -31,13 +31,88 @@ public final class OperationLocks {
         void close();
     }
 
+    /** The advisory-lock key text for an operation or content; the same key in session and transaction locks. */
+    public static String key(String namespace, UUID id) {
+        return namespace + ":" + id;
+    }
+
+    /** SQL expression turning a key text parameter into the advisory-lock key. */
+    public static final String KEY_SQL = "hashtextextended(?, 7340)";
+
+    /** Result of {@link #tryLockAll}: either every lock is held (on one connection), or the first busy id. */
+    public record AllOrBusy(Optional<Held> held, Optional<UUID> busy) {
+    }
+
+    /**
+     * Tries to take the locks of all {@code ids} without waiting, holding them together on ONE pooled
+     * connection however many there are (GAS-P2 pool exhaustion: one connection per lock let a handful of
+     * idle repairs exhaust the pool). If any is busy, none is kept.
+     */
+    public AllOrBusy tryLockAll(String namespace, java.util.Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return new AllOrBusy(Optional.of(() -> { }), Optional.empty());
+        }
+        Connection c = null;
+        java.util.List<String> taken = new java.util.ArrayList<>();
+        try {
+            c = dataSource.getConnection();
+            c.setAutoCommit(true);
+            for (UUID id : ids) {
+                String key = key(namespace, id);
+                boolean locked;
+                try (PreparedStatement ps = c.prepareStatement("SELECT pg_try_advisory_lock(" + KEY_SQL + ")")) {
+                    ps.setString(1, key);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        locked = rs.getBoolean(1);
+                    }
+                }
+                if (!locked) {
+                    releaseAll(c, taken);
+                    return new AllOrBusy(Optional.empty(), Optional.of(id));
+                }
+                taken.add(key);
+            }
+            Connection held = c;
+            java.util.List<String> keys = java.util.List.copyOf(taken);
+            return new AllOrBusy(Optional.of(() -> releaseAll(held, keys)), Optional.empty());
+        } catch (SQLException e) {
+            if (c != null) {
+                discard(c);
+            }
+            throw new IllegalStateException("Could not take operation locks: " + e.getMessage(), e);
+        }
+    }
+
+    private static void releaseAll(Connection c, java.util.List<String> keys) {
+        try {
+            for (String key : keys) {
+                try (PreparedStatement ps = c.prepareStatement("SELECT pg_advisory_unlock(" + KEY_SQL + ")")) {
+                    ps.setString(1, key);
+                    ps.execute();
+                }
+            }
+            closeQuietly(c);
+        } catch (SQLException e) {
+            discard(c);
+        }
+    }
+
+    private static void discard(Connection c) {
+        try {
+            c.abort(Runnable::run);
+        } catch (SQLException ignored) {
+            closeQuietly(c);
+        }
+    }
+
     /**
      * Tries to take the lock for {@code id} without waiting.
      *
      * @return the held lock, or empty if another process holds it
      */
     public Optional<Held> tryLock(String namespace, UUID id) {
-        String key = namespace + ":" + id;
+        String key = key(namespace, id);
         Connection c = null;
         try {
             c = dataSource.getConnection();

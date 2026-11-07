@@ -50,12 +50,12 @@ public final class PreservationFixture implements AutoCloseable {
     private CoreServices services;
     private FileSettings settings;
 
-    private PreservationFixture(Path dir) throws IOException {
+    private PreservationFixture(Path dir, int poolSize) throws IOException {
         this.dir = dir;
         db = TestDatabase.createFresh();
         HikariDataSource opened = null;
         try {
-            opened = DataSources.create(db.settings(), "test");
+            opened = poolSize > 0 ? DataSources.create(db.settings(), "test", poolSize) : DataSources.create(db.settings(), "test");
             ds = opened;
             new SchemaMigrator(ds).migrate();
             CoreServices bootstrap = ArchiveFixtures.services(ds);
@@ -84,7 +84,12 @@ public final class PreservationFixture implements AutoCloseable {
     }
 
     public static PreservationFixture create(Path tempDir) throws IOException {
-        return new PreservationFixture(tempDir);
+        return new PreservationFixture(tempDir, 0);
+    }
+
+    /** A fixture whose services share a deliberately small connection pool. */
+    public static PreservationFixture withPoolSize(Path tempDir, int poolSize) throws IOException {
+        return new PreservationFixture(tempDir, poolSize);
     }
 
     private static Actor actor(CoreServices s, String name, Role role) {

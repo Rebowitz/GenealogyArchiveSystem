@@ -95,6 +95,15 @@ Consequences, by design: hyphen-joined text whose groups form an extra UUID wind
 window to anchor it (rare) is withheld from non-Administrators unless that UUID is visible. A destruction
 request made while a repair of the same content is writing is refused with a message to retry.
 
+## Final outstanding corrections (audited revision `9b27418d6b744016a65a332d86d33f53c0083c3e`)
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **IV01** (MAJOR) stale ownership after a missing-content repair | Repair of MISSING content retired the old generation (`CURRENT` → `MISSING`) outside the quarantine ledger, so the ingest operation still "owned" the old path and destruction deleted whatever was there. **V0015** makes the invariant a database rule for every retirement path: retiring a generation (QUARANTINED, MISSING, DESTROYED) or recording content as MISSING ends all operations' ownership of that location in the same transaction; an operation can never take ownership of a retired generation's location; existing contradictory rows are corrected. Destruction removes a current location recorded missing (open MISSING finding) only if the object there is verifiably the content (authoritative size and SHA-256). | `Phase2AuditCorrectionsIT.gasP2_IV01_anUnrelatedObjectAtAMissingGenerationsOldPathSurvivesDestruction` (the exact reproduction), `…AtTheLocationOfContentRecordedMissingIsNotRemoved` (repair stopped before commit), `…TheVerifiedOriginalBackAtAMissingLocationIsRemoved`, `…ARepairStoppedAfterItsCommitLeavesAnUnrelatedObjectAtTheOldPathUntouched`, `…TheDatabaseRefusesOwnershipOfARetiredLocation`; every step checks the ownership invariant independently and that `BYTES_REMOVED` never coexists with a known copy; repeated recovery |
+| **Pool exhaustion** (MINOR) one pooled connection per repair lock | Destruction intent takes repair locks as transaction-scoped advisory locks on its own transaction connection (same key as the workers' session locks; bounded 2 s wait, then a visible refusal; lock order operation-then-rows unchanged). Removal holds all other writers' locks together on one connection (`OperationLocks.tryLockAll`). The IV03 guarantees are unchanged: a repair still creates and owns its copy in one transaction holding the content row `FOR SHARE`. | `RepairLockPoolIT` (pool of 3 connections, 6 idle repairs): destruction proceeds without waiting for a connection and leaves none in use; no stopped repair writes; with one repair writing among the idle ones, destruction is refused in bounded time while other work still gets connections, and succeeds once the repair finishes; any number of locks held on one connection. Existing IV03 tests unchanged. |
+
+Schema: new **V0015** (triggers and a one-time consistency update). V0001–V0014 unchanged.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback
