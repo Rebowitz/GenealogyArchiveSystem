@@ -251,6 +251,68 @@ What this changes:
 V0001–V0018 are unchanged; the V0016 single-owner and vacated rules, the V0017 claims table and move
 evidence, and the V0018 evidence-once trigger and claims audit all remain in force.
 
+### Implemented
+
+| Finding | Correction | Regression tests (`Phase2AuditCorrectionsIT` unless named) |
+|---|---|---|
+| **1. Stale operation claims** (MAJOR) | `OperationCopies` identifies an operation's copy (complete: receiver's size + SHA-256; partial: byte prefix of the staged upload after it re-verifies). Promotion, cancellation, recovery (which drives both) and destruction all use it; quarantine intents carry the verified measurement with basis `OPERATION_COPY_VERIFIED`. An unverified object: claim released, `unresolved_object` (OPERATION_COPY) recorded, operation BLOCKED (promotion) or CANCELLED with the object left (cancellation), destruction `CLEANUP_INCOMPLETE`. Staged uploads of operations that still own a copy are kept (destruction intent, stopped repairs, recovery, final clean-up) and removed once the copy is. | `v0019_aReplacementAtAnOperationsClaimedTargetIsNeitherMovedNorAdoptedAndStaysUnresolved` (interrupted creation, restarts, scan, retry), `v0019_withoutItsStagedUploadAClaimedPartialCopyCannotBeIdentifiedAndIsLeftUntouched`, `v0019_aGenuinePartialCopyIsIdentifiedByItsStagedUploadAndMovedToQuarantine`, `v0019_aCancellationInterruptedAfterItsIntentNeverMovesAReplacement` (crash after the intent; job retry and recovery refuse), `v0019_destructionNeverDeletesAReplacementOfAStoppedRepairsCopy` (interrupted cleanup), `RecoveryIT.cancellingNeverMovesAReplacementOfItsUncommittedCopy`, `RecoveryIT.cancellingAWaitingOperationQuarantinesItsVerifiedUncommittedCopyInTheWorker` |
+| **2. First damage observation** (MAJOR) | `damaged_size`/`damaged_sha256` are an observation (column comments, javadoc); no path authorises a move or deletion from them, nor from any fresh hash. Repair inspects the superseded location before its commit: empty -> MISSING; occupied -> UNRESOLVED + record (DAMAGED_COPY or OBJECT_AT_VACATED_LOCATION), untouched. Legacy QUARANTINE_PENDING generations are retired the same way (never moved). Quarantine of a damaged copy happens only after an Administrator attests the recorded object (`UnresolvedObjects.attest`, worker job `file.quarantine-attested`, intent basis `ADMINISTRATOR_ATTESTED`, verified before and after the rename). Destruction trusts only the authoritative hash, trusted ledger hashes and attestations. | `v0019_anObjectReplacedBeforeTheFirstDamageScanIsNeverMovedOrDeleted` (repair, restarts, scans, destruction, release), `v0019_anAttestedObjectThatChangedAfterwardsIsNeitherMovedNorDeleted`, `v0019_everyMoveRecordsTheBasisOfItsEvidence`, `v0018_damageEvidenceIsKept…` (now: UNRESOLVED, observation not adopted), `v0018_quarantineIntentsCarryTheAttestedEvidenceNotAFreshHash`, `IntegrityRepairIT.iv003…` (damaged copy kept untouched, then quarantined on attestation) |
+| **3. Retirement of occupied locations** (MAJOR) | No occupied location is retired as MISSING: UNRESOLVED generation + durable record (database: UNRESOLVED requires an open record; records never deleted; resolutions final). Destruction never records BYTES_REMOVED while any open record of the content or its operations remains, and records new ones for unidentified objects at current locations (current generation, vacated current location, quarantine path). Scans count open records as unresolved (never "No problems found"); a record closes only on verified absence (a scan or destruction finds nothing there) or an Administrator's resolution - restarting or repeating recovery never closes one. An Administrator can release (left in place) or attest. | `v0019_anUnresolvedObjectAtAFormerGenerationLocationSurvivesRepeatedRecoveryUntilItIsGone`, `v0019_onlyANamedAdministratorResolvesAnUnresolvedObjectAndAResolutionIsFinal`, `v0016_aForeignObjectAppearingAtAMissingLocationBeforeRepairIsNeverAdopted`, `v0017_damagedContentThatGoesMissing…`, `gasP2_IV01_anUnrelatedObjectAtTheLocationOfContentRecordedMissingIsNotRemoved`, `Phase2SchemaIT.anExistingV0018InstallationUpgradesAndEarlierMoveEvidenceIsUntrusted` |
+
+**Unified audit (finding 4).** Every path that moves, quarantines or deletes bytes, with its ownership record,
+identity evidence and disposition:
+
+| Path | Ownership record | Trusted identity evidence | Disposition when the evidence does not hold |
+|---|---|---|---|
+| Ingest/repair promotion: copy found at own target | operation claim | receiver's hash (complete) or prefix of re-verified staging | unresolved, operation BLOCKED |
+| Promotion: copy just written did not verify | operation claim | measurement taken while writing | (only this object is moved) |
+| Partial-copy quarantine and its recovery (`settle`) | ledger intent | intent hash with basis `OPERATION_COPY_VERIFIED` | not moved; fails visibly |
+| Commit (ownership transfer) | operation -> generation, one transaction | full re-hash equals the authoritative hash | not committed (BLOCKED) |
+| Integrity scans (missing, damaged, reappeared) | generation | authoritative hash only (restores ACTIVE); observations are diagnostic | findings only; nothing moved |
+| Repair supersession | generation | none needed: nothing is moved | MISSING if empty, UNRESOLVED if occupied |
+| Attested quarantine and its recovery | `unresolved_object` + ledger intent | Administrator's attestation of the observed hash (`ADMINISTRATOR_ATTESTED`) | not moved; record stays open |
+| Cancellation | operation claim | as promotion | object left, unresolved, operation CANCELLED |
+| Destruction | generation / ledger / claim / record | authoritative hash; trusted ledger hash; `OperationCopies`; attestation | left, unresolved, `CLEANUP_INCOMPLETE` |
+| Re-verification | generation | authoritative hash before protecting | nothing changed |
+
+Path occupancy, a claim, a ledger status, a hash observed by a scan and a hash taken at move time are never
+accepted as evidence; the V0016 single-owner/vacated rules, the V0017 claims table and move verification and
+the V0018 evidence-once trigger and claims audit are unchanged.
+
+**Tests changed because they asserted the audited behaviour (not weakened):**
+* Repairs of damaged content no longer quarantine the damaged copy by themselves. Tests that exercised that
+  move (`gasP2_006_*`, `gasP2_IV01_*` with a damaged generation, `v0016_anObjectSwapped…`,
+  `v0016_anInterruptedQuarantineMove…`, `v0017_anObjectWithTheSameSize…`, `v0017_anObjectSwappedInBetween…`,
+  `IntegrityRepairIT.iv003…`/`requirement4…`) now run the same crash points through the attested move, which
+  uses the same intent/settle machinery; their assertions on what is moved, refused and accounted are kept.
+* Tests whose subject was not the damaged copy (`gasP2_R01_*`, `gasP2_FV01_*`, three `gasP2_IV03_*`,
+  `RepairLockPoolIT`) use content whose original was lost instead of damaged, because a damaged copy now
+  (correctly) keeps destruction incomplete until resolved.
+* Tests that expected `BYTES_REMOVED` with an unidentified object at a *current* location (vacated or not) or
+  a superseded generation retired as MISSING while occupied now expect `CLEANUP_INCOMPLETE`/`UNRESOLVED`
+  until an Administrator releases the object (then completion, the object untouched).
+* `RecoveryIT.cancellingABlockedOperationQuarantinesItsUncommittedCopyInTheWorker` overwrote the copy and
+  expected it to be moved - finding 1 itself. It is split into a genuine-copy test (moved) and a
+  replaced-copy test (left, unresolved).
+* `v0017_aLegacyIntentWithoutContentEvidence…` builds its legacy state (QUARANTINE_PENDING generation) from
+  a V0019 repair, because current code never creates that state.
+
+**Remaining evidence and filesystem limitations.**
+* A replacement that is byte-identical to the archive's bytes (complete copy) or a true prefix of the staged
+  upload is indistinguishable from the operation's own copy; moving it loses nothing.
+* The P2-E residual race is unchanged: an object swapped in during the re-hash/move-back window after a rename,
+  or a directory-component swap by a local writer, needs native `openat`-style code.
+* The repair inspects the superseded location just before its commit; an object that appears between that
+  look and the commit is not recorded as unresolved but is reported by scans as an unexpected object at a
+  historical location (never touched).
+* Legacy (pre-V0019) quarantine moves are `UNTRUSTED`: their quarantined objects keep destruction incomplete
+  until an Administrator attests, releases or removes them; a legacy in-flight intent with its object still at
+  the source fails visibly until the object is resolved.
+* Verified absence closes a record automatically (a scan or destruction finds nothing there); an object
+  removed outside the application therefore needs no further action.
+* Damaged content can no longer be destroyed, nor its damaged copy quarantined, without an Administrator's
+  decision about the damaged object - by design, but it is new operational work.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback
