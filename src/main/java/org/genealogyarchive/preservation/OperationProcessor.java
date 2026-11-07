@@ -237,7 +237,14 @@ public final class OperationProcessor {
             }
         }
 
-        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+        // V0019 audit: an inaccessible target is not "absent" - the attempt fails visibly and is retried.
+        boolean targetPresent;
+        try {
+            targetPresent = Presence.exists(ctx, volume, target);
+        } catch (IOException e) {
+            return ioProblem(op, e);
+        }
+        if (targetPresent) {
             if (!op.targetCreated()) {
                 // GAS-P2-009: only an object this operation's own exclusive create produced is ever treated
                 // as its copy; anything else at the planned location is left exactly where it is.
@@ -248,7 +255,7 @@ public final class OperationProcessor {
             // here is its copy only if it is the received bytes or a prefix of the (re-verified) staged upload.
             OperationCopies.Check own;
             try {
-                own = OperationCopies.check(op, target, Optional.ofNullable(staged));
+                own = OperationCopies.check(ctx, volume, op, Optional.ofNullable(staged));
             } catch (SafeFiles.UnsafePathException e) {
                 return block(op, BlockedReason.UNSAFE_PATH, "The planned location holds a link or reparse point; it was not touched.");
             } catch (IOException e) {
@@ -504,7 +511,7 @@ public final class OperationProcessor {
         ContentIo.Measurement m;
         try {
             target = volume.resolveExisting(PortableRelativePath.of(op.targetPath()));
-            if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            if (!Presence.exists(ctx, volume, target)) {
                 return block(op, BlockedReason.STATE_UNKNOWN, "The promoted copy at " + op.targetPath()
                         + " is no longer present; the state cannot be determined safely.");
             }
@@ -533,6 +540,7 @@ public final class OperationProcessor {
         Superseded old;
         try {
             old = inspectSuperseded(op, volume);
+            ctx.faults().reach(FaultPoints.Point.AFTER_SUPERSEDED_INSPECTION, op.operationId());
         } catch (IOException e) {
             return ioProblem(op, e);
         }
@@ -545,14 +553,20 @@ public final class OperationProcessor {
 
     private Superseded inspectSuperseded(FileOperation op, ManagedVolume volume) throws IOException {
         FileContent content = ctx.contents().find(op.contentId()).orElseThrow();
-        Optional<Path> at = content.currentPath() == null ? Optional.empty() : volume.locate(content.currentPath());
-        if (at.isEmpty() || !Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
+        // V0019 audit: only verified absence retires the location as MISSING; an inaccessible location stops the
+        // commit (retried). The look is not evidence after the commit: destruction re-inspects every former location.
+        Presence.Probe probe = Presence.probe(ctx, volume, content.currentPath().value());
+        if (probe.verifiedAbsent()) {
             return new Superseded(content.currentGeneration(), false, null);
         }
-        if (SafeFiles.isLinkOrReparsePoint(at.get()) || !Files.isRegularFile(at.get(), LinkOption.NOFOLLOW_LINKS)) {
+        if (!probe.present()) {
+            throw new Presence.InconclusiveException(content.currentPath().value(), probe.problem());
+        }
+        Path at = probe.path();
+        if (SafeFiles.isLinkOrReparsePoint(at) || !Files.isRegularFile(at, LinkOption.NOFOLLOW_LINKS)) {
             return new Superseded(content.currentGeneration(), true, null);
         }
-        return new Superseded(content.currentGeneration(), true, ContentIo.measure(at.get()));
+        return new Superseded(content.currentGeneration(), true, ContentIo.measure(at));
     }
 
     private boolean commitNewContent(FileOperation op, String mediaType) {
@@ -724,10 +738,13 @@ public final class OperationProcessor {
                 if (now.state() != GenerationState.QUARANTINE_PENDING) {
                     continue;
                 }
-                Optional<Path> at = volume.locate(PortableRelativePath.of(g.storagePath()));
-                boolean present = at.isPresent() && Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS);
-                ContentIo.Measurement observed = present && Files.isRegularFile(at.get(), LinkOption.NOFOLLOW_LINKS)
-                        && !SafeFiles.isLinkOrReparsePoint(at.get()) ? ContentIo.measure(at.get()) : null;
+                Presence.Probe probe = Presence.probe(ctx, volume, g.storagePath());
+                if (!probe.present() && !probe.verifiedAbsent()) {
+                    throw new Presence.InconclusiveException(g.storagePath(), probe.problem());
+                }
+                boolean present = probe.present();
+                ContentIo.Measurement observed = present && probe.attributes().isRegularFile()
+                        && !SafeFiles.isLinkOrReparsePoint(probe.path()) ? ContentIo.measure(probe.path()) : null;
                 ctx.tx().executeWithoutResult(status -> {
                     if (present) {
                         ctx.unresolved().recordIfAbsent(new UnresolvedObjectRepository.NewEntry(g.volumeId(), g.storagePath(),

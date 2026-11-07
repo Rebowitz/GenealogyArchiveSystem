@@ -88,7 +88,10 @@ public final class StagingArea {
      */
     public Optional<Path> existing(UUID operationId) throws IOException {
         Path file = fileFor(operationId);
-        if (!Files.exists(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+        // V0019 audit: only "no such file" means no staged upload; an unreadable one is an error, never "gone".
+        try {
+            Files.readAttributes(file, java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        } catch (java.nio.file.NoSuchFileException e) {
             return Optional.empty();
         }
         SafeFiles.requirePlainDirectory(dir);
@@ -103,7 +106,12 @@ public final class StagingArea {
             return true;
         }
         SafeFiles.withSharingRetry(() -> Files.deleteIfExists(file));
-        return !Files.exists(file, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        try {
+            Files.readAttributes(file, java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            return false;
+        } catch (java.nio.file.NoSuchFileException e) {
+            return true;
+        }
     }
 
     /** Names of everything in the staging directory (for leftover detection). */

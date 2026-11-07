@@ -44,18 +44,25 @@ final class OperationCopies {
     }
 
     static Check check(PreservationContext ctx, FileOperation op, ManagedVolume volume) throws IOException {
-        Optional<Path> at = volume.locate(PortableRelativePath.of(op.targetPath()));
-        if (at.isEmpty() || !Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
-            return new Check(Verdict.ABSENT, null, null);
-        }
-        Optional<Path> staged = ctx.staging().flatMap(s -> existingQuietly(s, op));
-        return check(op, at.get(), staged);
+        // An unreadable staged upload is an error (retried), never "gone" (V0019 audit).
+        Optional<Path> staged = ctx.staging().isPresent() ? ctx.staging().get().existing(op.operationId()) : Optional.empty();
+        return check(ctx, volume, op, staged);
     }
 
-    static Check check(FileOperation op, Path target, Optional<Path> staged) throws IOException {
-        if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+    /**
+     * @throws Presence.InconclusiveException if whether anything is at the target cannot be determined (an
+     *         inaccessible location is never "absent")
+     */
+    static Check check(PreservationContext ctx, ManagedVolume volume, FileOperation op, Optional<Path> staged)
+            throws IOException {
+        Presence.Probe probe = Presence.probe(ctx, volume, op.targetPath());
+        if (probe.verifiedAbsent()) {
             return new Check(Verdict.ABSENT, null, null);
         }
+        if (!probe.present()) {
+            throw new Presence.InconclusiveException(op.targetPath(), probe.problem());
+        }
+        Path target = probe.path();
         if (SafeFiles.isLinkOrReparsePoint(target) || !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
             return new Check(Verdict.UNVERIFIED, null, "it is not a plain file");
         }
@@ -79,14 +86,6 @@ final class OperationCopies {
             return new Check(Verdict.PARTIAL, m, null);
         }
         return new Check(Verdict.UNVERIFIED, m, "its bytes are not the bytes this operation was copying");
-    }
-
-    private static Optional<Path> existingQuietly(StagingArea staging, FileOperation op) {
-        try {
-            return staging.existing(op.operationId());
-        } catch (IOException e) {
-            return Optional.empty();
-        }
     }
 
     /**

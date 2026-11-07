@@ -178,11 +178,11 @@ public final class IntegrityService {
         try {
             // GAS-P2-007: a missing shard or originals directory (on a volume whose marker verified) means
             // the original is missing, so it can be repaired.
-            Optional<Path> located = volume.locate(content.currentPath());
-            if (located.isEmpty() || !Files.exists(located.get(), LinkOption.NOFOLLOW_LINKS)) {
-                IntegrityRepository.NewFinding missing = finding(FindingKind.MISSING, content, null, null, located.isEmpty()
-                        ? "Expected stored original not found at " + where + " (a directory above it is missing)"
-                        : "Expected stored original not found at " + where);
+            // V0019 audit: MISSING only on verified absence. A location that cannot be examined (permission, I/O,
+            // a vanished mount) is reported UNREADABLE below and decides nothing.
+            if (!Presence.exists(ctx, volume, content.currentPath().value())) {
+                IntegrityRepository.NewFinding missing = finding(FindingKind.MISSING, content, null, null,
+                        "Expected stored original not found at " + where);
                 // V0016: the finding and the content state (which vacates the location) are one transaction.
                 ctx.tx().executeWithoutResult(status -> {
                     record(scanId, missing, counts);
@@ -200,7 +200,8 @@ public final class IntegrityService {
                 });
                 return;
             }
-            Path path = located.get();
+            Path path = volume.locate(content.currentPath()).orElseThrow(() ->
+                    new Presence.InconclusiveException(where, "it vanished while being examined"));
             if (content.state() == ContentState.MISSING) {
                 // V0016: the bytes left this location. Whatever is here now is not the archive's copy unless it is
                 // verifiably the content (full scan); otherwise it is reported as an unexpected object, never
@@ -304,15 +305,11 @@ public final class IntegrityService {
                 counts[2]++;
                 continue;
             }
-            try {
-                Optional<Path> at = volume.get().locate(org.genealogyarchive.files.PortableRelativePath.of(u.path()));
-                if (at.isEmpty() || !Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
-                    UnresolvedObjects.resolveAbsent(ctx, u, "nothing was at " + u.path() + " when integrity scan " + scanId
-                            + " checked");
-                } else {
-                    counts[2]++;
-                }
-            } catch (IOException e) {
+            // Closed only on verified absence; present or undeterminable, it stays unresolved.
+            if (Presence.probe(ctx, volume.get(), u.path()).verifiedAbsent()) {
+                UnresolvedObjects.resolveAbsent(ctx, u, "nothing was at " + u.path() + " when integrity scan " + scanId
+                        + " checked");
+            } else {
                 counts[2]++;
             }
         }
@@ -428,11 +425,11 @@ public final class IntegrityService {
         }
         ContentIo.Measurement m;
         try {
-            Optional<Path> located = volume.locate(content.currentPath());
-            if (located.isEmpty() || !Files.exists(located.get(), LinkOption.NOFOLLOW_LINKS)) {
+            Presence.Probe probe = Presence.probe(ctx, volume, content.currentPath().value());
+            if (!probe.present()) {
                 return false;
             }
-            Path path = located.get();
+            Path path = probe.path();
             SafeFiles.requirePlainFile(path);
             // Bytes first: an object that is not the content is never touched, not even its protection.
             m = ContentIo.measure(path);

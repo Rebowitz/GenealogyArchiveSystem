@@ -3,6 +3,9 @@ package org.genealogyarchive.testsupport;
 import org.genealogyarchive.preservation.FaultPoints;
 
 import java.io.IOException;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -50,6 +53,49 @@ public final class ScriptedFaults implements FaultPoints {
 
     public void clear() {
         armed.clear();
+        inaccessible.clear();
+    }
+
+    /**
+     * Makes every examination of {@code path} (and of anything below it) fail the way a permission error, an
+     * unreadable directory or a failing mount does - identically on Windows and Linux and whatever the test
+     * account's privileges - until {@link #restoreAccess} or {@link #clear}.
+     */
+    public void denyAccess(Path path) {
+        inaccessible.put(path.toAbsolutePath().normalize(), "denied");
+    }
+
+    /** Like {@link #denyAccess}, but the examination fails with a plain I/O error. */
+    public void failIo(Path path) {
+        inaccessible.put(path.toAbsolutePath().normalize(), "io");
+    }
+
+    /** Makes {@code path} (and anything below it) look absent ("no such file"), as an unmounted volume does. */
+    public void vanish(Path path) {
+        inaccessible.put(path.toAbsolutePath().normalize(), "gone");
+    }
+
+    public void restoreAccess(Path path) {
+        inaccessible.remove(path.toAbsolutePath().normalize());
+    }
+
+    private final Map<Path, String> inaccessible = new ConcurrentHashMap<>();
+
+    @Override
+    public BasicFileAttributes stat(Path path) throws IOException {
+        Path p = path.toAbsolutePath().normalize();
+        for (Map.Entry<Path, String> e : inaccessible.entrySet()) {
+            if (p.startsWith(e.getKey())) {
+                if ("denied".equals(e.getValue())) {
+                    throw new AccessDeniedException(path.toString(), null, "injected: access denied");
+                }
+                if ("gone".equals(e.getValue())) {
+                    throw new java.nio.file.NoSuchFileException(path.toString(), null, "injected: vanished");
+                }
+                throw new IOException("injected I/O error examining " + path);
+            }
+        }
+        return FaultPoints.super.stat(path);
     }
 
     @Override

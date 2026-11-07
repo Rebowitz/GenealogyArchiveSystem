@@ -242,11 +242,11 @@ public final class OperationAdminService {
             }
         } else if (op.targetPath() != null) {
             try {
-                Optional<Path> target = ctx.openVolume(op.volumeId()).locate(PortableRelativePath.of(op.targetPath()));
-                if (target.isPresent() && Files.exists(target.get(), LinkOption.NOFOLLOW_LINKS)) {
+                // Not verifiably empty (present or undeterminable): reported as left in place. Nothing is touched.
+                if (!Presence.probe(ctx, ctx.openVolume(op.volumeId()), op.targetPath()).verifiedAbsent()) {
                     leftInPlace = op.targetPath();
                 }
-            } catch (ManagedVolume.VolumeUnavailableException | IOException e) {
+            } catch (ManagedVolume.VolumeUnavailableException e) {
                 // nothing is touched either way
             }
         }

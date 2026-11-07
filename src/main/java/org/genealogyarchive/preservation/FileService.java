@@ -366,8 +366,14 @@ public final class FileService {
             throw new RuleViolationException("This File is temporarily unavailable: " + e.getMessage());
         }
         try {
-            Optional<Path> located = volume.locate(content.currentPath());
-            if (located.isEmpty() || !Files.exists(located.get(), LinkOption.NOFOLLOW_LINKS)) {
+            // V0019 audit: recorded missing only on verified absence; an inaccessible original fails the download
+            // (below) without changing anything.
+            Presence.Probe probe = Presence.probe(ctx, volume, content.currentPath().value());
+            if (!probe.present() && !probe.verifiedAbsent()) {
+                throw new RuleViolationException("This File's stored original cannot be read right now. Nothing was "
+                        + "changed; try again later or ask an Administrator to check the volume.");
+            }
+            if (probe.verifiedAbsent()) {
                 // GAS-P2-007: a missing directory above the original is missing content too (repairable).
                 // V0016: the finding and the content state (which vacates the location) are one transaction.
                 ctx.tx().executeWithoutResult(status -> {
@@ -378,7 +384,8 @@ public final class FileService {
                 });
                 throw new RuleViolationException("This File's stored original is missing. The problem has been recorded.");
             }
-            Path path = located.get();
+            Path path = volume.locate(content.currentPath()).orElseThrow(() -> new RuleViolationException(
+                    "This File's stored original cannot be read right now. Nothing was changed; try again later."));
             FileChannel channel = SafeFiles.openForRead(path);
             long size = channel.size();
             if (size != content.byteSize()) {

@@ -70,16 +70,17 @@ final class QuarantineMoves {
     QuarantineRepository.Entry move(ManagedVolume volume, UUID operationId, UUID contentId, PortableRelativePath source,
                                     String suffix, Evidence trusted, QuarantineRepository.Reason reason) throws IOException {
         PortableRelativePath q = ManagedVolume.quarantinePath(operationId, suffix);
-        Optional<Path> at = volume.locate(source);
         QuarantineRepository.Entry entry;
         Optional<QuarantineRepository.Entry> recorded = ctx.quarantine().find(volume.volumeId(), q.value());
         if (recorded.isPresent()) {
             // Already intended: its recorded evidence governs (settle verifies the object against it).
             entry = recorded.get();
-        } else if (at.isPresent() && Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
-            SafeFiles.requirePlainFile(at.get());
-            BasicFileAttributes seen = Files.readAttributes(at.get(), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            ContentIo.Measurement m = ContentIo.measure(at.get());
+        } else if (Presence.exists(ctx, volume, source.value())) {
+            Path at = volume.locate(source).orElseThrow(() -> new Presence.InconclusiveException(source.value(),
+                    "it vanished while being examined"));
+            SafeFiles.requirePlainFile(at);
+            BasicFileAttributes seen = Files.readAttributes(at, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            ContentIo.Measurement m = ContentIo.measure(at);
             if (m.size() != trusted.size() || !m.sha256().equals(trusted.sha256())) {
                 throw new UnexplainedObjectException("the object at " + source.value() + " is not the object identified "
                         + "earlier (size and SHA-256 differ); it was not moved");
@@ -127,16 +128,27 @@ final class QuarantineMoves {
                 + "the archive's object; an Administrator must verify it";
     }
 
+    private boolean attestationCurrent(QuarantineRepository.Entry entry) {
+        return ctx.unresolved().openAt(entry.volumeId(), entry.sourcePath())
+                .filter(UnresolvedObjectRepository.Entry::attested)
+                .filter(u -> entry.sourceSha256() != null && entry.sourceSha256().equals(u.observedSha256()))
+                .isPresent();
+    }
+
     /** Finishes an INTENDED entry from the state on disk; other states are returned unchanged. */
     QuarantineRepository.Entry settle(ManagedVolume volume, QuarantineRepository.Entry entry) throws IOException {
         if (entry.state() != QuarantineRepository.State.INTENDED) {
             return entry;
         }
         PortableRelativePath sourceRel = PortableRelativePath.of(entry.sourcePath());
-        Optional<Path> source = volume.locate(sourceRel);
-        boolean sourcePresent = source.isPresent() && Files.exists(source.get(), LinkOption.NOFOLLOW_LINKS);
+        // V0019 audit: neither end is "absent" unless verified; an inaccessible end leaves the move unsettled.
+        boolean sourcePresent = Presence.exists(ctx, volume, entry.sourcePath());
+        Optional<Path> source = sourcePresent ? volume.locate(sourceRel) : Optional.empty();
+        if (sourcePresent && source.isEmpty()) {
+            throw new Presence.InconclusiveException(entry.sourcePath(), "it vanished while being examined");
+        }
         Path destination = volume.prepare(PortableRelativePath.of(entry.quarantinePath()));
-        boolean destinationPresent = Files.exists(destination, LinkOption.NOFOLLOW_LINKS);
+        boolean destinationPresent = Presence.exists(ctx, volume, destination);
         if (sourcePresent && destinationPresent) {
             throw new FileAlreadyExistsException(entry.quarantinePath(), entry.sourcePath(),
                     "both the object and its quarantine destination exist; nothing was moved");
@@ -146,6 +158,13 @@ final class QuarantineMoves {
             throw new UnexplainedObjectException("the object now at " + entry.sourcePath() + " is not shown to be the one this "
                     + "move to " + entry.quarantinePath() + " was recorded for (" + unverifiedReason(entry)
                     + "); it was not moved or adopted");
+        }
+        // An attested move moves bytes only while the Administrator's authorization is still current: the record
+        // is open and attested for exactly this hash. A released or otherwise resolved record never authorises a
+        // rename, whether the move is driven by the worker, a retry or recovery (V0019 audit, finding 1).
+        if (sourcePresent && entry.reason() == QuarantineRepository.Reason.ATTESTED_OBJECT && !attestationCurrent(entry)) {
+            throw new UnexplainedObjectException("the Administrator's attestation that authorised moving " + entry.sourcePath()
+                    + " is no longer current (it was released or resolved); nothing was moved");
         }
         if (!sourcePresent && destinationPresent && !isRecordedObject(entry, destination)) {
             throw new UnexplainedObjectException("the object at " + entry.quarantinePath() + " is not shown to be the one moved "

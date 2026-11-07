@@ -111,6 +111,21 @@ public final class UnresolvedObjectRepository {
                 """).param("v", volumeId).param("p", path).query(ENTRY).optional();
     }
 
+    /** Whether a record at the location was resolved this way for an object with this SHA-256. */
+    public boolean resolvedAs(UUID volumeId, String path, Resolution resolution, String observedSha256) {
+        return jdbc.sql("""
+                SELECT count(*) FROM gas.unresolved_object
+                 WHERE volume_id = :v AND path = :p AND status = 'RESOLVED' AND resolution = :r AND observed_sha256 = :sha
+                """).param("v", volumeId).param("p", path).param("r", resolution.name()).param("sha", observedSha256)
+                .query(Long.class).single() > 0;
+    }
+
+    /** Locks the record for the rest of the caller's transaction (decisions about it are serialised). */
+    public Optional<Entry> lockForUpdate(UUID unresolvedId) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM gas.unresolved_object WHERE unresolved_id = :id FOR UPDATE")
+                .param("id", unresolvedId).query(ENTRY).optional();
+    }
+
     public List<Entry> openForContent(UUID contentId) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM gas.unresolved_object WHERE content_id = :c AND status = 'OPEN' ORDER BY detected_at")
                 .param("c", contentId).query(ENTRY).list();

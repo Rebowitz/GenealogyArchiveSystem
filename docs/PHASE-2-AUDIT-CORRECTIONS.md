@@ -313,6 +313,59 @@ the V0018 evidence-once trigger and claims audit are unchanged.
 * Damaged content can no longer be destroyed, nor its damaged copy quarantined, without an Administrator's
   decision about the damaged object - by design, but it is new operational work.
 
+## V0019 audit corrections (audited revision `a6b45252777cb8d3384e98c5cf486629ac10749c`)
+
+Three MAJOR findings and one MINOR. Reproduced from the source before any change:
+
+1. **Attestation executed after release.** `release` changed only the record (no lock, no check of a started
+   move). `quarantineAttested` re-read the record only once it held the operation lock, but an intent recorded
+   before a crash was finished by `RecoveryService.reconcileAll` -> `QuarantineMoves.settle` with no check of
+   the authorization; and a release committed while the worker was between its check and the rename did not
+   stop the rename. The moved object then carried an `ADMINISTRATOR_ATTESTED` ledger hash, which destruction
+   trusted for deletion.
+2. **Repair inspection-to-commit race.** `inspectSuperseded` looked at the old location before the commit
+   transaction; an object appearing in between was retired as MISSING, and destruction treated every
+   historical location as "report only", recording BYTES_REMOVED.
+3. **Inaccessible paths read as absent.** `Files.exists` returns false when the path cannot be examined
+   (permission, unreadable parent, unmounted volume), and `ManagedVolume.locate` treated an unreadable parent
+   directory as missing. Scans recorded MISSING, `resolveAbsent` closed unresolved records, `settle` recorded
+   SOURCE_ABSENT, repair retired generations as MISSING and destruction counted the location as removed.
+4. **Attestation not atomic (MINOR).** The attestation, its operation event and the job were three separate
+   commits; a failure between them left an authorization without work, or a note without either.
+
+### Correction design (documented before coding)
+
+* **Authorization lifecycle** (no new tables; the states are already durable):
+  `OPEN` -> `ATTESTED` (attested_by/at, operation event and job committed in **one transaction**) ->
+  `EXECUTING` (the move intent, at the deterministic quarantine path `att-<record>` of the record's operation)
+  -> `RESOLVED QUARANTINED` (in the settle transaction) - or `RESOLVED NOT_ARCHIVAL` (release) from `OPEN` or
+  `ATTESTED` only. Worker, destruction and release all hold the record's operation lock (PostgreSQL advisory
+  lock, cross-process) while they act, and the worker re-reads the authorization under that lock immediately
+  before recording its intent. Release is refused while the lock is held or once a move was recorded (it then
+  names where the object is or is going); a released record can never gain an intent, so no worker, retry or
+  recovery can move it. Settling an attested move re-validates the authorization (record still open and
+  attested at that source) before any rename; destruction trusts an attested ledger hash only together with
+  the record that was resolved QUARANTINED by that move. Duplicate attestations are idempotent (the existing
+  attestation is returned; no second job).
+* **Three-valued presence.** One probe (`Presence`) answers PRESENT, VERIFIED_ABSENT or UNKNOWN by reading
+  attributes component by component without following links: only "no such file", on a volume whose marker is
+  still there, is absence. Permission errors, unreadable directories, links in the chain, a vanished marker or
+  any I/O error are UNKNOWN, which every caller treats as "cannot decide": no MISSING, no record closed, no
+  SOURCE_ABSENT, no BYTES_REMOVED; scans report UNREADABLE (paths only, to Administrators) and recovery
+  retries. The probe goes through the fault seam so tests inject access failures identically on Windows and
+  Linux.
+* **Former locations stay accountable.** The repair's look before the commit is no longer evidence after it:
+  destruction re-inspects *every* location the content was ever at (historical generation paths, operation
+  targets, ledger sources and quarantine paths) and records any unidentified object there as unresolved
+  (CLEANUP_INCOMPLETE until it is gone, released or verified), instead of reporting it and completing. Scans
+  keep reporting such objects as unexpected. Nothing unrelated is deleted or moved.
+
+### Migration
+
+No migration. The lifecycle uses the V0019 columns (attestation, status, resolution) plus the ledger intent at
+a deterministic path; synchronization uses the existing operation advisory locks; presence and former-location
+accounting are application rules over the existing `unresolved_object` table. V0001-V0019 are unchanged.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

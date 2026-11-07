@@ -1,6 +1,10 @@
 package org.genealogyarchive.preservation;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.UUID;
 
 /**
@@ -41,10 +45,21 @@ public interface FaultPoints {
         /** Integrity: inside the transaction recording content MISSING, after the finding, before the state. */
         AFTER_MISSING_FINDING,
         /** Partial copy: its quarantine move is recorded, before the operation is replanned (GAS-P2-008). */
-        AFTER_QUARANTINE_RECORDED
+        AFTER_QUARANTINE_RECORDED,
+        /** Repair: the superseded location was inspected, before the commit transaction (V0019 audit). */
+        AFTER_SUPERSEDED_INSPECTION
     }
 
     FaultPoints NONE = (point, operationId) -> { };
 
     void reach(Point point, UUID operationId) throws IOException;
+
+    /**
+     * Reads a path's attributes without following links: the one place {@link Presence} examines the
+     * filesystem, so tests can make any path inaccessible (permission denied, I/O error, vanished) the same
+     * way on every platform. Production reads the attributes.
+     */
+    default BasicFileAttributes stat(Path path) throws IOException {
+        return Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+    }
 }

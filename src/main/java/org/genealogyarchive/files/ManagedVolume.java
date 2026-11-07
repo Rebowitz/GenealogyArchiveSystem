@@ -141,7 +141,11 @@ public final class ManagedVolume {
         if (relativeParent != null) {
             for (Path name : relativeParent) {
                 current = current.resolve(name);
-                if (!Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                // V0019 audit: only "no such file" means the directory is missing. A directory that cannot be
+                // examined (permission, I/O error) is not missing: that error propagates to the caller.
+                try {
+                    Files.readAttributes(current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                } catch (NoSuchFileException e) {
                     return Optional.empty();
                 }
                 SafeFiles.requirePlainDirectory(current);
@@ -178,7 +182,9 @@ public final class ManagedVolume {
     public List<Entry> listOriginals() throws IOException {
         Path originals = root.resolve(ORIGINALS);
         List<Entry> entries = new ArrayList<>();
-        if (!Files.exists(originals)) {
+        try {
+            Files.readAttributes(originals, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        } catch (NoSuchFileException e) {
             return entries;
         }
         SafeFiles.requirePlainDirectory(originals);
