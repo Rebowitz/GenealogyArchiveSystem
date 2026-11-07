@@ -16,8 +16,10 @@ import java.nio.file.attribute.BasicFileAttributes;
  * what a permission error, an unreadable directory or a vanished mount look like.
  * <p>
  * The probe reads attributes component by component from the volume root without following links. Absence
- * is concluded only from "no such file" for a component whose parent was read, and only while the volume's
- * marker is still there (an unmounted volume leaves an empty mount point behind). Anything else - access
+ * is concluded only from "no such file" for a component whose parent was read, and only while the root still
+ * carries this archive's marker for this configured volume, verified before the examination and again before
+ * absence is concluded (an unmounted volume leaves an empty mount point behind; a substituted volume carries
+ * another marker). Anything else - access
  * denied, any I/O error, a link or non-directory in the chain, a missing marker - is UNKNOWN, which every
  * caller treats as "cannot decide": nothing is recorded missing, no record is closed, nothing counts as
  * removed, and the work is retried later.
@@ -80,6 +82,11 @@ final class Presence {
         } catch (IOException | SecurityException e) {
             return new Probe(State.UNKNOWN, target, null, "the volume root cannot be read: " + kind(e));
         }
+        // V0019 audit: the configured volume itself, not merely "a volume", must be there before anything about
+        // it is examined (and again before absence is concluded, below).
+        if (!isThisVolume(ctx, volume)) {
+            return new Probe(State.UNKNOWN, target, null, "the configured volume's identity cannot be confirmed at its root");
+        }
         Path current = root;
         int count = relative.getNameCount();
         for (int i = 0; i < count; i++) {
@@ -88,9 +95,10 @@ final class Presence {
             try {
                 a = ctx.faults().stat(current);
             } catch (NoSuchFileException e) {
-                return markerStillThere(ctx, root)
+                return isThisVolume(ctx, volume)
                         ? new Probe(State.VERIFIED_ABSENT, target, null, null)
-                        : new Probe(State.UNKNOWN, target, null, "the volume marker is gone (the volume may be unmounted)");
+                        : new Probe(State.UNKNOWN, target, null, "the configured volume's identity cannot be confirmed at "
+                        + "its root (it may be unmounted or replaced)");
             } catch (IOException | SecurityException e) {
                 return new Probe(State.UNKNOWN, target, null, kind(e));
             }
@@ -108,12 +116,20 @@ final class Presence {
         return new Probe(State.UNKNOWN, target, null, "empty location");
     }
 
-    private static boolean markerStillThere(PreservationContext ctx, Path root) {
+    /**
+     * The marker at the root is this archive's marker for this volume, re-read now: a regular file (examined
+     * through the fault seam, so tests can make it vanish or become unreadable) whose identities match those the
+     * volume was opened with. Any other marker - another volume's, a copy, a malformed one - is not this volume.
+     */
+    private static boolean isThisVolume(PreservationContext ctx, ManagedVolume volume) {
         try {
-            return ctx.faults().stat(root.resolve(VolumeMarker.FILE_NAME)).isRegularFile();
+            if (!ctx.faults().stat(volume.root().resolve(VolumeMarker.FILE_NAME)).isRegularFile()) {
+                return false;
+            }
         } catch (IOException | SecurityException e) {
             return false;
         }
+        return volume.markerIdentifiesThisVolume();
     }
 
     private static String kind(Exception e) {

@@ -398,6 +398,84 @@ tests behave identically on Windows and Linux and under any account's privileges
 * The access-failure tests inject failures at the probe; real permission behaviour is not exercised by tests,
   because it differs between platforms and privileged accounts.
 
+## Second V0019 audit corrections (audited revision `cf6314ccc18d91533bd0c1f530fa8ae3174fef96`)
+
+Two MAJOR findings and one MINOR. Reproduced from the source before any change:
+
+1. **A released object deleted by hash.** `DestructionProcessor.classify` tested the location's object against
+   the trusted hashes (for former locations: the authoritative SHA-256) *before* looking for an Administrator's
+   release. An object an Administrator had released as not the archive's - at a quarantine path or any former
+   location - whose bytes happen to equal the content's authoritative bytes was classified "known" and deleted
+   by the next destruction pass or recovery. Byte identity was standing in for deletion authorization.
+2. **Any marker accepted as the volume.** `Presence` concluded VERIFIED_ABSENT after "no such file" if *a
+   regular file named like a marker* was at the volume root. A different volume (or a copy of another
+   volume's marker) mounted at the configured root therefore produced verified absence: records closed,
+   content recorded MISSING, BYTES_REMOVED. The volume was verified only when it was opened.
+3. **Scan closing a record mid-move (MINOR).** `IntegrityService.checkUnresolved` closed a record as ABSENT on
+   the probe alone, without the record operation's lock and without looking at the move ledger. Between an
+   attested move's rename and its settle transaction the source is absent: the scan closed the record ABSENT
+   and retired the generation MISSING, and the settle then recorded QUARANTINED for an object whose record says
+   ABSENT - contradictory final dispositions, and an attested hash no record honours.
+
+### Correction design (documented before coding)
+
+* **Authorization before identity, everywhere bytes are deleted.** For every location, destruction first
+  consults the disposition records: an Administrator's release of that location (NOT_ARCHIVAL) makes it
+  untouchable - the released object is reported and left even if its bytes equal the authoritative bytes; if
+  the object there is no longer the released one it is recorded unresolved, never deleted. Only a location
+  that is still this content's (current generation, owned operation copy, honoured trusted move, open record
+  or former location without a contrary decision) may then be removed, and only when its object is identified
+  (authoritative hash, trusted move hash, `OperationCopies`, attestation). Completion: BYTES_REMOVED only when
+  every location is absent, removed, or released; anything else keeps CLEANUP_INCOMPLETE.
+* **Configured volume identity at every decision.** `ManagedVolume` keeps the archive and volume identities it
+  was opened for; `Presence` re-reads and verifies the marker (format, archive id, volume id) through the fault
+  seam before examining a location and again before concluding absence. A missing, unreadable, malformed or
+  foreign marker is UNKNOWN - never VERIFIED_ABSENT. Every scan, recovery, repair and destruction decision about
+  presence goes through `Presence`, so identity is rechecked at each of them, not only when the volume opened.
+* **Closing on absence follows the lifecycle.** A record is closed as ABSENT only under its operation's lock
+  (a scan skips a record whose operation is busy; destruction already holds the locks), only when no move from
+  that location is recorded but unsettled (an INTENDED ledger entry), and only on a probe taken after the lock
+  was acquired, in a transaction holding the record's row lock. Absence caused by a move in progress is settled
+  by the move, which records the single final disposition.
+
+No migration: the corrections are application rules over the existing tables, locks and ledger.
+
+### Implemented
+
+| Finding | Correction | Regression tests (`Phase2AuditCorrectionsIT`) |
+|---|---|---|
+| **1. Released objects deleted by hash** (MAJOR) | `DestructionProcessor.classify` consults the disposition records first: any Administrator release (NOT_ARCHIVAL) at the location -> the released object is left and reported, anything else there is unresolved; only then is the object compared with trusted hashes. Uncommitted copies at a released location are not deleted on the claim either. A released quarantined object keeps its ledger entry QUARANTINED (only removed objects are recorded REMOVED). | `v0021_aReleasedObjectWithTheAuthoritativeBytesIsNeverDeleted` (former location; repeated recovery, destruction and scans), `v0021_aReleasedQuarantinedObjectIsNeverDeletedEvenWhenItsBytesAreAuthoritative`, `v0021_anObjectReplacingAReleasedOneIsUnresolvedNotDeleted` |
+| **2. Any marker accepted as the volume** (MAJOR) | `ManagedVolume` keeps the archive and volume ids it was opened for and re-reads the marker on request; `Presence` requires this archive's marker for this volume before examining a location and again before concluding absence. A missing, unreadable, malformed or foreign marker gives UNKNOWN. | `v0021_aSubstitutedVolumeNeverProducesVerifiedAbsence` (foreign marker, missing marker, restored volume), `v0021_destructionRechecksTheVolumeIdentityAtEachDecision`, `v0021_aRepairDoesNotCommitAgainstASubstitutedVolume`, `v0020_anInaccessibleOriginalIsNeverRecordedMissing` (marker vanished) |
+| **3. Scan closing a record mid-move** (MINOR) | `UnresolvedObjects.closeIfVerifiedAbsent` is the only way a record closes on absence: under the record operation's lock (scans skip it while busy), with no unsettled move from the location, on a probe taken under the lock, in a transaction holding the record's row lock. New fault point `BEFORE_ABSENCE_RECORDED`. | `v0021_aScanNeverClosesARecordWhileItsMoveIsPendingOrExecuting` (scans at the intent, rename and pre-commit barriers; crash after the rename), `v0021_closingOnAbsenceExcludesWorkersAndReleases` |
+
+The tests change the marker with real files (another volume's marker written in place, or none), so they run
+identically on Windows and Linux.
+
+**Unified authorization and disposition audit (finding 4).** No path deletes on a hash match alone, and no path
+concludes absence on a volume whose identity was not confirmed at that moment.
+
+| Deletion path | Required authorization | Trusted identity evidence | Physical disposition | Completion accounting |
+|---|---|---|---|---|
+| Current generation cleanup | Administrator's destruction request; no release of the location | authoritative SHA-256 | deleted; otherwise left, unresolved | removed or verified absent |
+| Former-location reconciliation | destruction request; no release of the location | authoritative SHA-256 | deleted if identified; released objects left and reported; anything else left, unresolved | released objects count as decided; unresolved keeps CLEANUP_INCOMPLETE |
+| Operation-created copies | the operation's claim + destruction request; no release of the location | `OperationCopies` (received hash, or prefix of the re-verified staged upload) | deleted; otherwise the claim becomes an unresolved record | as above |
+| Quarantine destruction | destruction request; the move's trusted basis; for attested moves, the record that move resolved | the move's recorded SHA-256 | deleted; untrusted, released or mismatching objects left | as above; ledger REMOVED only for removed objects |
+| Attested objects (not moved) | attestation, with the record's lock held by the destruction | the attested SHA-256 | deleted; changed objects left, unresolved | record DESTROYED in the completion transaction |
+| Repair supersession | none - nothing is deleted | - | MISSING if verified absent; UNRESOLVED + record if present; no commit if undeterminable | - |
+| Cancellation | the operation's claim | `OperationCopies` | moved to quarantine (never deleted); otherwise left, unresolved | - |
+| Interrupted-move recovery | the recorded intent (and, for attested moves, a current attestation) | the intent's recorded SHA-256 | moved / confirmed / SOURCE_ABSENT only on verified absence; otherwise left | the single final disposition is recorded by the settle transaction |
+
+**Volume identity: residual check-to-use risk.** The marker is verified immediately before each examination
+and before absence is concluded, so a substituted, unmounted or foreign volume is never read as "absent"
+(the reported defect). Between that verification and the following filesystem call a privileged local actor
+could still swap what is mounted at the root; Java offers no portable way to pin a mount (no `openat` on a
+directory handle), so this is the same class of residual risk as P2-E and is accepted on the same terms: it
+requires local administrative access to the host and is not reachable through the application.
+
+**Remaining limitations (this round).** A released object stays where it is for good; removing it is a manual
+act outside the application (a later scan then reports nothing there). Released locations are excluded from
+automatic deletion even if the content's authoritative bytes are later put there; that needs a new decision.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

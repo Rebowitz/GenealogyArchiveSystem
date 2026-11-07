@@ -118,6 +118,12 @@ public final class QuarantineRepository {
                 .query(ENTRY).list();
     }
 
+    /** Moves from this location that are recorded but not yet settled. */
+    public List<Entry> intendedFrom(UUID volumeId, String sourcePath) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM gas.quarantine_object WHERE state = 'INTENDED' AND volume_id = :v "
+                + "AND source_path = :p ORDER BY created_at").param("v", volumeId).param("p", sourcePath).query(ENTRY).list();
+    }
+
     /** Every ledger entry holding (or that may hold) bytes of the content. */
     public List<Entry> forContent(UUID contentId) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM gas.quarantine_object WHERE content_id = :c ORDER BY created_at")

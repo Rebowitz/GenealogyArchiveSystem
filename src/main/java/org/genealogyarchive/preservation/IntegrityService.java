@@ -305,11 +305,10 @@ public final class IntegrityService {
                 counts[2]++;
                 continue;
             }
-            // Closed only on verified absence; present or undeterminable, it stays unresolved.
-            if (Presence.probe(ctx, volume.get(), u.path()).verifiedAbsent()) {
-                UnresolvedObjects.resolveAbsent(ctx, u, "nothing was at " + u.path() + " when integrity scan " + scanId
-                        + " checked");
-            } else {
+            // Closed only on verified absence, under the record's lifecycle (its operation's lock, no move in
+            // progress from it); present, undeterminable, or busy, it stays unresolved.
+            if (!UnresolvedObjects.closeIfVerifiedAbsent(ctx, volume.get(), u, "nothing was at " + u.path()
+                    + " when integrity scan " + scanId + " checked", false)) {
                 counts[2]++;
             }
         }

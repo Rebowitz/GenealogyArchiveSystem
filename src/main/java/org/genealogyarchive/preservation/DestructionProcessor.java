@@ -227,8 +227,8 @@ public final class DestructionProcessor {
             // Unresolved objects that are verifiably gone are closed; the others stay unresolved.
             for (UnresolvedObjectRepository.Entry u : openRecords(op)) {
                 if (!present(volume, u.path())) {
-                    UnresolvedObjects.resolveAbsent(ctx, u, "nothing was at " + u.path() + " when destruction " + op.operationId()
-                            + " checked");
+                    UnresolvedObjects.closeIfVerifiedAbsent(ctx, volume, u, "nothing was at " + u.path() + " when destruction "
+                            + op.operationId() + " checked", inv.locked.contains(u.operationId()));
                 }
             }
             // Uncommitted copies: removed only if they are verifiably the operation's copy (V0018 audit).
@@ -241,6 +241,11 @@ public final class DestructionProcessor {
                 }
                 if (!volume.volumeId().equals(w.volumeId())) {
                     throw new IOException("operation " + w.operationId() + " wrote a copy on another volume: " + w.targetPath());
+                }
+                if (!ctx.unresolved().releasedHashesAt(volume.volumeId(), w.targetPath()).isEmpty()) {
+                    // An Administrator decided about this location before: decided by classify (never by the claim).
+                    inv.historical.add(w.targetPath());
+                    continue;
                 }
                 OperationCopies.Check own = OperationCopies.check(ctx, w, volume);
                 if (own.verdict() == OperationCopies.Verdict.UNVERIFIED) {
@@ -380,7 +385,8 @@ public final class DestructionProcessor {
                 }
             }
             for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
-                if (entry.state() == QuarantineRepository.State.QUARANTINED) {
+                // An object an Administrator released stays in quarantine, and its ledger entry says so.
+                if (entry.state() == QuarantineRepository.State.QUARANTINED && removed.contains(entry.quarantinePath())) {
                     ctx.quarantine().setState(entry.quarantineId(), QuarantineRepository.State.QUARANTINED,
                             QuarantineRepository.State.REMOVED, "removed by destruction " + op.operationId());
                 }
@@ -440,12 +446,27 @@ public final class DestructionProcessor {
         ContentIo.Measurement m = null;
         if (!SafeFiles.isLinkOrReparsePoint(p) && probe.attributes().isRegularFile()) {
             m = ContentIo.measure(p);
-            if (trusted.contains(m.sha256())) {
-                inv.known.add(location);
-                return;
-            }
         }
         Optional<UnresolvedObjectRepository.Entry> open = ctx.unresolved().openAt(volume.volumeId(), location);
+        // Authorization first (second V0019 audit): an Administrator's release of this location is a decision about
+        // the object, and no hash - not even the authoritative one - overrides it. The released object is left and
+        // reported; anything that has taken its place is unresolved. Neither is ever deleted.
+        List<String> released = ctx.unresolved().releasedHashesAt(volume.volumeId(), location);
+        if (!released.isEmpty()) {
+            if (open.isEmpty() && m != null && released.contains(m.sha256())) {
+                inv.historical.add(location);
+                return;
+            }
+            UnresolvedObjectRepository.Entry u = open.orElseGet(() -> newRecord(volume, op, location, kind, generation, null));
+            inv.unresolved.put(location, unresolvedReason(u, m) + "; an Administrator released the object recorded here "
+                    + "earlier, so nothing at this location is removed without a new decision");
+            return;
+        }
+        // Identity second: a location still this content's (no contrary decision) whose object is identified.
+        if (m != null && trusted.contains(m.sha256())) {
+            inv.known.add(location);
+            return;
+        }
         if (open.isPresent()) {
             UnresolvedObjectRepository.Entry u = open.get();
             if (m != null && u.attested() && inv.locked.contains(u.operationId())
@@ -456,21 +477,20 @@ public final class DestructionProcessor {
             }
             return;
         }
-        Optional<UnresolvedObjectRepository.Entry> latest = ctx.unresolved().latestAt(volume.volumeId(), location);
-        if (m != null && latest.isPresent() && latest.get().resolution() == UnresolvedObjectRepository.Resolution.NOT_ARCHIVAL
-                && m.sha256().equals(latest.get().observedSha256())) {
-            // An Administrator released this very object as not the archive's: it is only reported.
-            inv.historical.add(location);
-            return;
-        }
+        UnresolvedObjectRepository.Entry u = newRecord(volume, op, location, kind, generation, m);
+        inv.unresolved.put(location, unresolvedReason(u, m));
+    }
+
+    private UnresolvedObjectRepository.Entry newRecord(ManagedVolume volume, FileOperation op, String location,
+                                                       UnresolvedObjectRepository.Kind kind, Integer generation,
+                                                       ContentIo.Measurement m) {
         FileContent content = ctx.contents().find(op.contentId()).orElseThrow();
-        UnresolvedObjectRepository.Entry u = ctx.unresolved().recordIfAbsent(new UnresolvedObjectRepository.NewEntry(
+        return ctx.unresolved().recordIfAbsent(new UnresolvedObjectRepository.NewEntry(
                 volume.volumeId(), location, content.contentId(),
                 // A generation is named only for its own storage location (quarantine paths name none).
                 generation, op.operationId(), kind, m == null ? null : m.size(), m == null ? null : m.sha256(),
                 "Destruction " + op.operationId() + " found an object at " + location + " that it cannot identify as a copy "
                         + "of content " + content.contentId() + " (" + describe(kind) + "). It was left untouched."));
-        inv.unresolved.put(location, unresolvedReason(u, m));
     }
 
     private static String describe(UnresolvedObjectRepository.Kind kind) {

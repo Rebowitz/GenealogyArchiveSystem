@@ -3,6 +3,7 @@ package org.genealogyarchive.preservation;
 import org.genealogyarchive.access.AccessPolicy;
 import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.access.Permission;
+import org.genealogyarchive.data.OperationLocks;
 import org.genealogyarchive.data.QuarantineRepository;
 import org.genealogyarchive.data.UnresolvedObjectRepository;
 import org.genealogyarchive.files.ManagedVolume;
@@ -213,12 +214,54 @@ public final class UnresolvedObjects {
     }
 
     /** Closes a record whose object is verifiably gone; a superseded generation pointing there becomes MISSING. */
-    static void resolveAbsent(PreservationContext ctx, UnresolvedObjectRepository.Entry u, String how) {
-        ctx.tx().executeWithoutResult(status -> {
-            if (ctx.unresolved().resolve(u.unresolvedId(), UnresolvedObjectRepository.Resolution.ABSENT, how, null)) {
-                new UnresolvedObjects(ctx).retireGeneration(u, GenerationState.MISSING);
+    /**
+     * Closes a record as ABSENT, following the same lifecycle as every other final decision about it (second V0019
+     * audit, finding 3). Only:
+     * <ul>
+     *   <li>under the lock of the operation the record names - held by an attested move from its check to its
+     *       settlement, by destruction for its pass, and needed by a release (a caller that does not already hold
+     *       it tries once and, if it is busy, leaves the record open for a later pass);</li>
+     *   <li>when no move from that location is recorded but unsettled - absence caused by a move in progress is
+     *       the move's to settle, which records the single final disposition;</li>
+     *   <li>on a probe taken after the lock was acquired that verifies absence on the configured volume;</li>
+     *   <li>in a transaction holding the record's row lock, if it is still open.</li>
+     * </ul>
+     *
+     * @param operationLockHeld whether the caller already holds the lock of {@code u.operationId()}
+     * @return true if the record is now closed as ABSENT
+     */
+    static boolean closeIfVerifiedAbsent(PreservationContext ctx, ManagedVolume volume, UnresolvedObjectRepository.Entry u,
+                                         String how, boolean operationLockHeld) {
+        Optional<OperationLocks.Held> held = Optional.empty();
+        if (!operationLockHeld) {
+            held = ctx.locks().tryLock("file-operation", u.operationId());
+            if (held.isEmpty()) {
+                return false;
             }
-        });
+        }
+        try {
+            if (!ctx.quarantine().intendedFrom(u.volumeId(), u.path()).isEmpty()) {
+                return false;
+            }
+            if (!Presence.probe(ctx, volume, u.path()).verifiedAbsent()) {
+                return false;
+            }
+            ctx.faults().reach(FaultPoints.Point.BEFORE_ABSENCE_RECORDED, u.operationId());
+            Boolean closed = ctx.tx().execute(status -> {
+                UnresolvedObjectRepository.Entry current = ctx.unresolved().lockForUpdate(u.unresolvedId()).orElseThrow();
+                if (!current.open() || !ctx.quarantine().intendedFrom(u.volumeId(), u.path()).isEmpty()) {
+                    return false;
+                }
+                ctx.unresolved().resolve(current.unresolvedId(), UnresolvedObjectRepository.Resolution.ABSENT, how, null);
+                new UnresolvedObjects(ctx).retireGeneration(current, GenerationState.MISSING);
+                return true;
+            });
+            return Boolean.TRUE.equals(closed);
+        } catch (IOException e) {
+            return false;
+        } finally {
+            held.ifPresent(OperationLocks.Held::close);
+        }
     }
 
     private void retireGeneration(UnresolvedObjectRepository.Entry u, GenerationState to) {

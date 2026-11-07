@@ -120,6 +120,17 @@ public final class UnresolvedObjectRepository {
                 .query(Long.class).single() > 0;
     }
 
+    /**
+     * The observed SHA-256 of every object an Administrator released at this location (NOT_ARCHIVAL). Non-empty
+     * means a decision was made about the location: nothing there is deleted on the strength of a hash.
+     */
+    public List<String> releasedHashesAt(UUID volumeId, String path) {
+        return jdbc.sql("""
+                SELECT coalesce(observed_sha256, '') FROM gas.unresolved_object
+                 WHERE volume_id = :v AND path = :p AND status = 'RESOLVED' AND resolution = 'NOT_ARCHIVAL'
+                """).param("v", volumeId).param("p", path).query(String.class).list();
+    }
+
     /** Locks the record for the rest of the caller's transaction (decisions about it are serialised). */
     public Optional<Entry> lockForUpdate(UUID unresolvedId) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM gas.unresolved_object WHERE unresolved_id = :id FOR UPDATE")

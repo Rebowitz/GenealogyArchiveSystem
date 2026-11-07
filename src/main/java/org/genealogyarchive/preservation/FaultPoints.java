@@ -47,7 +47,9 @@ public interface FaultPoints {
         /** Partial copy: its quarantine move is recorded, before the operation is replanned (GAS-P2-008). */
         AFTER_QUARANTINE_RECORDED,
         /** Repair: the superseded location was inspected, before the commit transaction (V0019 audit). */
-        AFTER_SUPERSEDED_INSPECTION
+        AFTER_SUPERSEDED_INSPECTION,
+        /** An unresolved record: absence verified under its operation's lock, before it is recorded closed. */
+        BEFORE_ABSENCE_RECORDED
     }
 
     FaultPoints NONE = (point, operationId) -> { };

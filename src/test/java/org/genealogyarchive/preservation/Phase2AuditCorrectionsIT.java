@@ -3241,4 +3241,252 @@ class Phase2AuditCorrectionsIT {
         assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(stored).doesNotExist();
     }
+
+    // ---- Second V0019 audit: authorization before identity, configured volume identity, scans in the lifecycle --
+
+    /** Replaces the volume marker with another volume's (as a different volume at the configured root would). */
+    private byte[] substituteMarker() throws IOException {
+        Path marker = org.genealogyarchive.files.VolumeMarker.location(fx.volumeRoot);
+        byte[] original = Files.readAllBytes(marker);
+        SafeFiles.clearReadOnly(marker);
+        Files.delete(marker);
+        new org.genealogyarchive.files.VolumeMarker(org.genealogyarchive.files.VolumeMarker.CURRENT_FORMAT, UUID.randomUUID(),
+                UUID.randomUUID(), java.time.Instant.parse("2026-01-01T00:00:00Z")).writeTo(fx.volumeRoot);
+        return original;
+    }
+
+    private void restoreMarker(byte[] original) throws IOException {
+        Path marker = org.genealogyarchive.files.VolumeMarker.location(fx.volumeRoot);
+        if (Files.exists(marker, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            SafeFiles.clearReadOnly(marker);
+            Files.delete(marker);
+        }
+        Files.write(marker, original);
+    }
+
+    /**
+     * Finding 1: an Administrator released an object at a former location whose bytes equal the content's
+     * authoritative bytes. No destruction pass, recovery or scan ever deletes it.
+     */
+    @Test
+    void v0021_aReleasedObjectWithTheAuthoritativeBytesIsNeverDeleted() throws Exception {
+        byte[] bytes = b("will, released though byte-identical");
+        ArchivalFile f = ingestedThenMissing("released-identical.tif", bytes);
+        Path former = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(former, bytes);
+        assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        assertThat(u.observedSha256()).isEqualTo(sha256(bytes));
+        fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "a working copy someone keeps there; leave it");
+
+        FileOperation op = destroy(fx.file(f.fileId()));
+        for (int i = 0; i < 3; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(op.operationId());
+            fx.scan(fx.services(), "QUICK");
+            assertThat(former).as("a release is never overridden by a hash match").hasBinaryContent(bytes);
+        }
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(d.message()).contains("released", u.path());
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).containsExactly(former);
+    }
+
+    /** Finding 1: a released quarantined object with the authoritative bytes stays, through repeated destruction. */
+    @Test
+    void v0021_aReleasedQuarantinedObjectIsNeverDeletedEvenWhenItsBytesAreAuthoritative() throws Exception {
+        byte[] bytes = b("deed, released in quarantine");
+        ArchivalFile f = ingestAs(fx.editor, "released-q.tif", bytes, Restriction.NORMAL, null, null);
+        // A move recorded before V0019 (untrusted) left a byte-identical object in quarantine.
+        String q = ManagedVolume.quarantinePath(UUID.randomUUID(), "legacy").value();
+        UUID legacyOp = fx.operation(fx.preservation().context().operations().writersOfContent(f.contentId()).get(0)
+                .operationId()).operationId();
+        Path atQ = onVolume(q);
+        Files.createDirectories(atQ.getParent());
+        Files.write(atQ, bytes);
+        sql().sql("""
+                INSERT INTO gas.quarantine_object (quarantine_id, volume_id, operation_id, content_id, source_path,
+                                                   quarantine_path, reason, state, source_size, source_sha256)
+                VALUES (gen_random_uuid(), :v, :op, :c, 'originals/legacy/elsewhere', :q, 'PARTIAL_COPY', 'QUARANTINED', :size, :sha)
+                """).param("v", fx.volumeId).param("op", legacyOp).param("c", f.contentId()).param("q", q)
+                .param("size", (long) bytes.length).param("sha", sha256(bytes)).update();
+
+        FileOperation op = destroy(f);
+        fx.preservation().destruction().process(op.operationId());
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+        UnresolvedObjectRepository.Entry u = openRecordAt(q);
+        assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.QUARANTINED_COPY);
+        fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "keep it: evidence for another inquiry");
+        for (int i = 0; i < 3; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(op.operationId());
+            assertThat(atQ).hasBinaryContent(bytes);
+        }
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(atQ).as("released, untouched").hasBinaryContent(bytes);
+        assertThat(fx.storedPath(f)).as("the verified current copy was removed").doesNotExist();
+    }
+
+    /** Finding 1: an object replacing a released one is unresolved, never deleted (even with authoritative bytes). */
+    @Test
+    void v0021_anObjectReplacingAReleasedOneIsUnresolvedNotDeleted() throws Exception {
+        byte[] bytes = b("tax roll, released then replaced");
+        ArchivalFile f = ingestedThenMissing("released-replaced.tif", bytes);
+        Path former = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(former, b("released object"));
+        assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "not ours");
+        Files.write(former, bytes);
+        FileOperation op = destroy(fx.file(f.fileId()));
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().recovery().runOnce();
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(d.message()).contains("released the object recorded here earlier");
+            assertThat(former).hasBinaryContent(bytes);
+        }
+    }
+
+    /** Finding 2: a substituted volume (another volume's marker) is never evidence of absence. */
+    @Test
+    void v0021_aSubstitutedVolumeNeverProducesVerifiedAbsence() throws Exception {
+        byte[] bytes = b("muster roll, volume substituted");
+        ArchivalFile f = ingestedThenMissing("substituted.tif", bytes);
+        Path former = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(former, b("object at the former location"));
+        assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        Files.delete(former);
+
+        ManagedVolume opened = fx.preservation().context().openVolume(fx.volumeId);
+        byte[] marker = substituteMarker();
+        assertThat(Presence.probe(fx.preservation().context(), opened, u.path()).state()).isEqualTo(Presence.State.UNKNOWN);
+        assertThat(UnresolvedObjects.closeIfVerifiedAbsent(fx.preservation().context(), opened, u, "substituted", false))
+                .isFalse();
+        assertThat(record(u.unresolvedId()).open()).isTrue();
+        // Missing volume (only an empty mount point): no marker at all.
+        Path markerPath = org.genealogyarchive.files.VolumeMarker.location(fx.volumeRoot);
+        SafeFiles.clearReadOnly(markerPath);
+        Files.delete(markerPath);
+        assertThat(Presence.probe(fx.preservation().context(), opened, u.path()).state()).isEqualTo(Presence.State.UNKNOWN);
+        fx.scan(fx.services(), "QUICK");
+        assertThat(record(u.unresolvedId()).open()).isTrue();
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.UNRESOLVED);
+
+        // The correct volume restored: the absence is now verified and recorded.
+        restoreMarker(marker);
+        fx.scan(fx.services(), "QUICK");
+        assertThat(record(u.unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.ABSENT);
+    }
+
+    /** Finding 2: destruction never reports BYTES_REMOVED from a volume substituted after it was opened. */
+    @Test
+    void v0021_destructionRechecksTheVolumeIdentityAtEachDecision() throws Exception {
+        byte[] bytes = b("deed, destruction across a volume swap");
+        ArchivalFile f = ingestAs(fx.editor, "swap.tif", bytes, Restriction.NORMAL, null, null);
+        Path stored = fx.storedPath(f);
+        FileOperation op = destroy(f);
+        byte[][] original = new byte[1][];
+        fx.faults.arm(FaultPoints.Point.BEFORE_PHYSICAL_DELETE, id -> original[0] = substituteMarker());
+        fx.preservation().destruction().process(op.operationId());
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+        assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+        assertThat(d.message()).contains("identity cannot be confirmed");
+        assertThat(stored).exists();
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().recovery().runOnce();
+            assertThat(fx.operation(op.operationId()).state()).as("the volume does not open").isNotEqualTo(OperationState.COMPLETED);
+            assertThat(stored).exists();
+        }
+        restoreMarker(original[0]);
+        fx.preservation().recovery().runOnce();
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(stored).doesNotExist();
+    }
+
+    /** Finding 2: a repair never retires a location as MISSING on a volume substituted after it was opened. */
+    @Test
+    void v0021_aRepairDoesNotCommitAgainstASubstitutedVolume() throws Exception {
+        byte[] bytes = b("plat, repair across a volume swap");
+        ArchivalFile f = ingestedThenMissing("repairswap.tif", bytes);
+        UUID repairId = repairOf(f, bytes).operationId();
+        byte[][] original = new byte[1][];
+        fx.faults.arm(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT, id -> original[0] = substituteMarker());
+        assertThatThrownBy(() -> fx.process(repairId)).isInstanceOf(RuntimeException.class);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.CURRENT);
+        assertThat(content(f).state()).isEqualTo(ContentState.MISSING);
+        restoreMarker(original[0]);
+        assertThat(fx.process(repairId).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
+    }
+
+    /**
+     * Finding 3: scans run at every barrier of an attested move - after the intent, before the rename, after the
+     * rename but before the final commit - and never close the record; the move records the single disposition.
+     */
+    @Test
+    void v0021_aScanNeverClosesARecordWhileItsMoveIsPendingOrExecuting() throws Exception {
+        Repaired f = corruptAndRepair("scanmove.tif", b("will, scanned during its move"));
+        fx.process(f.repairOperation());
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
+        List<Boolean> openDuringScans = new java.util.ArrayList<>();
+        for (FaultPoints.Point barrier : List.of(FaultPoints.Point.AFTER_QUARANTINE_INTENT,
+                FaultPoints.Point.BEFORE_QUARANTINE_RENAME, FaultPoints.Point.AFTER_QUARANTINE_MOVE)) {
+            fx.faults.arm(barrier, id -> {
+                fx.scan(fx.services(), "QUICK");
+                openDuringScans.add(record(u.unresolvedId()).open());
+            });
+        }
+        assertThat(fx.preservation().unresolved().quarantineAttested(u.unresolvedId())).isTrue();
+        fx.faults.clear();
+        assertThat(openDuringScans).containsExactly(true, true, true);
+        UnresolvedObjectRepository.Entry done = record(u.unresolvedId());
+        assertThat(done.resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.QUARANTINED);
+        assertThat(done.resolutionDetail()).contains("moved to");
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.QUARANTINED);
+
+        // Crash after the rename, before the final commit: no lock holder, but the recorded move keeps it open.
+        Repaired g = corruptAndRepair("scanmove2.tif", b("will, scanned after a crash mid-move"));
+        fx.process(g.repairOperation());
+        UnresolvedObjectRepository.Entry v = attestGeneration(g.contentId(), 1);
+        fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_MOVE);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(v.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        for (int i = 0; i < 2; i++) {
+            fx.scan(fx.services(), "QUICK");
+            assertThat(record(v.unresolvedId()).open()).as("absence caused by a move is the move's to settle").isTrue();
+        }
+        fx.preservation().recovery().runOnce();
+        assertThat(record(v.unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.QUARANTINED);
+        FileOperation op = destroy(fx.file(g.fileId()));
+        fx.preservation().destruction().process(op.operationId());
+        assertThat(fx.operation(op.operationId()).state()).as("one consistent disposition, honoured").isEqualTo(OperationState.COMPLETED);
+    }
+
+    /** Finding 3: while a scan closes a record (under its lock), a worker and a release both wait their turn. */
+    @Test
+    void v0021_closingOnAbsenceExcludesWorkersAndReleases() throws Exception {
+        byte[] bytes = b("census, closing on absence");
+        ArchivalFile f = ingestedThenMissing("closing.tif", bytes);
+        Path former = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(former, b("object at the former location"));
+        assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+        Files.delete(former);
+        List<Throwable> during = new java.util.ArrayList<>();
+        fx.faults.arm(FaultPoints.Point.BEFORE_ABSENCE_RECORDED, id -> during.add(org.assertj.core.api.Assertions.catchThrowable(() ->
+                fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "at the same moment"))));
+        fx.scan(fx.services(), "QUICK");
+        fx.faults.clear();
+        assertThat(during).singleElement().satisfies(t -> assertThat(t).isInstanceOf(RuleViolationException.class)
+                .hasMessageContaining("being worked on right now"));
+        UnresolvedObjectRepository.Entry closed = record(u.unresolvedId());
+        assertThat(closed.resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.ABSENT);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
+    }
 }

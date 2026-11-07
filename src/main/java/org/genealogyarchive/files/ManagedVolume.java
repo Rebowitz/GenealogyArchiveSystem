@@ -39,10 +39,12 @@ public final class ManagedVolume {
     public static final String QUARANTINE = "quarantine";
 
     private final UUID volumeId;
+    private final UUID archiveId;
     private final Path root;
 
-    private ManagedVolume(UUID volumeId, Path root) {
+    private ManagedVolume(UUID volumeId, UUID archiveId, Path root) {
         this.volumeId = volumeId;
+        this.archiveId = archiveId;
         this.root = root;
     }
 
@@ -73,7 +75,7 @@ public final class ManagedVolume {
         if (!marker.archiveId().equals(archiveId) || !marker.volumeId().equals(volumeId)) {
             throw new VolumeUnavailableException(volumeId, VolumeUnavailableException.Reason.MARKER_MISMATCH);
         }
-        return new ManagedVolume(volumeId, root);
+        return new ManagedVolume(volumeId, archiveId, root);
     }
 
     /**
@@ -89,6 +91,21 @@ public final class ManagedVolume {
 
     public UUID volumeId() {
         return volumeId;
+    }
+
+    /**
+     * Re-reads the marker now and confirms it is still this archive's marker for this volume (V0019 audit): the
+     * same check as {@link #open}, repeated at each decision, because the directory at the configured root can
+     * be a different volume by then (unmounted, remounted, replaced). A missing, unreadable or malformed marker,
+     * or one naming another archive or volume, is not this volume.
+     */
+    public boolean markerIdentifiesThisVolume() {
+        try {
+            VolumeMarker marker = VolumeMarker.readFrom(root);
+            return marker.archiveId().equals(archiveId) && marker.volumeId().equals(volumeId);
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
     }
 
     public Path root() {
