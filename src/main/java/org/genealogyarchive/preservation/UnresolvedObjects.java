@@ -129,7 +129,7 @@ public final class UnresolvedObjects {
             ManagedVolume volume = ctx.openVolume(u.volumeId());
             ctx.faults().reach(FaultPoints.Point.BEFORE_QUARANTINE_MOVE, u.operationId());
             QuarantineRepository.Entry moved = new QuarantineMoves(ctx).move(volume, u.operationId(), u.contentId(),
-                    PortableRelativePath.of(u.path()), "attested-" + u.unresolvedId(),
+                    PortableRelativePath.of(u.path()), "att-" + u.unresolvedId().toString().replace("-", ""),
                     new QuarantineMoves.Evidence(u.observedSize(), u.observedSha256(),
                             QuarantineRepository.Basis.ADMINISTRATOR_ATTESTED),
                     QuarantineRepository.Reason.ATTESTED_OBJECT);
