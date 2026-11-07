@@ -175,9 +175,33 @@ public final class OperationAdminService {
         }
     }
 
-    private boolean applyCancel(FileOperation op, String requestedBy) {
-        UUID operationId = op.operationId();
-        String quarantine = null;
+    private boolean applyCancel(FileOperation requested, String requestedBy) {
+        UUID operationId = requested.operationId();
+        // As promotion does: a quarantine move of this operation that was interrupted is settled first, under its
+        // own recorded evidence. If it cannot be (something else is at its source now), nothing is cancelled or
+        // moved; the refusal is visible and the cancellation is retried.
+        if (requested.volumeId() != null) {
+            try {
+                ManagedVolume volume = null;
+                for (QuarantineRepository.Entry pending : ctx.quarantine().forOperation(operationId)) {
+                    if (pending.state() == QuarantineRepository.State.INTENDED) {
+                        volume = volume == null ? ctx.openVolume(requested.volumeId()) : volume;
+                        new QuarantineMoves(ctx).settle(volume, pending);
+                    }
+                }
+            } catch (ManagedVolume.VolumeUnavailableException | IOException e) {
+                ctx.operations().note(operationId, "cancellation by " + requestedBy + " is waiting: an interrupted quarantine "
+                        + "move could not be settled (" + e.getClass().getSimpleName()
+                        + (e.getMessage() == null ? "" : ": " + e.getMessage()) + "); nothing was moved");
+                throw new IllegalStateException("interrupted quarantine move of " + operationId + " could not be settled", e);
+            }
+        }
+        // Settling may have ended the claim (the object is in quarantine now): decide from the current record.
+        FileOperation op = ctx.operations().find(operationId).orElseThrow();
+        String quarantine = op.targetPath() == null ? null : ctx.quarantine().forOperation(operationId).stream()
+                .filter(e -> e.state() == QuarantineRepository.State.QUARANTINED && op.targetPath().equals(e.sourcePath())
+                        && e.reason() == QuarantineRepository.Reason.CANCELLED_COPY)
+                .map(QuarantineRepository.Entry::quarantinePath).findFirst().orElse(null);
         String leftInPlace = null;
         OperationCopies.Check unverified = null;
         boolean releaseOnly = false;
