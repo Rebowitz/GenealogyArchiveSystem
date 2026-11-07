@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Upload batch')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Upload batch</h1>
+    <p class="muted">Each file is reported "Safely archived" only after its stored copy has been verified. Your own copies are
+        never changed or deleted. If the connection drops, choose the same files again here: files already archived in
+        this batch are recognised and not stored twice.</p>
+    <form id="uploader" class="form"
+          th:attr="data-batch=${batch.batchId()},data-max=${maxUploadBytes},data-csrf-header=${_csrf.headerName},data-csrf=${_csrf.token},data-parent=${parent != null ? parent.fileId() : ''}">
+        <p th:if="${parent != null}">Derivative of <a th:href="@{/files/{id}(id=${parent.fileId()})}" th:text="${parent.friendlyId()}">F</a>
+            <label>How was it made? <input type="text" id="derivationMethod" maxlength="200" required
+                                           placeholder="e.g. cropped and straightened in an external editor"></label></p>
+        <label>Files <input type="file" id="files" multiple required></label>
+        <label><input type="checkbox" id="restricted"> Restricted (only Administrators can see or download)</label>
+        <label>Source note (optional, applies to each file) <input type="text" id="sourceNote" maxlength="2000"></label>
+        <button type="submit">Upload</button>
+    </form>
+    <table class="list" id="progress">
+        <thead><tr><th>File</th><th>Status</th></tr></thead>
+        <tbody>
+        <tr th:each="i : ${items}"><td th:text="${i.originalFilename()}">name</td>
+            <td><span th:text="${i.state()}">state</span>
+                <a th:if="${i.fileId() != null}" th:href="@{/files/{id}(id=${i.fileId()})}">open</a></td></tr>
+        </tbody>
+    </table>
+    <script th:src="@{/js/upload.js}"></script>
+</main>
+</body>
+</html>

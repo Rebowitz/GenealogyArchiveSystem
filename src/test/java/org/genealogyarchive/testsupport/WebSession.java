@@ -27,15 +27,32 @@ public final class WebSession {
 
     private final ConfigurableApplicationContext app;
     private final HttpClient client;
+    private final CookieManager cookies = new CookieManager();
 
     public WebSession(ConfigurableApplicationContext app) {
         this.app = app;
         this.client = HttpClient.newBuilder()
                 .proxy(HttpClient.Builder.NO_PROXY)
-                .cookieHandler(new CookieManager())
+                .cookieHandler(cookies)
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
+    }
+
+    /** The port the web process listens on. */
+    public int port() {
+        return Http.port(app);
+    }
+
+    /** The session's cookies as a Cookie request header value (for raw-socket requests). */
+    public String cookieHeader() {
+        return String.join("; ", cookies.getCookieStore().getCookies().stream()
+                .map(c -> c.getName() + "=" + c.getValue()).toList());
+    }
+
+    /** A CSRF token valid for this session, taken from {@code page}. */
+    public String token(String page) {
+        return csrfToken(get(page).body());
     }
 
     private URI uri(String path) {
@@ -44,6 +61,36 @@ public final class WebSession {
 
     public HttpResponse<String> get(String path) {
         return send(HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(90)).GET().build());
+    }
+
+    /** GET returning raw bytes (downloads). */
+    public HttpResponse<byte[]> getBytes(String path) {
+        try {
+            return client.send(HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(90)).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** PUT a raw body with the CSRF token of {@code tokenPage} in the X-CSRF-TOKEN header (as the uploader script does). */
+    public HttpResponse<String> put(String tokenPage, String path, Map<String, String> headers, HttpRequest.BodyPublisher body) {
+        String token = csrfToken(get(tokenPage).body());
+        HttpRequest.Builder b = HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(120))
+                .header("X-CSRF-TOKEN", token).header("Content-Type", "application/octet-stream");
+        headers.forEach(b::header);
+        return send(b.PUT(body).build());
+    }
+
+    /** PUT without adding a CSRF token (to prove CSRF protection). */
+    public HttpResponse<String> putRaw(String path, Map<String, String> headers, HttpRequest.BodyPublisher body) {
+        HttpRequest.Builder b = HttpRequest.newBuilder(uri(path)).timeout(Duration.ofSeconds(120))
+                .header("Content-Type", "application/octet-stream");
+        headers.forEach(b::header);
+        return send(b.PUT(body).build());
     }
 
     /** Submits a form found on {@code formPage} to {@code action}, adding the page's CSRF token. */

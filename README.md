@@ -103,6 +103,18 @@ Edit it. Rules (all enforced by `check-config`):
       addresses: ['127.0.0.1']    # exact IP literals; the proxy must send X-Forwarded-Proto: https
   ```
 
+- **Files (Phase 2).** The `files` section names two installation-local directories, which must be
+  absolute, separate, and outside every Storage Volume root:
+  ```yaml
+  files:
+    stagingDirectory: '/var/lib/genealogy-archive/staging'   # uploads in progress; owner-only (0700)
+    cacheDirectory: '/var/lib/genealogy-archive/cache'       # thumbnails (regenerable)
+    maxUploadBytes: 4294967296                               # default 4 GiB per file; at most 1 TiB
+    receivingTimeout: PT15M                                  # an upload with no progress this long is abandoned
+  ```
+  Without `stagingDirectory` the archive runs, but uploads are refused with an explanation. The upload
+  limit is enforced while bytes arrive. A slow upload that keeps making progress is never abandoned.
+
 `installation.yml` is git-ignored. Validate it:
 
 **Linux**
@@ -145,6 +157,26 @@ Further accounts (Administrator, Editor, Viewer) are created by an administrator
   it. **Copying an initialized database to start a different, unrelated archive is unsupported**: both
   copies would carry the same Archive ID. Start a new archive from an empty database instead.
 - `init-archive` refuses to run twice, and no migration ever creates an archive.
+
+### Storage Volumes for preservation originals (Phase 2)
+
+Before Files can be uploaded, register a Storage Volume, map it to a folder on this host, write its
+volume marker, and choose it as the destination for new Files:
+
+| Step | Command |
+|---|---|
+| Register (prints the permanent Volume ID) | `register-volume --name=Primary --purpose=primary` |
+| Map it | add `'<Volume ID>': '<absolute folder>'` under `storageRoots` in `installation.yml` |
+| Windows services only: grant the folder | `.\deploy\windows\grant-volume-access.ps1 -VolumeRoot '<folder>'` |
+| Write the marker (once) | `init-volume --volume-id=<Volume ID>` |
+| Choose it for new Files | `set-ingestion-volume --volume-id=<Volume ID>` (or on the Preservation page) |
+
+The marker file `.genealogy-archive-volume` names this archive and the volume. A folder whose marker is
+missing or belongs to another archive is never written; operations wait until the right folder is
+mounted. Do not edit, move or delete anything inside a volume by hand: the archive reports such changes
+in integrity scans but never adopts or deletes what it finds. Uploads need the **worker** running; the
+browser shows "Safely archived" only after the worker has written, protected (read-only) and verified the
+copy. See ADR-0009.
 
 Then open `http://127.0.0.1:8080/` (or your configured address/port) and sign in.
 
@@ -189,7 +221,8 @@ $env:GAS_TEST_DB_PASSWORD = '...'
 If these variables are missing, the integration tests **fail** with an explanation; they are never skipped.
 
 `scripts/smoke-test.sh` / `scripts/smoke-test.ps1` exercise the packaged jar end to end (check-config,
-status, migrate twice, serve, worker, log checks) against an empty database named by `GAS_SMOKE_DB_URL`.
+status, migrate twice, volume registration and initialization, serve, a browser upload archived by the
+worker and downloaded again, log checks) against an empty database named by `GAS_SMOKE_DB_URL`.
 
 **Continuous integration** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same
 procedures on native `windows-2025` and `ubuntu-24.04` runners against PostgreSQL 16 and 18: Phase-Gate
@@ -206,12 +239,16 @@ The same jar runs two long-lived processes: `serve` (web) and `worker` (backgrou
 sudo deploy/linux/install.sh target/genealogy-archive.jar "$(command -v java)"
 ```
 Creates the `genealogy-archive` system account, `/opt/genealogy-archive`, `/etc/genealogy-archive`
-(0750, root:genealogy-archive), `/var/log/genealogy-archive`, and the units
+(0750, root:genealogy-archive), `/var/log/genealogy-archive`, `/var/lib/genealogy-archive/staging` (0700)
+and `/var/lib/genealogy-archive/cache`, and the units
 `genealogy-archive-web.service` / `genealogy-archive-worker.service`. Follow the printed next steps:
 edit `/etc/genealogy-archive/installation.yml`, create the password file, run `migrate` as the service
 account, then (first install only) `init-archive` and `create-admin` as the service account, then
 `systemctl enable --now genealogy-archive-web genealogy-archive-worker`.
 Remove with `sudo deploy/linux/uninstall.sh` (configuration, logs, database and volumes are left untouched).
+The web unit runs with `ProtectSystem=strict`: everything except staging and logs is read-only to it, so it
+can never change preservation originals; the worker writes them. Storage Volume roots must be owned by
+`genealogy-archive` (0750) and must not be under `/home`, `/usr`, `/boot` or `/etc` (ADR-0010).
 
 **Windows (Windows services via WinSW)** - elevated PowerShell:
 1. Download `WinSW-x64.exe` **v2.12.0** from https://github.com/winsw/winsw/releases (one-time, at install).
@@ -228,9 +265,26 @@ Remove with `sudo deploy/linux/uninstall.sh` (configuration, logs, database and 
    then `Start-Service GenealogyArchiveWeb, GenealogyArchiveWorker`.
 Remove with `.\deploy\windows\uninstall-services.ps1`.
 
-Services run as LocalSystem by default on Windows; to use a dedicated account, add a `<serviceaccount>`
-element to the WinSW XML (see WinSW documentation) and grant it read access to `installation.yml` and
-`secrets\`.
+**Windows service accounts (Phase 2, ADR-0010).** Each service runs under its own virtual account,
+`NT SERVICE\GenealogyArchiveWeb` and `NT SERVICE\GenealogyArchiveWorker`; the installer grants the
+data folders to them. Grant every Storage Volume folder with
+`.\deploy\windows\grant-volume-access.ps1 -VolumeRoot '<folder>'`: the worker gets modify, the web service
+gets read with an explicit deny of all write rights. The Operations page confirms from inside the web
+service that it cannot write originals.
+*Workgroup NAS (documented only, not CI-tested):* a NAS outside a domain cannot authorize virtual
+accounts. Create one dedicated low-privilege local account per service, with matching user name and
+password on the NAS; run each service under its account (`sc.exe config <id> obj= .\<account> password= ...`);
+give the worker account modify and the web account read-only on the share. Never use LocalSystem.
+
+**Reverse proxy and upload size.** Uploads are streamed as raw request bodies; the application enforces
+`files.maxUploadBytes` itself and has no smaller framework limit. A reverse proxy in front must allow at
+least the same body size and should pass uploads through without buffering them, for example nginx:
+```nginx
+client_max_body_size 4g;        # >= files.maxUploadBytes
+proxy_request_buffering off;    # stream uploads instead of spooling them first
+proxy_read_timeout 15m;
+```
+IIS (Request Filtering) limits bodies to about 30 MB by default: raise `maxAllowedContentLength`.
 
 **Logs.** Each process logs to its console (captured by journald on Linux, by WinSW's
 `logs\service` files on Windows) and, when `logging.directory` is set, to rolling files
@@ -251,7 +305,10 @@ java -jar genealogy-archive.jar <command> [--config=<installation.yml>]
 | `migrate` | Apply pending migrations, then post-migration validation | 0 ok, 3 database problem, 4 migration failed/refused |
 | `init-archive --name=<name>` | Create the archive and its permanent Archive ID (once) | 0 ok, 3 schema not current, 5 already initialized, 64 no name |
 | `create-admin --username=<u> [--display-name=<d>]` | Create an administrator account (password from prompt or `GAS_NEW_ADMIN_PASSWORD`) | 0 ok, 3 archive not ready, 5 refused (e.g. weak password, name taken), 64 no password source |
-| `status` | Database, schema, archive, worker, job and Storage Volume status | 0 ready, 3 not ready |
+| `register-volume --name=<n> --purpose=<code> [--required=false]` | Register a Storage Volume; prints its permanent Volume ID | 0 ok, 3 archive not ready, 5 refused, 64 usage |
+| `init-volume --volume-id=<id>` | Write this archive's volume marker into the configured root (once) | 0 ok, 3 archive not ready, 5 refused (already initialized, no root), 64 usage |
+| `set-ingestion-volume --volume-id=<id>` | Choose the volume that receives newly ingested Files | 0 ok, 3 archive not ready, 5 refused (not initialized, retired), 64 usage |
+| `status` | Database, schema, archive, worker, job, Storage Volume, ingestion, file operation and integrity status | 0 ready, 3 not ready |
 | `check-config` | Validate installation configuration (password shown masked) | 0 valid, 2 invalid |
 | `version`, `help` | | 0 |
 

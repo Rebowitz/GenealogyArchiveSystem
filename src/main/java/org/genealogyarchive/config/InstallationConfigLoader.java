@@ -49,7 +49,10 @@ public final class InstallationConfigLoader {
     static final int DEFAULT_PORT = 8080;
     static final int DEFAULT_MAX_POOL_SIZE = 10;
 
-    private static final Set<String> ROOT_KEYS = Set.of("database", "server", "logging", "storageRoots");
+    private static final Set<String> ROOT_KEYS = Set.of("database", "server", "logging", "storageRoots", "files");
+    private static final Set<String> FILES_KEYS =
+            Set.of("stagingDirectory", "cacheDirectory", "maxUploadBytes", "receivingTimeout");
+    static final long MAX_UPLOAD_CEILING = 1024L * 1024 * 1024 * 1024; // 1 TiB
     private static final Set<String> DATABASE_KEYS =
             Set.of("url", "username", "password", "passwordEnv", "passwordFile", "maxPoolSize");
     private static final Set<String> SERVER_KEYS = Set.of("bindAddress", "port", "tlsReverseProxy");
@@ -105,9 +108,10 @@ public final class InstallationConfigLoader {
         ServerSettings server = parseServer(problems.section(root, "server", false), problems);
         LoggingSettings logging = parseLogging(problems.section(root, "logging", false), problems);
         Map<UUID, Path> storageRoots = parseStorageRoots(problems.section(root, "storageRoots", false), problems);
+        InstallationConfig.FileSettings files = parseFiles(problems.section(root, "files", false), storageRoots, problems);
 
         problems.throwIfAny();
-        return new InstallationConfig(sourceFile, database, server, logging, storageRoots);
+        return new InstallationConfig(sourceFile, database, server, logging, storageRoots, files);
     }
 
     private static DatabaseSettings parseDatabase(Map<String, Object> db, Map<String, String> env, Problems p) {
@@ -236,6 +240,57 @@ public final class InstallationConfigLoader {
         String directory = p.string(logging, "directory", "logging.directory", false);
         Optional<Path> dir = directory == null ? Optional.empty() : p.absoluteNativePath(directory, "logging.directory");
         return new LoggingSettings(format, dir);
+    }
+
+    /**
+     * {@code files}: staging and cache directories (absolute, host-local, never inside a Storage
+     * Volume root, so archival volumes hold only managed archival content), the upload limit and the
+     * no-progress timeout for uploads.
+     */
+    private static InstallationConfig.FileSettings parseFiles(Map<String, Object> files, Map<UUID, Path> roots, Problems p) {
+        if (files == null) {
+            return InstallationConfig.FileSettings.defaults();
+        }
+        p.rejectUnknown(files, "files", FILES_KEYS);
+        String staging = p.string(files, "stagingDirectory", "files.stagingDirectory", false);
+        String cache = p.string(files, "cacheDirectory", "files.cacheDirectory", false);
+        Optional<Path> stagingDir = staging == null ? Optional.empty() : p.absoluteNativePath(staging, "files.stagingDirectory");
+        Optional<Path> cacheDir = cache == null ? Optional.empty() : p.absoluteNativePath(cache, "files.cacheDirectory");
+        long max = InstallationConfig.FileSettings.DEFAULT_MAX_UPLOAD_BYTES;
+        Object maxValue = files.get("maxUploadBytes");
+        if (maxValue != null) {
+            if (maxValue instanceof Number n && !(maxValue instanceof Double) && !(maxValue instanceof Float)
+                    && n.longValue() >= 1 && n.longValue() <= MAX_UPLOAD_CEILING) {
+                max = n.longValue();
+            } else {
+                p.add("files.maxUploadBytes must be a whole number of bytes between 1 and " + MAX_UPLOAD_CEILING);
+            }
+        }
+        java.time.Duration timeout = InstallationConfig.FileSettings.DEFAULT_RECEIVING_TIMEOUT;
+        String timeoutText = p.string(files, "receivingTimeout", "files.receivingTimeout", false);
+        if (timeoutText != null) {
+            try {
+                timeout = java.time.Duration.parse(timeoutText);
+                if (timeout.compareTo(java.time.Duration.ofMinutes(1)) < 0 || timeout.compareTo(java.time.Duration.ofHours(24)) > 0) {
+                    p.add("files.receivingTimeout must be between PT1M and PT24H");
+                }
+            } catch (java.time.format.DateTimeParseException e) {
+                p.add("files.receivingTimeout must be an ISO-8601 duration such as PT15M");
+            }
+        }
+        for (Map.Entry<String, Optional<Path>> dir : Map.of("files.stagingDirectory", stagingDir,
+                "files.cacheDirectory", cacheDir).entrySet()) {
+            dir.getValue().ifPresent(d -> roots.forEach((volume, root) -> {
+                if (d.startsWith(root) || root.startsWith(d)) {
+                    p.add(dir.getKey() + " must not be inside or contain the root of Storage Volume " + volume);
+                }
+            }));
+        }
+        if (stagingDir.isPresent() && cacheDir.isPresent()
+                && (stagingDir.get().startsWith(cacheDir.get()) || cacheDir.get().startsWith(stagingDir.get()))) {
+            p.add("files.stagingDirectory and files.cacheDirectory must be separate directories");
+        }
+        return new InstallationConfig.FileSettings(stagingDir, cacheDir, max, timeout);
     }
 
     private static Map<UUID, Path> parseStorageRoots(Map<String, Object> roots, Problems p) {

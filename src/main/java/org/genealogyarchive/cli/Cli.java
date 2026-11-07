@@ -64,6 +64,12 @@ public final class Cli {
               create-admin   Create an Administrator account.
                              --username=<name> [--display-name=<name>]
                              Password: GAS_NEW_ADMIN_PASSWORD environment variable, or prompted.
+              register-volume  Register a Storage Volume and print its permanent Volume ID.
+                             --name=<name> --purpose=<code> [--required=true|false]
+              init-volume    Write this archive's marker to a registered volume's configured root.
+                             --volume-id=<id>
+              set-ingestion-volume  Choose the volume that receives newly ingested Files.
+                             --volume-id=<id>
               status         Report database, schema, archive and operational status.
               check-config   Validate the installation configuration file.
               version        Print the application version.
@@ -123,6 +129,7 @@ public final class Cli {
                 case "status" -> status(loadConfig(parsed));
                 case "init-archive" -> initArchive(loadConfig(parsed), parsed);
                 case "create-admin" -> createAdmin(loadConfig(parsed), parsed);
+                case "register-volume", "init-volume", "set-ingestion-volume" -> volumeCommand(loadConfig(parsed), parsed);
                 case "serve" -> new Outcome(EXIT_OK, ProcessLauncher.startWeb(loadConfig(parsed), Map.of()));
                 case "worker" -> new Outcome(EXIT_OK, ProcessLauncher.startWorker(loadConfig(parsed), Map.of()));
                 default -> {
@@ -230,6 +237,16 @@ public final class Cli {
                         + (v.problem() ? "  <-- REQUIRED VOLUME NOT AVAILABLE" : "")));
                 ops.unregisteredConfiguredVolumes().forEach(id ->
                         out.println("Volume      : " + id + " is in installation configuration but not registered in this archive"));
+                var p = core.preservation().operations().snapshot(core.preservation().volumes());
+                out.println("Ingestion   : " + p.ingestion());
+                p.volumes().forEach(v -> out.println("Storage     : " + v.volume().name() + " marker " + v.markerStatus()
+                        + (v.usableBytes() == null ? "" : ", " + (v.usableBytes() / (1024 * 1024)) + " MiB free")));
+                out.println("File ops    : " + p.operations(org.genealogyarchive.preservation.OperationState.BLOCKED) + " blocked, "
+                        + p.operations(org.genealogyarchive.preservation.OperationState.WAITING_FOR_VOLUME) + " waiting for a volume, "
+                        + p.operations(org.genealogyarchive.preservation.OperationState.CLEANUP_INCOMPLETE) + " cleanup incomplete");
+                out.println("Integrity   : " + p.openFindings() + " open finding(s), " + p.unresolvedObjects()
+                        + " unresolved object(s); last completed scan "
+                        + p.lastScan().map(sc -> sc.kind() + " at " + sc.finishedAt()).orElse("never"));
             }
             out.println("Ready       : " + (s.ready() ? "yes" : "NO"));
             return Outcome.exit(s.ready() ? EXIT_OK : EXIT_DATABASE_PROBLEM);
@@ -256,6 +273,60 @@ public final class Cli {
             out.println("The Archive ID is permanent. Restoring a backup of this archive keeps it; do not copy this");
             out.println("database to start an unrelated archive (that would duplicate the Archive ID).");
             return Outcome.exit(EXIT_OK);
+        }
+    }
+
+    /** Storage Volume preparation from the server's command line (SYSTEM actor). */
+    private Outcome volumeCommand(InstallationConfig config, ParsedArgs parsed) {
+        try (HikariDataSource ds = DataSources.create(config.database(), parsed.command(), 2)) {
+            CoreServices core = CoreServices.create(ds, config, Clock.systemUTC());
+            if (!core.systemStatus().check().ready()) {
+                err.println("The archive is not ready (migrate, then init-archive).");
+                return Outcome.exit(EXIT_DATABASE_PROBLEM);
+            }
+            Actor actor = Actor.commandLine();
+            switch (parsed.command()) {
+                case "register-volume" -> {
+                    String name = parsed.option("name");
+                    String purpose = parsed.option("purpose");
+                    if (name == null || purpose == null) {
+                        err.println("register-volume requires --name=<name> --purpose=<code>");
+                        return Outcome.exit(EXIT_USAGE);
+                    }
+                    boolean required = !"false".equalsIgnoreCase(parsed.option("required") == null ? "true" : parsed.option("required"));
+                    var v = core.volumes().register(actor, name, purpose, null, required);
+                    out.println("Storage Volume registered.");
+                    out.println("  Volume ID    : " + v.volumeId());
+                    out.println("Add it to storageRoots in the installation configuration, then run init-volume.");
+                }
+                case "init-volume" -> {
+                    UUID id = volumeIdOption(parsed);
+                    if (id == null) {
+                        return Outcome.exit(EXIT_USAGE);
+                    }
+                    core.preservation().volumes().initializeVolume(actor, id);
+                    out.println("Volume " + id + " initialized: marker written to " + config.storageRoots().get(id));
+                }
+                default -> {
+                    UUID id = volumeIdOption(parsed);
+                    if (id == null) {
+                        return Outcome.exit(EXIT_USAGE);
+                    }
+                    long version = core.archives().current().orElseThrow().version();
+                    core.preservation().volumes().setIngestionVolume(actor, version, id, null);
+                    out.println("New Files will be stored on volume " + id + ".");
+                }
+            }
+            return Outcome.exit(EXIT_OK);
+        }
+    }
+
+    private UUID volumeIdOption(ParsedArgs parsed) {
+        try {
+            return UUID.fromString(String.valueOf(parsed.option("volume-id")));
+        } catch (IllegalArgumentException e) {
+            err.println(parsed.command() + " requires --volume-id=<Volume ID>");
+            return null;
         }
     }
 
@@ -314,7 +385,7 @@ public final class Cli {
     /** Parsed command line: one command, an optional --config and command options. */
     record ParsedArgs(String command, String configPath, Map<String, String> options) {
 
-        private static final Set<String> OPTIONS = Set.of("name", "username", "display-name");
+        private static final Set<String> OPTIONS = Set.of("name", "username", "display-name", "volume-id", "purpose", "required");
 
         String option(String name) {
             return options.get(name);

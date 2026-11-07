@@ -42,3 +42,13 @@ logging:
 storageRoots: {}
 #  '0192f0c4-1111-7000-8000-000000000001': '/srv/genealogy-archive/primary'     # Linux
 #  '0192f0c4-1111-7000-8000-000000000001': 'D:\GenealogyArchive\primary'        # Windows
+
+# Phase 2 - files: installation-local working directories (absolute; separate; never inside a Storage
+# Volume root). Without stagingDirectory, uploads are refused with an explanation.
+# files:
+#   stagingDirectory: '/var/lib/genealogy-archive/staging'               # Linux (0700, service account)
+#   cacheDirectory: '/var/lib/genealogy-archive/cache'                   # Linux
+#   stagingDirectory: 'C:\ProgramData\GenealogyArchive\staging'          # Windows
+#   cacheDirectory: 'C:\ProgramData\GenealogyArchive\cache'              # Windows
+#   maxUploadBytes: 4294967296      # per file; default 4 GiB. A reverse proxy must allow at least this.
+#   receivingTimeout: PT15M         # an upload with no progress for this long is abandoned

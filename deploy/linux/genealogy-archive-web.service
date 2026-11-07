@@ -19,7 +19,11 @@ TimeoutStopSec=45
 UMask=0027
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=full
+# Phase 2 (requirement 5, ADR-0010): the web service never writes archival Storage Volumes. The whole
+# file system is read-only to it except the staging area (uploads) and its logs. If you change
+# files.stagingDirectory or logging.directory, change ReadWritePaths with a drop-in to match.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/genealogy-archive/staging /var/log/genealogy-archive
 ProtectHome=read-only
 
 [Install]

@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Verified repair')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Verified repair</h1>
+    <p>Choose a good copy of the original (for example from a backup). It is accepted only if its size and SHA-256 equal the
+        authoritative values recorded at ingestion. It is written as a new generation; the damaged copy is kept in quarantine.</p>
+    <ul><li th:each="x : ${findings}"><span th:text="${x.kind()}">k</span>: <span th:text="${x.detail()}">d</span></li></ul>
+    <form id="repair" class="form"
+          th:attr="data-content=${contentId},data-csrf-header=${_csrf.headerName},data-csrf=${_csrf.token}">
+        <label>Good copy <input type="file" id="files" required></label>
+        <button type="submit">Repair</button>
+    </form>
+    <p id="repairStatus"></p>
+    <script th:src="@{/js/upload.js}"></script>
+</main>
+</body>
+</html>

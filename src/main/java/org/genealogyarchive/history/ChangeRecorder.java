@@ -36,6 +36,21 @@ public final class ChangeRecorder {
         return changeId;
     }
 
+    /**
+     * Records a change on behalf of the user who started an archival file operation that a background
+     * worker completes later (attribution stays with that user, SEC-007).
+     */
+    public UUID recordFor(UUID userId, String label, String objectType, UUID objectId, String changeKind,
+                          List<FieldChange> fieldChanges, String reason) {
+        List<FieldChange> significant = fieldChanges.stream().filter(FieldChange::changed).toList();
+        UUID changeId = GlobalIds.newId();
+        Actor.Kind kind = userId == null ? Actor.Kind.SYSTEM : Actor.Kind.USER;
+        repository.insert(new ChangeRecord(changeId, clock.instant(), kind, userId, label,
+                objectType, objectId, changeKind, significant, blankToNull(reason)),
+                JsonText.fieldChanges(significant));
+        return changeId;
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s.strip();
     }

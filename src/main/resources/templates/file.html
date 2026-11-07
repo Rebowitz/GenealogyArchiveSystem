@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head(${f.friendlyId()})}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1><span th:text="${f.friendlyId()}">F00001</span> <span class="muted" th:text="${f.managedFilename()}">name</span></h1>
+    <section th:if="${f.lifecycle().name() == 'DESTROYED'}" class="status problem">
+        <h2>Permanently destroyed</h2>
+        <p>This File's identifiers are retired and never reused. Reason: <span th:text="${f.destructionReason()}">reason</span>
+            (<span th:text="${f.destroyedAt()}">when</span>).</p>
+    </section>
+    <section th:if="${f.lifecycle().name() == 'DELETED'}" class="status problem">
+        <h2>In recoverable deletion</h2>
+        <p>The stored original is untouched. It can be restored<span th:if="${canDestroy}">, or permanently destroyed</span>.</p>
+    </section>
+    <section th:unless="${view.content().state().name() == 'ACTIVE' or f.lifecycle().name() == 'DESTROYED'}" class="status problem">
+        <h2>Stored content is <span th:text="${view.content().state()}">state</span></h2>
+        <p>The authoritative size and SHA-256 are unchanged. An Administrator can review the findings and repair it.</p>
+    </section>
+    <p th:if="${f.lifecycle().name() != 'DESTROYED' and view.content().state().name() == 'ACTIVE'}">
+        <img class="preview" th:src="@{/files/{id}/thumbnail(id=${f.fileId()})}" alt="" onerror="this.style.display='none'"
+             th:style="'transform: rotate(' + ${f.displayRotation()} + 'deg)'">
+        <br><a th:href="@{/files/{id}/download(id=${f.fileId()})}">Download preservation original</a>
+    </p>
+    <dl class="facts">
+        <dt>Original filename (as captured)</dt><dd th:text="${f.originalFilename()}">name</dd>
+        <dt>Ingested</dt><dd><span th:text="${f.ingestedAt()}">when</span> by <span th:text="${f.ingestedByLabel()}">who</span></dd>
+        <dt th:if="${f.clientLastModified() != null}">Source file last modified</dt>
+        <dd th:if="${f.clientLastModified() != null}" th:text="${f.clientLastModified()}">when</dd>
+        <dt th:if="${f.sourceNote() != null}">Source note</dt><dd th:if="${f.sourceNote() != null}" th:text="${f.sourceNote()}">note</dd>
+        <dt>Size</dt><dd th:text="${view.content().byteSize()} + ' bytes'">size</dd>
+        <dt>SHA-256 (authoritative)</dt><dd><code th:text="${view.content().sha256()}">hash</code></dd>
+        <dt>Media type</dt><dd th:text="${f.mediaType()}">type</dd>
+        <dt>Restriction</dt><dd th:text="${f.restriction()}">NORMAL</dd>
+        <dt>Global ID</dt><dd><code th:text="${f.fileId()}">id</code></dd>
+    </dl>
+    <section th:if="${view.parent().isPresent()}">
+        <h2>Derived from</h2>
+        <p><a th:href="@{/files/{id}(id=${view.parent().get().fileId()})}" th:text="${view.parent().get().friendlyId()}">F</a>
+            &mdash; <span th:text="${view.derivation().get().method()}">method</span></p>
+    </section>
+    <section th:if="${view.derivation().isPresent() and view.parent().isEmpty()}">
+        <h2>Derived from</h2><p class="muted">A file you do not have access to.</p>
+    </section>
+    <section th:unless="${#lists.isEmpty(view.derivatives())}">
+        <h2>Derivatives</h2>
+        <ul><li th:each="d : ${view.derivatives()}"><a th:href="@{/files/{id}(id=${d.fileId()})}" th:text="${d.friendlyId()}">F</a></li></ul>
+    </section>
+    <section th:unless="${#lists.isEmpty(view.sharingContent())}">
+        <h2>Exact duplicates</h2>
+        <p class="muted">These separately ingested Files have byte-for-byte identical content. Each keeps its own provenance.</p>
+        <ul><li th:each="d : ${view.sharingContent()}"><a th:href="@{/files/{id}(id=${d.fileId()})}" th:text="${d.friendlyId()}">F</a></li></ul>
+    </section>
+    <section th:if="${canEdit and f.lifecycle().name() != 'DESTROYED'}">
+        <h2>Correct</h2>
+        <form th:action="@{/files/{id}(id=${f.fileId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${f.version()}">
+            <label>Display filename <input type="text" name="managedFilename" maxlength="255" th:value="${f.managedFilename()}" required></label>
+            <label>Display rotation
+                <select name="displayRotation">
+                    <option th:each="r : ${ {0, 90, 180, 270} }" th:value="${r}" th:text="${r} + '°'" th:selected="${r == f.displayRotation()}">0</option>
+                </select></label>
+            <label>Restriction
+                <select name="restriction">
+                    <option value="NORMAL" th:selected="${!f.restricted()}">Normal</option>
+                    <option value="RESTRICTED" th:selected="${f.restricted()}">Restricted (Administrators only)</option>
+                </select></label>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Save</button>
+        </form>
+        <p th:if="${canIngest and f.lifecycle().name() == 'ACTIVE'}"><a th:href="@{/files/upload(parent=${f.fileId()})}">Upload a derivative of this File</a></p>
+        <form th:if="${f.lifecycle().name() == 'ACTIVE'}" th:action="@{/files/{id}/delete(id=${f.fileId()})}" method="post" class="inline">
+            <input type="hidden" name="version" th:value="${f.version()}">
+            <button type="submit">Move to recoverable deletion</button>
+        </form>
+        <form th:if="${f.lifecycle().name() == 'DELETED'}" th:action="@{/files/{id}/restore(id=${f.fileId()})}" method="post" class="inline">
+            <input type="hidden" name="version" th:value="${f.version()}">
+            <button type="submit">Restore</button>
+        </form>
+    </section>
+    <section th:if="${canDestroy and f.lifecycle().name() == 'DELETED'}" class="danger">
+        <h2>Permanently destroy</h2>
+        <p>The File becomes a tombstone (its IDs are retired forever). Its bytes are removed unless another File shares them.</p>
+        <form th:action="@{/files/{id}/destroy(id=${f.fileId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${f.version()}">
+            <label>Reason <input type="text" name="reason" maxlength="2000" required></label>
+            <label>Preferred replacement File ID (optional) <input type="text" name="replacement" placeholder="F00042"></label>
+            <button type="submit">Destroy permanently</button>
+        </form>
+    </section>
+    <section th:if="${canManage and !#lists.isEmpty(view.openFindings())}" class="status problem">
+        <h2>Open integrity findings</h2>
+        <ul><li th:each="x : ${view.openFindings()}"><span th:text="${x.kind()}">k</span>: <span th:text="${x.detail()}">d</span></li></ul>
+        <p><a th:href="@{/preservation/contents/{c}/repair(c=${f.contentId()})}">Repair from a good copy</a></p>
+    </section>
+    <section th:if="${canManage and !#lists.isEmpty(view.operations())}">
+        <h2>File operations</h2>
+        <ul><li th:each="o : ${view.operations()}"><a th:href="@{/preservation/operations/{id}(id=${o.operationId()})}"
+                th:text="${o.kind()} + ' ' + ${o.state()}">op</a></li></ul>
+    </section>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

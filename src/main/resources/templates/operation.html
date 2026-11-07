@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('File operation')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1><span th:text="${op.kind()}">INGEST</span> operation: <span th:text="${op.state()}">STATE</span></h1>
+    <section th:if="${op.state().name() == 'BLOCKED'}" class="status problem">
+        <p>Stopped for review (<span th:text="${op.blockedReason()}">reason</span>): <span th:text="${op.message()}">message</span></p>
+        <form th:action="@{/preservation/operations/{id}/retry(id=${op.operationId()})}" method="post" class="inline">
+            <button type="submit">Retry</button></form>
+        <form th:action="@{/preservation/operations/{id}/cancel(id=${op.operationId()})}" method="post" class="inline">
+            <button type="submit">Cancel (nothing is archived; any uncommitted copy is quarantined)</button></form>
+    </section>
+    <table>
+        <tr><th>Operation ID</th><td><code th:text="${op.operationId()}">id</code></td></tr>
+        <tr><th>Started by</th><td th:text="${op.actorLabel()}">who</td></tr>
+        <tr><th>Original filename</th><td th:text="${op.originalFilename()}">-</td></tr>
+        <tr><th>Volume</th><td><code th:text="${op.volumeId()}">-</code></td></tr>
+        <tr th:if="${op.targetPath() != null}"><th>Target</th><td><code th:text="${op.targetPath()}">-</code></td></tr>
+        <tr th:if="${op.expectedSize() != null}"><th>Size</th><td th:text="${op.expectedSize()}">-</td></tr>
+        <tr th:if="${op.expectedSha256() != null}"><th>SHA-256</th><td><code th:text="${op.expectedSha256()}">-</code></td></tr>
+        <tr><th>Received bytes</th><td th:text="${op.receivedBytes()}">0</td></tr>
+        <tr th:if="${op.outcome() != null}"><th>Outcome</th><td th:text="${op.outcome()}">-</td></tr>
+        <tr th:if="${op.quarantinePath() != null}"><th>Quarantined copy</th><td><code th:text="${op.quarantinePath()}">-</code></td></tr>
+        <tr th:if="${op.fileId() != null}"><th>File</th><td><a th:href="@{/files/{id}(id=${op.fileId()})}">open</a></td></tr>
+        <tr><th>Attempts</th><td th:text="${op.attempts()}">0</td></tr>
+    </table>
+    <h2>History</h2>
+    <table class="list">
+        <thead><tr><th>#</th><th>When</th><th>From</th><th>To</th><th>Detail</th></tr></thead>
+        <tbody><tr th:each="e : ${events}"><td th:text="${e.seq()}">1</td><td th:text="${e.occurredAt()}">-</td>
+            <td th:text="${e.fromState()}">-</td><td th:text="${e.toState()}">-</td><td th:text="${e.detail()}">-</td></tr></tbody>
+    </table>
+    <p><a th:href="@{/preservation}">Back to preservation</a></p>
+</main>
+</body>
+</html>

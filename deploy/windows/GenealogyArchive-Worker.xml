@@ -8,7 +8,7 @@
   <name>Genealogy Archive System - Worker</name>
   <description>Background worker of the Genealogy Archive System.</description>
   <executable>@JAVA@</executable>
-  <arguments>-jar "@APP_DIR@\genealogy-archive.jar" worker --config="@DATA_DIR@\installation.yml"</arguments>
+  <arguments>-Djava.io.tmpdir="@DATA_DIR@\tmp\worker" -jar "@APP_DIR@\genealogy-archive.jar" worker --config="@DATA_DIR@\installation.yml"</arguments>
   <workingdirectory>@DATA_DIR@</workingdirectory>
   <startmode>Automatic</startmode>
   <delayedAutoStart>true</delayedAutoStart>

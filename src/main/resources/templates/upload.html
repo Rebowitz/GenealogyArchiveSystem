@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Upload files')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1 th:text="${parent != null} ? 'Upload a derivative of ' + ${parent.friendlyId()} : 'Upload files'">Upload files</h1>
+    <section th:class="${readiness.ready()} ? 'status ok' : 'status problem'">
+        <p th:text="${readiness.explanation()}">ready</p>
+    </section>
+    <form th:if="${readiness.ready()}" th:action="@{/files/batches}" method="post" class="form">
+        <input type="hidden" name="parent" th:if="${parent != null}" th:value="${parent.fileId()}">
+        <label>Note for this batch (optional, e.g. where or how these were captured)
+            <input type="text" name="note" maxlength="2000"></label>
+        <button type="submit">Continue to choose files</button>
+    </form>
+</main>
+</body>
+</html>

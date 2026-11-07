@@ -33,3 +33,10 @@ table.list th { width: auto; }
 tr.problem td { color: var(--problem); }
 ul.fields { margin: 0; padding-left: 1rem; }
 code { overflow-wrap: anywhere; }
+
+/* Phase 2: files */
+td.thumb img { max-width: 64px; max-height: 64px; }
+img.preview { max-width: 320px; max-height: 320px; margin: 1rem 0; }
+section.danger { border-left: 4px solid #b00020; padding-left: 1rem; }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; }
+dl.facts dd { margin: 0; word-break: break-all; }
