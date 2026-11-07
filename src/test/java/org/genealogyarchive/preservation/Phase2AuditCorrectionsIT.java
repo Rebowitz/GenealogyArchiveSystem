@@ -3299,6 +3299,7 @@ class Phase2AuditCorrectionsIT {
     void v0021_aReleasedQuarantinedObjectIsNeverDeletedEvenWhenItsBytesAreAuthoritative() throws Exception {
         byte[] bytes = b("deed, released in quarantine");
         ArchivalFile f = ingestAs(fx.editor, "released-q.tif", bytes, Restriction.NORMAL, null, null);
+        Path stored = fx.storedPath(f);
         // A move recorded before V0019 (untrusted) left a byte-identical object in quarantine.
         String q = ManagedVolume.quarantinePath(UUID.randomUUID(), "legacy").value();
         UUID legacyOp = fx.operation(fx.preservation().context().operations().writersOfContent(f.contentId()).get(0)
@@ -3327,7 +3328,7 @@ class Phase2AuditCorrectionsIT {
         }
         assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(atQ).as("released, untouched").hasBinaryContent(bytes);
-        assertThat(fx.storedPath(f)).as("the verified current copy was removed").doesNotExist();
+        assertThat(stored).as("the verified current copy was removed").doesNotExist();
     }
 
     /** Finding 1: an object replacing a released one is unresolved, never deleted (even with authoritative bytes). */
@@ -3417,11 +3418,16 @@ class Phase2AuditCorrectionsIT {
         UUID repairId = repairOf(f, bytes).operationId();
         byte[][] original = new byte[1][];
         fx.faults.arm(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT, id -> original[0] = substituteMarker());
-        assertThatThrownBy(() -> fx.process(repairId)).isInstanceOf(RuntimeException.class);
+        // The inspection cannot decide; the volume no longer opens as itself, so the repair waits for it.
+        assertThat(fx.process(repairId).state()).isEqualTo(OperationState.WAITING_FOR_VOLUME);
         assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.CURRENT);
         assertThat(content(f).state()).isEqualTo(ContentState.MISSING);
         restoreMarker(original[0]);
-        assertThat(fx.process(repairId).state()).isEqualTo(OperationState.COMPLETED);
+        FileOperation resumed = fx.process(repairId);
+        if (resumed.state() != OperationState.COMPLETED) {
+            resumed = fx.process(repairId);
+        }
+        assertThat(resumed.state()).isEqualTo(OperationState.COMPLETED);
         assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
     }
 
