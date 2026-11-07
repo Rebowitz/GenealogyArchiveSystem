@@ -49,9 +49,10 @@ public final class RecoveryService {
         // V0016: content whose missing location was recorded by a finding but not (yet) by its state - an
         // interrupted or legacy recording - is marked missing first, which vacates the location, before any
         // move is settled or anything is deleted.
-        for (UUID contentId : ctx.contents().activeButRecordedMissing()) {
-            if (ctx.contents().setState(contentId, ContentState.ACTIVE, ContentState.MISSING)) {
-                log.warn("Content {} had an open MISSING finding but was still ACTIVE; recorded as MISSING", contentId);
+        for (FileContent content : ctx.contents().presentButRecordedMissing()) {
+            if (ctx.contents().setState(content.contentId(), content.state(), ContentState.MISSING)) {
+                log.warn("Content {} had an open MISSING finding but was still {}; recorded as MISSING", content.contentId(),
+                        content.state());
             }
         }
         // GAS-P2-008: finish quarantine moves interrupted between the move and its record.

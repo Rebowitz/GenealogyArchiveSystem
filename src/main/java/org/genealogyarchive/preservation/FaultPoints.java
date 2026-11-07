@@ -35,6 +35,8 @@ public interface FaultPoints {
         /** Any quarantine move: the object has been moved, before the move is recorded (GAS-P2-008). */
         /** A quarantine move's intent (with the object's evidence) is committed; nothing has moved yet. */
         AFTER_QUARANTINE_INTENT,
+        /** A quarantine move verified its source and is about to rename it (the remaining check/use window). */
+        BEFORE_QUARANTINE_RENAME,
         AFTER_QUARANTINE_MOVE,
         /** Integrity: inside the transaction recording content MISSING, after the finding, before the state. */
         AFTER_MISSING_FINDING,

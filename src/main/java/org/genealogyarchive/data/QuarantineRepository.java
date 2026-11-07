@@ -26,14 +26,16 @@ public final class QuarantineRepository {
 
     /**
      * @param sourceSize           size of the object at {@code sourcePath} when the move was intended (V0016)
-     * @param sourceModifiedMicros its last-modified time then, in microseconds; with the size, the evidence
-     *                             that a later object at either end is the same object
+     * @param sourceModifiedMicros its last-modified time then, in microseconds (informational since V0017)
+     * @param sourceSha256         SHA-256 of its bytes then (V0017): with the size, the evidence that an object
+     *                             found later at either end is the same object
      */
     public record Entry(UUID quarantineId, UUID volumeId, UUID operationId, UUID contentId, String sourcePath,
                         String quarantinePath, Reason reason, State state, String detail, Long sourceSize,
-                        Long sourceModifiedMicros) {
+                        Long sourceModifiedMicros, String sourceSha256) {
+        /** Content evidence (V0017): the SHA-256 and size of the object the move was recorded for. */
         public boolean hasEvidence() {
-            return sourceSize != null && sourceModifiedMicros != null;
+            return sourceSize != null && sourceSha256 != null;
         }
 
         /** The intent was recorded (V0016 or later) when nothing was at the source. */
@@ -44,12 +46,12 @@ public final class QuarantineRepository {
 
     private static final String COLUMNS = """
             quarantine_id, volume_id, operation_id, content_id, source_path, quarantine_path, reason, state, detail,
-            source_size, source_modified_micros""";
+            source_size, source_modified_micros, source_sha256""";
     private static final RowMapper<Entry> ENTRY = (rs, n) -> new Entry(Rows.uuid(rs, "quarantine_id"),
             Rows.uuid(rs, "volume_id"), Rows.uuid(rs, "operation_id"), Rows.uuid(rs, "content_id"),
             rs.getString("source_path"), rs.getString("quarantine_path"), Reason.valueOf(rs.getString("reason")),
             State.valueOf(rs.getString("state")), rs.getString("detail"), rs.getObject("source_size", Long.class),
-            rs.getObject("source_modified_micros", Long.class));
+            rs.getObject("source_modified_micros", Long.class), rs.getString("source_sha256"));
 
     private final JdbcClient jdbc;
 
@@ -59,17 +61,17 @@ public final class QuarantineRepository {
 
     /** Records the intent to move {@code sourcePath} to {@code quarantinePath}, or returns the existing entry. */
     public Entry intend(UUID volumeId, UUID operationId, UUID contentId, String sourcePath, String quarantinePath,
-                        Reason reason, Long sourceSize, Long sourceModifiedMicros) {
+                        Reason reason, Long sourceSize, Long sourceModifiedMicros, String sourceSha256) {
         jdbc.sql("""
                 INSERT INTO gas.quarantine_object (quarantine_id, volume_id, operation_id, content_id, source_path,
-                                                   quarantine_path, reason, state, source_size, source_modified_micros, detail)
-                VALUES (:id, :vol, :op, :content, :src, :q, :reason, 'INTENDED', :size, :mtime,
+                                                   quarantine_path, reason, state, source_size, source_modified_micros, source_sha256, detail)
+                VALUES (:id, :vol, :op, :content, :src, :q, :reason, 'INTENDED', :size, :mtime, :sha,
                         CASE WHEN CAST(:size AS bigint) IS NULL THEN :absent END)
                 ON CONFLICT (volume_id, quarantine_path) DO NOTHING
                 """).param("id", org.genealogyarchive.identity.GlobalIds.newId()).param("vol", volumeId)
                 .param("op", operationId).param("content", contentId).param("src", sourcePath).param("q", quarantinePath)
                 .param("reason", reason.name()).param("size", sourceSize).param("mtime", sourceModifiedMicros)
-                .param("absent", ABSENT_AT_INTENT).update();
+                .param("sha", sourceSha256).param("absent", ABSENT_AT_INTENT).update();
         return find(volumeId, quarantinePath).orElseThrow();
     }
 

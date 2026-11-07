@@ -134,6 +134,30 @@ Test changed (stronger rule, not weakened): `gasP2_IV01_theDatabaseRefusesOwners
 expects the single-owner refusal. Schema: new **V0016**; V0001–V0015 unchanged; `Phase2SchemaIT` expects 8
 Phase 2 migrations from the Phase 1 baseline.
 
+## Structural audit corrections (audited revision `c422e8cb16486f3d12f98b147437873d9afec2d0`)
+
+Three MAJOR and one MINOR finding; the V0016 redesign is kept and extended in **V0017**.
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **1. Missing detection for DAMAGED content** (MAJOR) | Scans record MISSING from ACTIVE *or* DAMAGED (one transaction with the finding; vacates the location). Recovery reconciles ACTIVE or DAMAGED content with an open MISSING finding. A repair quarantines a damaged copy only if it still matches the damage evidence (size and SHA-256 recorded by the scan; size-mismatch findings now record the hash too); otherwise the generation is retired and the object reported (`UNEXPECTED_OBJECT`). | `v0017_damagedContentThatGoesMissingIsVacatedAndAForeignObjectThereIsNeverAdopted`, `…ACrashWhileRecordingDamagedContentAsMissing…`, `…RecoveryReconcilesDamagedContentRecordedMissing…`, `…ADamagedCopyReplacedWithoutAScanIsNotQuarantinedByTheRepair`; ACTIVE -> MISSING tests from V0016 kept |
+| **2. Quarantine recovery identity** (MAJOR) | Intents record SHA-256 (V0017 column); settle moves/confirms only matching bytes, verifies the destination after the rename and moves a mismatch back; intents without hash evidence are unverified and block with a visible note. | `v0017_anObjectWithTheSameSizeAndTimestampButDifferentBytesIsNotMoved`, `…ALegacyIntentWithoutContentEvidenceIsNeverFinishedSilently`, `…AnObjectSwappedInBetweenTheCheckAndTheRenameIsPutBackUntouched`; earlier valid-recovery tests kept |
+| **3. Full-scan restoration and protection** (MAJOR) | MISSING -> ACTIVE only when the bytes verify *and* the object is already read-only; verified-but-writable stays MISSING with a `NOT_PROTECTED` finding (downloads, sharing and repair treat it as missing; destruction removes it only because its hash is the authoritative one). Worker re-verification hashes before protecting and confirms protection took effect. | `v0017_restoredBytesThatAreWritableAreNotRestoredUntilProtected`, `…ReverificationProtectsOnlyVerifiedBytesAndNeverTouchesAnotherObject` (both use `SafeFiles` platform checks, run on Windows and Linux) |
+| **4. Concurrent ownership enforcement** (MINOR) | `physical_location_owner` with primary key (volume, path), filled by triggers on INSERT/UPDATE of operations and INSERT of generations; `INSERT … ON CONFLICT DO NOTHING` waits for a concurrent claimant and then refuses. | `v0017_concurrentConflictingClaimsCannotBothCommit` (two connections, both orders, READ COMMITTED and REPEATABLE READ, rollback lets the second succeed, bounded by `statement_timeout`), `…OwnershipTransfersAtomicallyFromOperationToGeneration` |
+
+Broader change: destruction now requires a vouched-for SHA-256 for every generation or quarantine object it
+deletes (authoritative, recorded damage, or recorded at quarantine); unexplained objects are left and reported.
+
+Uncertainties resolved by choice (reported for owner review): verified-but-writable originals are kept
+MISSING with a finding rather than given a new content state; quarantined objects moved before V0017 are
+vouched for by their settled ledger record (no hash was recorded); destruction leaves an undetected damaged
+copy of ACTIVE content (hash neither authoritative nor recorded) in place and reports it.
+
+Residual time-of-check/time-of-use window: there is no portable way to rename "the file just hashed". A
+replacement between the hash and the rename is detected by re-hashing the destination and moved back; a
+replacement during that re-hash/move-back window, or by a local writer racing directory components, remains
+the accepted P2-E residual risk (native `openat`-style code would be needed).
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

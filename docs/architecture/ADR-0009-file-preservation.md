@@ -141,6 +141,25 @@ workers from driving the same operation.
   interrupted move is finished only for that object, otherwise nothing is moved and the operation reports
   it. Recovery reconciles an interrupted or legacy missing recording (open MISSING finding, content still
   ACTIVE) before settling moves or processing operations; destruction does the same for its content.
+- **Evidence for every destructive step (V0017):**
+  - Ownership claims are rows of `physical_location_owner` (primary key volume + path), maintained by
+    triggers on operations and generations, so PostgreSQL itself serialises concurrent claimants: a second
+    claim of a location waits for the first transaction and is then refused (READ COMMITTED, the
+    application's level) or fails to serialise (REPEATABLE READ). Ownership passes from an operation to its
+    generation by releasing the claim and inserting the generation in one transaction.
+  - Content whose bytes leave is recorded MISSING from ACTIVE or DAMAGED alike (vacating the location);
+    recovery reconciles either state when an open MISSING finding names the current location.
+  - Quarantine intents record the object's SHA-256; recovery moves or confirms only an object with those
+    bytes, re-checks what arrived after the rename and returns anything else to where it was. Intents without
+    that evidence (older ones) are unverified and block visibly instead of finishing.
+  - A repair quarantines a damaged generation's copy only if it still has the size and SHA-256 recorded when
+    the damage was found (scans now record the hash for size mismatches too); otherwise the generation is
+    retired as MISSING and the object is left untouched and reported.
+  - Destruction deletes a generation's object only if its SHA-256 is vouched for (authoritative hash, the
+    recorded damaged-copy hash, or the hash recorded when it was quarantined); an operation's own uncommitted
+    copy is vouched for by its claim. Anything else is left and reported.
+  - A MISSING original is restored to ACTIVE only when its bytes verify and it is already protected
+    read-only; scans never change protection. Worker re-verification checks the bytes before it protects.
 - Unfinished repairs of the content are part of that accounting (GAS-P2-R01). Removal first takes the lock
   of every unfinished operation on the content and of every owner of an unsettled quarantine move of it
   (if one is busy, removal waits and is retried), then stops each unfinished repair (`CANCELLED`, with the

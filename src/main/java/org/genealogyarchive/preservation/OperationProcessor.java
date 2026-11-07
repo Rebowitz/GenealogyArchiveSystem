@@ -624,10 +624,20 @@ public final class OperationProcessor {
         }
         for (FileContentRepository.Generation g : pending) {
             try {
+                String suffix = "damaged-g" + g.generation();
+                boolean intended = ctx.quarantine().find(volume.volumeId(),
+                        ManagedVolume.quarantinePath(op.operationId(), suffix).value()).isPresent();
+                if (!intended) {
+                    Optional<String> notOurs = notTheRecordedDamagedCopy(volume, g);
+                    if (notOurs.isPresent()) {
+                        retireUnexplained(op, g, notOurs.get());
+                        continue;
+                    }
+                }
                 ctx.faults().reach(FaultPoints.Point.BEFORE_QUARANTINE_MOVE, op.operationId());
                 // Ledger intent first (GAS-P2-006/-008): the damaged copy is accounted for at every moment.
                 QuarantineRepository.Entry moved = quarantine.move(volume, op.operationId(), g.contentId(),
-                        PortableRelativePath.of(g.storagePath()), "damaged-g" + g.generation(),
+                        PortableRelativePath.of(g.storagePath()), suffix,
                         QuarantineRepository.Reason.DAMAGED_GENERATION);
                 if (moved.state() == QuarantineRepository.State.QUARANTINED) {
                     ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
@@ -647,6 +657,50 @@ public final class OperationProcessor {
             }
         }
         return true;
+    }
+
+    /**
+     * Before a damaged generation's copy is moved to quarantine (V0017): the object at its location must be the
+     * damaged copy integrity checking recorded - same size and SHA-256 as the latest damage finding for that
+     * generation. Without such evidence, or if something else is there now, it is not shown to be the
+     * archive's.
+     *
+     * @return why the object there is not shown to be the recorded damaged copy; empty if it is, or if nothing
+     *         is there (the move then records that the source was absent)
+     */
+    private Optional<String> notTheRecordedDamagedCopy(ManagedVolume volume, FileContentRepository.Generation g) throws IOException {
+        Optional<Path> at = volume.locate(PortableRelativePath.of(g.storagePath()));
+        if (at.isEmpty() || !Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
+            return Optional.empty();
+        }
+        Optional<IntegrityFinding> damage = ctx.integrity().findingsFor(g.contentId()).stream()
+                .filter(f -> (f.kind() == FindingKind.HASH_MISMATCH || f.kind() == FindingKind.SIZE_MISMATCH)
+                        && Integer.valueOf(g.generation()).equals(f.generation()) && f.observedSha256() != null)
+                .reduce((first, second) -> second);
+        if (damage.isEmpty()) {
+            return Optional.of("no damage finding records the damaged copy's SHA-256");
+        }
+        SafeFiles.requirePlainFile(at.get());
+        ContentIo.Measurement m = ContentIo.measure(at.get());
+        if (m.size() != damage.get().observedSize() || !m.sha256().equals(damage.get().observedSha256())) {
+            return Optional.of("the object there does not have the size and SHA-256 recorded when the damage was found");
+        }
+        return Optional.empty();
+    }
+
+    /** The superseded location holds something not shown to be the archive's: retire it untouched and report. */
+    private void retireUnexplained(FileOperation op, FileContentRepository.Generation g, String why) {
+        ctx.tx().executeWithoutResult(status -> {
+            if (ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
+                    GenerationState.MISSING, null)) {
+                ctx.integrity().insertFindingIfNew(null, new org.genealogyarchive.data.IntegrityRepository.NewFinding(
+                        FindingKind.UNEXPECTED_OBJECT, g.volumeId(), null, null, g.storagePath(), op.operationId(), null, null,
+                        "Repair " + op.operationId() + " did not quarantine the object at the damaged generation's location: "
+                        + why + ". It was left untouched."));
+            }
+        });
+        ctx.operations().note(op.operationId(), "damaged generation " + g.generation() + " retired without moving anything: "
+                + why + "; the object at " + g.storagePath() + " was left untouched and reported");
     }
 
     // ---- WAITING_FOR_VOLUME / final ----------------------------------------------------------------

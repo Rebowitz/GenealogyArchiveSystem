@@ -188,7 +188,12 @@ public final class IntegrityService {
                     } catch (IOException e) {
                         throw new java.io.UncheckedIOException(e);
                     }
-                    ctx.contents().setState(content.contentId(), ContentState.ACTIVE, ContentState.MISSING);
+                    // From any state a scan checks (ACTIVE or DAMAGED): content whose bytes left is MISSING, which
+                    // vacates the location in the same statement - so a damaged copy that disappeared is never
+                    // again taken for "damaged but ours" if something else appears there.
+                    if (content.state() != ContentState.MISSING) {
+                        ctx.contents().setState(content.contentId(), content.state(), ContentState.MISSING);
+                    }
                 });
                 return;
             }
@@ -200,8 +205,18 @@ public final class IntegrityService {
                 if (full && !SafeFiles.isLinkOrReparsePoint(path)) {
                     ContentIo.Measurement m = ContentIo.measure(path);
                     if (m.size() == content.byteSize() && m.sha256().equals(content.sha256())) {
+                        if (!SafeFiles.isReadOnly(path)) {
+                            // Verified bytes but not protected: not a healthy preservation original. It stays MISSING
+                            // (downloads, sharing and repair treat it so) and the difference is reported; a scan
+                            // never changes protection. Restoring read-only and scanning again restores it.
+                            record(scanId, finding(FindingKind.NOT_PROTECTED, content, m.size(), m.sha256(),
+                                    "The missing original is present again with its authoritative bytes but is writable; "
+                                    + "it is not restored until it is protected read-only"), counts);
+                            return;
+                        }
                         ctx.contents().markVerified(content.contentId(), ctx.clock().instant());
-                        reappeared(content, "The stored original is present again and matches its authoritative SHA-256.");
+                        reappeared(content, "The stored original is present again, matches its authoritative SHA-256 and is "
+                                + "protected read-only.");
                         return;
                     }
                 }
@@ -218,7 +233,10 @@ public final class IntegrityService {
             }
             long size = Files.size(path);
             if (size != content.byteSize()) {
-                record(scanId, finding(FindingKind.SIZE_MISMATCH, content, size, null,
+                // V0017: the damaged object's SHA-256 is recorded too - the evidence a later repair needs to show
+                // that what it moves to quarantine is this damaged copy and not something put there since.
+                ContentIo.Measurement damaged = ContentIo.measure(path);
+                record(scanId, finding(FindingKind.SIZE_MISMATCH, content, damaged.size(), damaged.sha256(),
                         "Stored size " + size + " differs from the authoritative " + content.byteSize() + " bytes"), counts);
                 markDamaged(content);
                 return;
@@ -366,15 +384,22 @@ public final class IntegrityService {
                 return false;
             }
             Path path = located.get();
+            SafeFiles.requirePlainFile(path);
+            // Bytes first: an object that is not the content is never touched, not even its protection.
+            m = ContentIo.measure(path);
+            if (m.size() != content.byteSize() || !m.sha256().equals(content.sha256())) {
+                return false;
+            }
             if (!SafeFiles.isReadOnly(path)) {
                 SafeFiles.makeReadOnly(path);
             }
-            m = ContentIo.measure(path);
+            if (!SafeFiles.isReadOnly(path)) {
+                ctx.integrity().insertFindingIfNew(null, finding(FindingKind.NOT_PROTECTED, content, m.size(), m.sha256(),
+                        "Re-verification found the authoritative bytes but could not protect them read-only; not restored"));
+                return false;
+            }
         } catch (IOException e) {
             log.warn("Re-verification of content {} could not read the stored original: {}", contentId, e.getClass().getSimpleName());
-            return false;
-        }
-        if (m.size() != content.byteSize() || !m.sha256().equals(content.sha256())) {
             return false;
         }
         ctx.tx().executeWithoutResult(s -> {

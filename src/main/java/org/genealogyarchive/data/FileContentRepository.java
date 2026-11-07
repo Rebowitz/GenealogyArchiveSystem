@@ -162,17 +162,16 @@ public final class FileContentRepository {
     }
 
     /**
-     * Content still ACTIVE although an open MISSING finding records its current location as empty - an
-     * interrupted or legacy recording that recovery reconciles before anything else (V0016).
+     * Content still ACTIVE or DAMAGED although an open MISSING finding records its current location as empty -
+     * an interrupted or legacy recording that recovery reconciles before anything else (V0016, V0017).
      */
-    public List<UUID> activeButRecordedMissing() {
-        return jdbc.sql("""
-                SELECT DISTINCT c.content_id FROM gas.file_content c
-                  JOIN gas.file_content_generation g ON g.content_id = c.content_id AND g.state = 'CURRENT'
-                  JOIN gas.integrity_finding f ON f.content_id = c.content_id AND f.kind = 'MISSING' AND f.status = 'OPEN'
-                                              AND f.storage_path = g.storage_path
-                 WHERE c.state = 'ACTIVE'
-                """).query((rs, n) -> Rows.uuid(rs, "content_id")).list();
+    public List<FileContent> presentButRecordedMissing() {
+        return jdbc.sql(SELECT + """
+                 WHERE c.state IN ('ACTIVE', 'DAMAGED')
+                   AND EXISTS (SELECT 1 FROM gas.integrity_finding f
+                                WHERE f.content_id = c.content_id AND f.kind = 'MISSING' AND f.status = 'OPEN'
+                                  AND f.storage_path = g.storage_path)
+                """).query(CONTENT).list();
     }
 
     /** Generations awaiting confirmation that their damaged bytes are in quarantine. */

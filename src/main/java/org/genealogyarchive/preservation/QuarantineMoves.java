@@ -47,17 +47,21 @@ final class QuarantineMoves {
     QuarantineRepository.Entry move(ManagedVolume volume, UUID operationId, UUID contentId, PortableRelativePath source,
                                     String suffix, QuarantineRepository.Reason reason) throws IOException {
         PortableRelativePath q = ManagedVolume.quarantinePath(operationId, suffix);
-        // V0016: the intent records which object is moved (size and last-modified time), so that an interrupted
-        // move is only ever finished for that object - never for one that appeared at either end later.
+        // V0017: the intent records which object is moved - its size and the SHA-256 of its bytes (with its
+        // last-modified time, for information) - so an interrupted move is only ever finished for an object with
+        // those bytes, never for a different object that appeared at either end later.
         Optional<Path> at = volume.locate(source);
-        Optional<BasicFileAttributes> seen = Optional.empty();
+        QuarantineRepository.Entry entry;
         if (at.isPresent() && Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
             SafeFiles.requirePlainFile(at.get());
-            seen = Optional.of(Files.readAttributes(at.get(), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS));
+            BasicFileAttributes seen = Files.readAttributes(at.get(), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            ContentIo.Measurement m = ContentIo.measure(at.get());
+            entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId, source.value(), q.value(), reason,
+                    m.size(), seen.lastModifiedTime().to(TimeUnit.MICROSECONDS), m.sha256());
+        } else {
+            entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId, source.value(), q.value(), reason,
+                    null, null, null);
         }
-        QuarantineRepository.Entry entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId,
-                source.value(), q.value(), reason, seen.map(BasicFileAttributes::size).orElse(null),
-                seen.map(a -> a.lastModifiedTime().to(TimeUnit.MICROSECONDS)).orElse(null));
         ctx.faults().reach(FaultPoints.Point.AFTER_QUARANTINE_INTENT, operationId);
         return settle(volume, entry);
     }
@@ -69,16 +73,26 @@ final class QuarantineMoves {
         }
     }
 
-    /** Whether the object at {@code path} is the one recorded when the move was intended. */
+    /**
+     * Whether the object at {@code path} is the one recorded when the move was intended: same size and same
+     * SHA-256 (V0017). An intent without that evidence - recorded before V0017, or when nothing was at the
+     * source - can never vouch for an object: it is unverified, and the move is not finished silently.
+     */
     private static boolean isRecordedObject(QuarantineRepository.Entry entry, Path path) throws IOException {
         if (!entry.hasEvidence()) {
-            // Only entries recorded before V0016 lack evidence; and an intent recorded when nothing was at the
-            // source has none either - then no object found later can be the one meant.
-            return entry.sourceSize() == null && entry.sourceModifiedMicros() == null && !entry.recordedAbsent();
+            return false;
         }
-        BasicFileAttributes a = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-        return a.isRegularFile() && a.size() == entry.sourceSize()
-                && a.lastModifiedTime().to(TimeUnit.MICROSECONDS) == entry.sourceModifiedMicros();
+        SafeFiles.requirePlainFile(path);
+        ContentIo.Measurement m = ContentIo.measure(path);
+        return m.size() == entry.sourceSize() && m.sha256().equals(entry.sourceSha256());
+    }
+
+    private static String unverifiedReason(QuarantineRepository.Entry entry) {
+        if (entry.recordedAbsent()) {
+            return "nothing was at " + entry.sourcePath() + " when this move was recorded";
+        }
+        return entry.hasEvidence() ? "it does not have the recorded size and SHA-256"
+                : "this move was recorded without content evidence (before V0017); an Administrator must verify it";
     }
 
     /** Finishes an INTENDED entry from the state on disk; other states are returned unchanged. */
@@ -96,21 +110,32 @@ final class QuarantineMoves {
                     "both the object and its quarantine destination exist; nothing was moved");
         }
         if (sourcePresent && !isRecordedObject(entry, source.get())) {
-            throw new UnexplainedObjectException("the object now at " + entry.sourcePath() + " is not the one this move to "
-                    + entry.quarantinePath() + " was recorded for; it was not moved or adopted");
+            throw new UnexplainedObjectException("the object now at " + entry.sourcePath() + " is not shown to be the one this "
+                    + "move to " + entry.quarantinePath() + " was recorded for (" + unverifiedReason(entry)
+                    + "); it was not moved or adopted");
         }
         if (!sourcePresent && destinationPresent && !isRecordedObject(entry, destination)) {
-            throw new UnexplainedObjectException("the object at " + entry.quarantinePath() + " is not the one moved from "
-                    + entry.sourcePath() + "; nothing was confirmed");
+            throw new UnexplainedObjectException("the object at " + entry.quarantinePath() + " is not shown to be the one moved "
+                    + "from " + entry.sourcePath() + " (" + unverifiedReason(entry) + "); nothing was confirmed");
         }
         QuarantineRepository.State outcome;
         String detail;
         if (sourcePresent) {
             SafeFiles.requirePlainFile(source.get());
             Path from = source.get();
+            ctx.faults().reach(FaultPoints.Point.BEFORE_QUARANTINE_RENAME, entry.operationId());
             SafeFiles.withSharingRetry(() -> Files.move(from, destination, LinkOption.NOFOLLOW_LINKS));
             SafeFiles.flushDirectory(destination.getParent());
             SafeFiles.flushDirectory(from.getParent());
+            // The object could have been replaced between the check above and the rename (no portable API moves
+            // "this open file"). Verify what arrived; if it is not the recorded object, put it back untouched.
+            if (!isRecordedObject(entry, destination)) {
+                SafeFiles.withSharingRetry(() -> Files.move(destination, from, LinkOption.NOFOLLOW_LINKS));
+                SafeFiles.flushDirectory(from.getParent());
+                SafeFiles.flushDirectory(destination.getParent());
+                throw new UnexplainedObjectException("the object at " + entry.sourcePath() + " changed while it was being "
+                        + "moved; it was returned to where it was and not adopted");
+            }
             ctx.faults().reach(FaultPoints.Point.AFTER_QUARANTINE_MOVE, entry.operationId());
             outcome = QuarantineRepository.State.QUARANTINED;
             detail = "moved from " + entry.sourcePath();

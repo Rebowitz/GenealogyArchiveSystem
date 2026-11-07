@@ -208,6 +208,16 @@ public final class DestructionProcessor {
                 }
             }
             FileContent content = ctx.contents().find(op.contentId()).orElseThrow();
+            // V0017: every object destruction deletes must be shown to be this content's copy now. A location a
+            // record names is deleted only if the object there has a SHA-256 that record vouches for: the
+            // authoritative hash, the damaged copy's hash recorded when the damage was found, or the hash recorded
+            // when it was moved to quarantine. Anything else there is left untouched and reported.
+            java.util.Map<String, String> movedSha = new java.util.HashMap<>();
+            for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
+                if (entry.state() == QuarantineRepository.State.QUARANTINED && entry.sourceSha256() != null) {
+                    movedSha.put(entry.quarantinePath(), entry.sourceSha256());
+                }
+            }
             for (FileContentRepository.Generation g : ctx.contents().generations(op.contentId())) {
                 switch (g.state()) {
                     case CURRENT, QUARANTINE_PENDING -> {
@@ -216,14 +226,14 @@ public final class DestructionProcessor {
                             // An interrupted or legacy recording: reconcile it before anything is deleted.
                             ctx.contents().markVacated(g.contentId(), g.generation());
                         }
-                        if (!vacated || isTheContent(volume, g.storagePath(), content)) {
-                            known.add(g.storagePath());
-                        } else {
-                            historical.add(g.storagePath());
+                        Set<String> vouched = new java.util.HashSet<>(Set.of(content.sha256()));
+                        if (!vacated) {
+                            vouched.addAll(damagedCopyHashes(g));
                         }
+                        classify(volume, g.storagePath(), vouched, known, historical);
                     }
                     case QUARANTINED -> {
-                        known.add(g.quarantinePath());
+                        classifyQuarantined(volume, g.quarantinePath(), movedSha, known, historical);
                         historical.add(g.storagePath());
                     }
                     case MISSING, DESTROYED -> historical.add(g.storagePath());
@@ -232,7 +242,7 @@ public final class DestructionProcessor {
             for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
                 historical.add(entry.sourcePath());
                 if (entry.state() == QuarantineRepository.State.QUARANTINED) {
-                    known.add(entry.quarantinePath());
+                    classifyQuarantined(volume, entry.quarantinePath(), movedSha, known, historical);
                 } else if (entry.state() == QuarantineRepository.State.REMOVED) {
                     historical.add(entry.quarantinePath());
                 }
@@ -313,15 +323,47 @@ public final class DestructionProcessor {
         });
     }
 
-    /** Whether the object at a location is verifiably this content's bytes (authoritative size and SHA-256). */
-    private static boolean isTheContent(ManagedVolume volume, String location, FileContent content) throws IOException {
+    /** SHA-256 values integrity checking recorded for a generation's damaged copy. */
+    private Set<String> damagedCopyHashes(FileContentRepository.Generation g) {
+        Set<String> hashes = new java.util.HashSet<>();
+        for (IntegrityFinding f : ctx.integrity().findingsFor(g.contentId())) {
+            if ((f.kind() == FindingKind.HASH_MISMATCH || f.kind() == FindingKind.SIZE_MISMATCH)
+                    && Integer.valueOf(g.generation()).equals(f.generation()) && f.observedSha256() != null) {
+                hashes.add(f.observedSha256());
+            }
+        }
+        return hashes;
+    }
+
+    /**
+     * A location is a known copy only if nothing is there or the object there has a vouched-for SHA-256;
+     * otherwise it is not shown to be the content's and becomes an unexplained location (never deleted).
+     */
+    private static void classify(ManagedVolume volume, String location, Set<String> vouched, Set<String> known,
+                                 Set<String> historical) throws IOException {
         Optional<Path> p = volume.locate(PortableRelativePath.of(location));
         if (p.isEmpty() || !Files.exists(p.get(), LinkOption.NOFOLLOW_LINKS)) {
-            return false;
+            known.add(location);
+            return;
         }
         SafeFiles.requirePlainFile(p.get());
-        ContentIo.Measurement m = ContentIo.measure(p.get());
-        return m.size() == content.byteSize() && m.sha256().equalsIgnoreCase(content.sha256());
+        if (vouched.contains(ContentIo.measure(p.get()).sha256())) {
+            known.add(location);
+        } else {
+            historical.add(location);
+        }
+    }
+
+    /** A quarantined copy is vouched for by the hash recorded when it was moved (V0017; by its record before). */
+    private static void classifyQuarantined(ManagedVolume volume, String location, java.util.Map<String, String> movedSha,
+                                            Set<String> known, Set<String> historical) throws IOException {
+        String sha = movedSha.get(location);
+        if (sha == null) {
+            // Moved before V0017: the settled ledger record is the only evidence available (documented).
+            known.add(location);
+            return;
+        }
+        classify(volume, location, Set.of(sha), known, historical);
     }
 
     private static boolean present(ManagedVolume volume, String location) throws IOException {

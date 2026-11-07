@@ -1725,8 +1725,11 @@ class Phase2AuditCorrectionsIT {
                         + ingest + "'");
                 st.execute("UPDATE op_copy SET operation_id = gen_random_uuid(), batch_id = NULL, item_key = NULL, "
                         + "target_created = true, target_path = '" + g1 + "'");
-                st.execute("INSERT INTO gas.file_operation SELECT * FROM op_copy");
-                assertThatThrownBy(c::commit).as("checked at commit").hasMessageContaining(SINGLE_OWNER);
+                // V0017: refused by the claim row the INSERT tries to create (immediately; V0016 also at commit).
+                assertThatThrownBy(() -> {
+                    st.execute("INSERT INTO gas.file_operation SELECT * FROM op_copy");
+                    c.commit();
+                }).hasMessageContaining(SINGLE_OWNER);
             } finally {
                 c.rollback();
                 c.setAutoCommit(true);
@@ -1737,15 +1740,8 @@ class Phase2AuditCorrectionsIT {
                 INSERT INTO gas.file_content_generation (content_id, generation, volume_id, storage_path, state, operation_id)
                 VALUES (:c, 99, :v, :p, 'MISSING', :op)""").param("c", f.contentId()).param("v", fx.volumeId)
                 .param("p", repair.targetPath()).param("op", repair.operationId()).update()).hasMessageContaining(SINGLE_OWNER);
-        // Within one transaction a claim may be released before commit: the rule is checked at commit.
-        try (var c = fx.ds.getConnection()) {
-            c.setAutoCommit(false);
-            try (var st = c.createStatement()) {
-                st.executeUpdate("UPDATE gas.file_operation SET target_created = true WHERE operation_id = '" + ingest + "'");
-                st.executeUpdate("UPDATE gas.file_operation SET target_created = false WHERE operation_id = '" + ingest + "'");
-            }
-            c.commit();
-        }
+        // (The legitimate transfer of ownership within one transaction is covered by
+        // v0017_ownershipTransfersAtomicallyFromOperationToGeneration.)
         // Content recorded missing cannot become "damaged" from whatever is found at its location.
         sql().sql("UPDATE gas.file_content SET state = 'MISSING' WHERE content_id = :c").param("c", f.contentId()).update();
         assertThat(generation(f.contentId(), 1).vacated()).as("recording MISSING vacates the location").isTrue();
@@ -1920,5 +1916,332 @@ class Phase2AuditCorrectionsIT {
         assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.DESTROYED);
         assertThat(sql().sql("SELECT vacated FROM gas.file_content_generation WHERE content_id = :c AND generation = 1")
                 .param("c", f.contentId()).query(Boolean.class).single()).as("reconciled before removal").isTrue();
+    }
+
+    // ---- V0017: structural audit corrections -----------------------------------------------------------
+
+    private Repaired damagedThenGone(String name, byte[] bytes) throws Exception {
+        Repaired f = corruptAndRepair(name, bytes);
+        assertThat(content(f.file()).state()).isEqualTo(ContentState.DAMAGED);
+        Path stored = onVolume(generation(f.contentId(), 1).storagePath());
+        SafeFiles.clearReadOnly(stored);
+        Files.delete(stored);
+        return f;
+    }
+
+    @Test
+    void v0017_damagedContentThatGoesMissingIsVacatedAndAForeignObjectThereIsNeverAdopted() throws Exception {
+        byte[] bytes = b("survey book, damaged then missing");
+        Repaired f = damagedThenGone("survey2.tif", bytes);
+        fx.scan(fx.services(), "QUICK");
+        assertThat(content(f.file()).state()).as("DAMAGED -> MISSING").isEqualTo(ContentState.MISSING);
+        assertThat(generation(f.contentId(), 1).vacated()).isTrue();
+        assertOwnershipInvariants();
+        Path location = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(location, b("an unrelated object at the old location"));
+        fx.scan(fx.services(), "FULL");
+        assertThat(content(f.file()).state()).isEqualTo(ContentState.MISSING);
+
+        FileOperation repaired = fx.process(f.repairOperation());
+        assertThat(repaired.state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(generation(f.contentId(), 1).state()).as("vacated: retired, not quarantined").isEqualTo(GenerationState.MISSING);
+        assertThat(location).hasBinaryContent(b("an unrelated object at the old location"));
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+
+        FileOperation op = destroy(fx.file(f.fileId()));
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().recovery().runOnce();
+            assertNotCompleteWhileACopyRemains(op.operationId(), location);
+        }
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(location).hasBinaryContent(b("an unrelated object at the old location"));
+        assertOwnershipInvariants();
+    }
+
+    @Test
+    void v0017_aCrashWhileRecordingDamagedContentAsMissingRecordsNothingAndARescanRecordsIt() throws Exception {
+        Repaired f = damagedThenGone("survey3.tif", b("survey book, crash while recording missing"));
+        fx.faults.crashAt(FaultPoints.Point.AFTER_MISSING_FINDING);
+        assertThatThrownBy(() -> fx.scan(fx.services(), "QUICK")).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(content(f.file()).state()).isEqualTo(ContentState.DAMAGED);
+        assertThat(fx.preservation().integrity().openFindings(fx.admin, 50)).noneMatch(x -> x.kind() == FindingKind.MISSING);
+        fx.scan(fx.services(), "QUICK");
+        assertThat(content(f.file()).state()).isEqualTo(ContentState.MISSING);
+        assertThat(generation(f.contentId(), 1).vacated()).isTrue();
+        assertOwnershipInvariants();
+    }
+
+    @Test
+    void v0017_recoveryReconcilesDamagedContentRecordedMissingBeforeTheRepairActs() throws Exception {
+        Repaired f = damagedThenGone("survey4.tif", b("survey book, legacy damaged and missing"));
+        FileContent c = content(f.file());
+        fx.preservation().context().integrity().insertFindingIfNew(null, new org.genealogyarchive.data.IntegrityRepository.NewFinding(
+                FindingKind.MISSING, c.volumeId(), c.contentId(), c.currentGeneration(), c.currentPath().value(), null, null,
+                null, "legacy recording"));
+        Path location = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(location, b("appeared after the bytes left"));
+        assertThat(content(f.file()).state()).isEqualTo(ContentState.DAMAGED);
+
+        fx.preservation().recovery().runOnce();
+        fx.preservation().recovery().runOnce();
+        assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
+        assertThat(location).hasBinaryContent(b("appeared after the bytes left"));
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        assertOwnershipInvariants();
+    }
+
+    @Test
+    void v0017_aDamagedCopyReplacedWithoutAScanIsNotQuarantinedByTheRepair() throws Exception {
+        Repaired f = corruptAndRepair("deed5.tif", b("deed, damaged copy replaced before the repair"));
+        Path location = onVolume(generation(f.contentId(), 1).storagePath());
+        SafeFiles.clearReadOnly(location);
+        Files.write(location, b("replacement put here after the damage was recorded"));
+
+        FileOperation repaired = fx.process(f.repairOperation());
+        assertThat(repaired.state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
+        assertThat(location).hasBinaryContent(b("replacement put here after the damage was recorded"));
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        assertThat(fx.preservation().integrity().openFindings(fx.admin, 50))
+                .anyMatch(x -> x.kind() == FindingKind.UNEXPECTED_OBJECT && location.equals(onVolume(x.storagePath())));
+        assertThat(fx.preservation().operations().events(fx.admin, f.repairOperation()))
+                .anyMatch(e -> e.detail() != null && e.detail().contains("left untouched"));
+
+        FileOperation op = destroy(fx.file(f.fileId()));
+        fx.preservation().destruction().process(op.operationId());
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(location).hasBinaryContent(b("replacement put here after the damage was recorded"));
+        assertOwnershipInvariants();
+    }
+
+    @Test
+    void v0017_anObjectWithTheSameSizeAndTimestampButDifferentBytesIsNotMoved() throws Exception {
+        Repaired f = corruptAndRepair("grant2.tif", b("land grant, same size and time"));
+        fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_INTENT);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        QuarantineRepository.Entry intent = fx.preservation().context().quarantine().forContent(f.contentId()).get(0);
+        assertThat(intent.hasEvidence()).isTrue();
+        Path source = onVolume(intent.sourcePath());
+        byte[] original = Files.readAllBytes(source);
+        var modified = Files.getLastModifiedTime(source);
+        byte[] lookalike = original.clone();
+        lookalike[lookalike.length - 1] ^= 0x55;
+        SafeFiles.clearReadOnly(source);
+        Files.write(source, lookalike);
+        Files.setLastModifiedTime(source, modified);
+        assertThat(Files.size(source)).isEqualTo(intent.sourceSize());
+        assertThat(Files.getLastModifiedTime(source).to(java.util.concurrent.TimeUnit.MICROSECONDS))
+                .isEqualTo(intent.sourceModifiedMicros());
+
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().recovery().runOnce();
+            assertThat(source).hasBinaryContent(lookalike);
+            assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+            assertThat(fx.preservation().context().quarantine().forContent(f.contentId()).get(0).state())
+                    .isEqualTo(QuarantineRepository.State.INTENDED);
+        }
+        assertThat(fx.preservation().operations().events(fx.admin, f.repairOperation()))
+                .anyMatch(e -> e.detail() != null && e.detail().contains("SHA-256"));
+        FileOperation op = destroy(fx.file(f.fileId()));
+        fx.preservation().destruction().process(op.operationId());
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+        assertThat(source).hasBinaryContent(lookalike);
+    }
+
+    @Test
+    void v0017_aLegacyIntentWithoutContentEvidenceIsNeverFinishedSilently() throws Exception {
+        Repaired f = corruptAndRepair("legacy3.tif", b("legacy intent without evidence"));
+        fx.faults.crashAt(FaultPoints.Point.BEFORE_QUARANTINE_MOVE);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileContentRepository.Generation g1 = generation(f.contentId(), 1);
+        assertThat(g1.state()).isEqualTo(GenerationState.QUARANTINE_PENDING);
+        String q = org.genealogyarchive.files.ManagedVolume.quarantinePath(f.repairOperation(), "damaged-g1").value();
+        // As written before V0017: no size, time or hash of the object.
+        sql().sql("""
+                INSERT INTO gas.quarantine_object (quarantine_id, volume_id, operation_id, content_id, source_path,
+                                                   quarantine_path, reason, state)
+                VALUES (gen_random_uuid(), :v, :op, :c, :src, :q, 'DAMAGED_GENERATION', 'INTENDED')""")
+                .param("v", fx.volumeId).param("op", f.repairOperation()).param("c", f.contentId())
+                .param("src", g1.storagePath()).param("q", q).update();
+        Path source = onVolume(g1.storagePath());
+        byte[] before = Files.readAllBytes(source);
+
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().recovery().runOnce();
+            assertThat(source).hasBinaryContent(before);
+            assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+            assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMMITTED);
+        }
+        assertThat(fx.preservation().operations().events(fx.admin, f.repairOperation()))
+                .anyMatch(e -> e.detail() != null && e.detail().contains("without content evidence"));
+    }
+
+    @Test
+    void v0017_anObjectSwappedInBetweenTheCheckAndTheRenameIsPutBackUntouched() throws Exception {
+        Repaired f = corruptAndRepair("toctou.tif", b("deed, swapped between check and rename"));
+        Path source = onVolume(generation(f.contentId(), 1).storagePath());
+        byte[] swapped = b("swapped in at the last moment");
+        fx.faults.armSticky(FaultPoints.Point.BEFORE_QUARANTINE_RENAME, id -> {
+            SafeFiles.clearReadOnly(source);
+            Files.write(source, swapped);
+        });
+        fx.process(f.repairOperation());
+        fx.faults.clear();
+        assertThat(source).as("returned where it was").hasBinaryContent(swapped);
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        assertThat(fx.operation(f.repairOperation()).state()).isEqualTo(OperationState.COMMITTED);
+        assertThat(fx.preservation().operations().events(fx.admin, f.repairOperation()))
+                .anyMatch(e -> e.detail() != null && e.detail().contains("returned to where it was"));
+        fx.preservation().recovery().runOnce();
+        assertThat(source).hasBinaryContent(swapped);
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+    }
+
+    @Test
+    void v0017_restoredBytesThatAreWritableAreNotRestoredUntilProtected() throws Exception {
+        byte[] bytes = b("baptism register, put back writable");
+        ArchivalFile f = ingestedThenMissing("baptism.tif", bytes);
+        Path location = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(location, bytes);
+        assertThat(SafeFiles.isReadOnly(location)).isFalse();
+
+        fx.scan(fx.services(), "FULL");
+        assertThat(content(f).state()).as("verified bytes, but writable").isEqualTo(ContentState.MISSING);
+        assertThat(generation(f.contentId(), 1).vacated()).isTrue();
+        assertThat(fx.preservation().integrity().openFindings(fx.admin, 50))
+                .anyMatch(x -> x.kind() == FindingKind.NOT_PROTECTED && f.contentId().equals(x.contentId()));
+        assertThatThrownBy(() -> fx.preservation().files().download(fx.editor, f.fileId()))
+                .isInstanceOf(RuleViolationException.class);
+        assertThat(SafeFiles.isReadOnly(location)).as("a scan never changes protection").isFalse();
+
+        SafeFiles.makeReadOnly(location);
+        fx.scan(fx.services(), "FULL");
+        assertThat(content(f).state()).isEqualTo(ContentState.ACTIVE);
+        assertThat(generation(f.contentId(), 1).vacated()).isFalse();
+        try (var d = fx.preservation().files().download(fx.editor, f.fileId())) {
+            assertThat(d.stream().readAllBytes()).isEqualTo(bytes);
+        }
+        assertOwnershipInvariants();
+    }
+
+    @Test
+    void v0017_reverificationProtectsOnlyVerifiedBytesAndNeverTouchesAnotherObject() throws Exception {
+        byte[] bytes = b("burial register, re-verified");
+        ArchivalFile f = ingestedThenMissing("burial.tif", bytes);
+        Path location = onVolume(generation(f.contentId(), 1).storagePath());
+        Files.write(location, b("not the archived bytes at all"));
+        assertThat(fx.preservation().integrity().reverify(f.contentId(), "test")).isFalse();
+        assertThat(SafeFiles.isReadOnly(location)).as("an unexplained object's protection is not changed").isFalse();
+        assertThat(content(f).state()).isEqualTo(ContentState.MISSING);
+
+        Files.write(location, bytes);
+        assertThat(fx.preservation().integrity().reverify(f.contentId(), "test")).isTrue();
+        assertThat(SafeFiles.isReadOnly(location)).isTrue();
+        assertThat(content(f).state()).isEqualTo(ContentState.ACTIVE);
+        assertOwnershipInvariants();
+    }
+
+    @Test
+    void v0017_ownershipTransfersAtomicallyFromOperationToGeneration() throws Exception {
+        Repaired f = corruptAndRepair("transfer.tif", b("atomic transfer of ownership"));
+        fx.faults.crashAt(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT);
+        assertThatThrownBy(() -> fx.process(f.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        FileOperation repair = fx.operation(f.repairOperation());
+        try (var c = fx.ds.getConnection()) {
+            c.setAutoCommit(false);
+            try (var st = c.createStatement()) {
+                st.executeUpdate("UPDATE gas.file_operation SET target_created = false WHERE operation_id = '"
+                        + repair.operationId() + "'");
+                st.executeUpdate("INSERT INTO gas.file_content_generation (content_id, generation, volume_id, storage_path, "
+                        + "state, operation_id) VALUES ('" + f.contentId() + "', 98, '" + fx.volumeId + "', '"
+                        + repair.targetPath() + "', 'MISSING', '" + repair.operationId() + "')");
+            }
+            c.commit();
+            c.setAutoCommit(true);
+        }
+        assertThat(sql().sql("SELECT owner_kind FROM gas.physical_location_owner WHERE volume_id = :v AND path = :p")
+                .param("v", fx.volumeId).param("p", repair.targetPath()).query(String.class).single()).isEqualTo("GENERATION");
+        assertOwnershipInvariants();
+    }
+
+    /** Runs two transactions on separate connections: the first claims and holds, the second conflicts. */
+    private Throwable concurrentClaims(String isolation, String first, String second, boolean firstCommits) throws Exception {
+        var pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try (var c1 = fx.ds.getConnection(); var c2 = fx.ds.getConnection()) {
+            for (var c : List.of(c1, c2)) {
+                c.setAutoCommit(false);
+                try (var st = c.createStatement()) {
+                    st.execute("SET TRANSACTION ISOLATION LEVEL " + isolation);
+                    st.execute("SET LOCAL statement_timeout = '20s'");
+                }
+            }
+            try (var st = c1.createStatement()) {
+                st.executeUpdate(first);
+            }
+            var secondDone = pool.submit(() -> {
+                try (var st = c2.createStatement()) {
+                    st.executeUpdate(second);
+                    c2.commit();
+                    return null;
+                } catch (java.sql.SQLException e) {
+                    c2.rollback();
+                    return (Throwable) e;
+                }
+            });
+            Thread.sleep(500);
+            assertThat(secondDone.isDone()).as("the second claimant waits for the first").isFalse();
+            if (firstCommits) {
+                c1.commit();
+            } else {
+                c1.rollback();
+            }
+            Throwable result = secondDone.get(30, java.util.concurrent.TimeUnit.SECONDS);
+            for (var c : List.of(c1, c2)) {
+                c.setAutoCommit(true);
+            }
+            return result;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void v0017_concurrentConflictingClaimsCannotBothCommit() throws Exception {
+        ArchivalFile a = ingestAs(fx.editor, "a1.tif", b("concurrency a"), Restriction.NORMAL, null, null);
+        ArchivalFile c = ingestAs(fx.editor, "c1.tif", b("concurrency c"), Restriction.NORMAL, null, null);
+        UUID opA = fx.preservation().context().operations().writersOfContent(a.contentId()).get(0).operationId();
+        assertThat(sql().sql("SHOW transaction_isolation").query(String.class).single())
+                .as("the application's isolation level").isEqualTo("read committed");
+        int n = 0;
+        for (String isolation : List.of("READ COMMITTED", "REPEATABLE READ")) {
+            for (boolean generationFirst : List.of(true, false)) {
+                String path = "originals/zz/zz/concurrent-" + (n++);
+                String claimGeneration = "INSERT INTO gas.file_content_generation (content_id, generation, volume_id, storage_path, "
+                        + "state, operation_id) VALUES ('" + c.contentId() + "', " + (50 + n) + ", '" + fx.volumeId + "', '"
+                        + path + "', 'MISSING', '" + opA + "')";
+                String claimOperation = "UPDATE gas.file_operation SET target_path = '" + path + "', target_created = true "
+                        + "WHERE operation_id = '" + opA + "'";
+                Throwable refused = generationFirst
+                        ? concurrentClaims(isolation, claimGeneration, claimOperation, true)
+                        : concurrentClaims(isolation, claimOperation, claimGeneration, true);
+                assertThat(refused).as("%s, %s first", isolation, generationFirst ? "generation" : "operation").isNotNull();
+                assertThat(refused.getMessage()).containsAnyOf(SINGLE_OWNER, "could not serialize");
+                assertThat(sql().sql("SELECT count(*) FROM gas.physical_location_owner WHERE path = :p").param("p", path)
+                        .query(Long.class).single()).isEqualTo(1);
+                // Leave operation A owning nothing again for the next round.
+                sql().sql("UPDATE gas.file_operation SET target_created = false WHERE operation_id = :o").param("o", opA).update();
+            }
+        }
+        // If the first claimant rolls back, the second succeeds.
+        String path = "originals/zz/zz/concurrent-rollback";
+        Throwable none = concurrentClaims("READ COMMITTED",
+                "INSERT INTO gas.file_content_generation (content_id, generation, volume_id, storage_path, state, operation_id) "
+                        + "VALUES ('" + c.contentId() + "', 90, '" + fx.volumeId + "', '" + path + "', 'MISSING', '" + opA + "')",
+                "UPDATE gas.file_operation SET target_path = '" + path + "', target_created = true WHERE operation_id = '" + opA + "'",
+                false);
+        assertThat(none).isNull();
+        sql().sql("UPDATE gas.file_operation SET target_created = false WHERE operation_id = :o").param("o", opA).update();
+        assertOwnershipInvariants();
     }
 }

@@ -50,7 +50,7 @@ class Phase2SchemaIT {
         SchemaMigrator.MigrationReport report = current.migrate();
 
         assertThat(report.fromVersion()).isEqualTo("0008");
-        assertThat(report.migrationsApplied()).as("V0009-V0016").isEqualTo(8);
+        assertThat(report.migrationsApplied()).as("V0009-V0017").isEqualTo(9);
         assertThat(current.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
         assertThat(new PostMigrationValidator(ds, current).validate()).isEmpty();
     }
@@ -78,7 +78,8 @@ class Phase2SchemaIT {
                 "relation integrity_scan kind=r",
                 "relation integrity_finding kind=r",
                 "relation integrity_finding_observation kind=r",
-                "relation quarantine_object kind=r");
+                "relation quarantine_object kind=r",
+                "relation physical_location_owner kind=r");
     }
 
     @Test
