@@ -173,7 +173,7 @@ workers from driving the same operation.
   | Superseded generation, nothing at its location | none (MISSING) | - | - | nothing to act on |
   | Quarantined object | ledger entry (QUARANTINED) | the move's size + SHA-256 when its `evidence_basis` is `OPERATION_COPY_VERIFIED` or `ADMINISTRATOR_ATTESTED` | at the move's intent | object absent or matches; `UNTRUSTED` (all moves before V0019) authorises nothing - recorded unresolved |
   | Unresolved object (any of the above) | `unresolved_object` (open) | an Administrator's attestation of its observed SHA-256 | at attestation | as above; released objects are never touched; verified absence closes the record |
-  | Anything else at a historical location | none | - | - | never (reported) |
+  | Anything at a former location (historical generation path, operation target, ledger source) | none - a hash match is not a claim (third V0019 audit) | an Administrator's attestation only | at attestation | attested and still matching: removed by destruction; released: left and reported; otherwise left, unresolved (keeps destruction incomplete) |
 
   Destruction records `BYTES_REMOVED` only when no open unresolved record remains for the content or its
   operations; an unidentified object keeps it `CLEANUP_INCOMPLETE`, naming the path and why, on every retry,

@@ -3100,19 +3100,95 @@ class Phase2AuditCorrectionsIT {
         assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).containsExactly(old);
     }
 
-    /** Finding 2: the authoritative bytes put back at a former location are removed; nothing else is. */
+    /**
+     * Third V0019 audit, finding 1: nothing claims a former location any more, so an object there - with the
+     * authoritative bytes or not - is never deleted on a hash. It is recorded unresolved and keeps removal
+     * incomplete through repeated recovery and destruction; the content's genuinely owned current generation is
+     * removed meanwhile. An attestation (removed as attested) or a release (left) then completes it.
+     */
     @Test
-    void v0020_theAuthoritativeBytesAtAFormerLocationAreRemovedWithTheContent() throws Exception {
-        byte[] bytes = b("parish register, original restored to its old place");
-        ArchivalFile f = ingestedThenMissing("restored.tif", bytes);
+    void v0022_anObjectAtAFormerLocationIsNeverDeletedOnAHashMatchWithoutACurrentClaim() throws Exception {
+        for (boolean matching : List.of(true, false)) {
+            byte[] bytes = b("parish register, object at a former location, matching=" + matching);
+            ArchivalFile f = ingestedThenMissing("former-" + matching + ".tif", bytes);
+            Path old = onVolume(generation(f.contentId(), 1).storagePath());
+            assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
+            assertThat(generation(f.contentId(), 1).state()).as("retired: claimed by nothing").isEqualTo(GenerationState.MISSING);
+            Path current = onVolume(generation(f.contentId(), 2).storagePath());
+            byte[] object = matching ? bytes : b("other bytes at the former location");
+            Files.write(old, object);
+
+            FileOperation op = destroy(fx.file(f.fileId()));
+            for (int i = 0; i < 3; i++) {
+                fx.rebuild();
+                fx.preservation().recovery().runOnce();
+                fx.preservation().destruction().process(op.operationId());
+                FileOperation d = fx.operation(op.operationId());
+                assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+                assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+                assertThat(old).as("no hash substitutes for a claim").hasBinaryContent(object);
+                assertThat(current).as("the owned, verified current generation is removed").doesNotExist();
+            }
+            UnresolvedObjectRepository.Entry u = openRecordAt(generation(f.contentId(), 1).storagePath());
+            assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION);
+            assertThat(u.observedSha256()).isEqualTo(sha256(object));
+            if (matching) {
+                // Authorized disposition: an Administrator attests the object; destruction removes it as attested.
+                fx.preservation().unresolved().attest(fx.admin, u.unresolvedId(), "inspected: the original, restored by hand");
+                fx.preservation().recovery().runOnce();
+                assertThat(old).doesNotExist();
+                assertThat(record(u.unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.DESTROYED);
+            } else {
+                fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "inspected: not ours");
+                fx.preservation().recovery().runOnce();
+                assertThat(old).as("released, never deleted").hasBinaryContent(object);
+            }
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+            assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        }
+    }
+
+    /** Third V0019 audit, finding 1: a superseded (UNRESOLVED) generation with the authoritative bytes stays. */
+    @Test
+    void v0022_aSupersededGenerationWithTheAuthoritativeBytesIsNotDeletedWithoutAttestation() throws Exception {
+        byte[] bytes = b("will, the original came back before the repair");
+        ArchivalFile f = ingestedThenMissing("superseded-identical.tif", bytes);
         Path old = onVolume(generation(f.contentId(), 1).storagePath());
-        assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
         Files.write(old, bytes);
+        assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.UNRESOLVED);
         FileOperation op = destroy(fx.file(f.fileId()));
-        fx.preservation().recovery().runOnce();
-        FileOperation d = fx.operation(op.operationId());
-        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
-        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).isEmpty();
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().recovery().runOnce();
+            assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(old).hasBinaryContent(bytes);
+        }
+    }
+
+    /** Third V0019 audit, finding 2: enumeration of a substituted volume attributes nothing to the archive. */
+    @Test
+    void v0022_unexpectedObjectsAreEnumeratedOnlyOnTheConfiguredVolume() throws Exception {
+        ingestAs(fx.editor, "enum.tif", b("census, enumeration"), Restriction.NORMAL, null, null);
+        Path stray = fx.volumeRoot.resolve("originals").resolve("zz").resolve("zz").resolve("stray.bin");
+        Files.createDirectories(stray.getParent());
+        Files.write(stray, b("an object nobody accounts for"));
+        for (FaultPoints.Point when : List.of(FaultPoints.Point.BEFORE_ENUMERATION, FaultPoints.Point.AFTER_ENUMERATION)) {
+            byte[][] original = new byte[1][];
+            fx.faults.arm(when, id -> original[0] = substituteMarker());
+            List<IntegrityFinding> found = fx.scan(fx.services(), "QUICK");
+            fx.faults.clear();
+            assertThat(found).as("substituted " + when).noneMatch(x -> x.kind() == FindingKind.UNEXPECTED_OBJECT
+                    || x.kind() == FindingKind.LINK_OR_REPARSE);
+            assertThat(found).anyMatch(x -> x.kind() == FindingKind.VOLUME_UNAVAILABLE
+                    && x.detail() != null && x.detail().contains("identity could not be confirmed"));
+            assertThat(fx.preservation().integrity().openFindings(fx.admin, 100))
+                    .noneMatch(x -> x.kind() == FindingKind.UNEXPECTED_OBJECT);
+            restoreMarker(original[0]);
+        }
+        // The configured volume restored: the stray object is reported, and only then.
+        assertThat(fx.scan(fx.services(), "QUICK")).anyMatch(x -> x.kind() == FindingKind.UNEXPECTED_OBJECT
+                && stray.equals(onVolume(x.storagePath())));
     }
 
     /** Finding 3: an inaccessible original is not missing; recovery and scans retry once access returns. */

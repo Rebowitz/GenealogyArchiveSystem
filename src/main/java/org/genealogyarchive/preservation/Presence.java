@@ -121,7 +121,7 @@ final class Presence {
      * through the fault seam, so tests can make it vanish or become unreadable) whose identities match those the
      * volume was opened with. Any other marker - another volume's, a copy, a malformed one - is not this volume.
      */
-    private static boolean isThisVolume(PreservationContext ctx, ManagedVolume volume) {
+    static boolean isThisVolume(PreservationContext ctx, ManagedVolume volume) {
         try {
             if (!ctx.faults().stat(volume.root().resolve(VolumeMarker.FILE_NAME)).isRegularFile()) {
                 return false;

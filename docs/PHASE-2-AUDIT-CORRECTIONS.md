@@ -457,7 +457,7 @@ concludes absence on a volume whose identity was not confirmed at that moment.
 | Deletion path | Required authorization | Trusted identity evidence | Physical disposition | Completion accounting |
 |---|---|---|---|---|
 | Current generation cleanup | Administrator's destruction request; no release of the location | authoritative SHA-256 | deleted; otherwise left, unresolved | removed or verified absent |
-| Former-location reconciliation | destruction request; no release of the location | authoritative SHA-256 | deleted if identified; released objects left and reported; anything else left, unresolved | released objects count as decided; unresolved keeps CLEANUP_INCOMPLETE |
+| Former-location reconciliation | none - nothing claims a former location (corrected in the third round: the authoritative hash is not a claim) | only an Administrator's attestation | left, unresolved, unless attested (removed) or released (left, reported) | unresolved keeps CLEANUP_INCOMPLETE |
 | Operation-created copies | the operation's claim + destruction request; no release of the location | `OperationCopies` (received hash, or prefix of the re-verified staged upload) | deleted; otherwise the claim becomes an unresolved record | as above |
 | Quarantine destruction | destruction request; the move's trusted basis; for attested moves, the record that move resolved | the move's recorded SHA-256 | deleted; untrusted, released or mismatching objects left | as above; ledger REMOVED only for removed objects |
 | Attested objects (not moved) | attestation, with the record's lock held by the destruction | the attested SHA-256 | deleted; changed objects left, unresolved | record DESTROYED in the completion transaction |
@@ -475,6 +475,61 @@ requires local administrative access to the host and is not reachable through th
 **Remaining limitations (this round).** A released object stays where it is for good; removing it is a manual
 act outside the application (a later scan then reports nothing there). Released locations are excluded from
 automatic deletion even if the content's authoritative bytes are later put there; that needs a new decision.
+
+## Third V0019 audit corrections (audited revision `0d7342a810354db341dc6a27ce7916e54684e95c`)
+
+One MAJOR finding and one MINOR. Reproduced from the source before any change:
+
+1. **Former locations deleted on a hash match.** `DestructionProcessor.removeBytes` classified superseded
+   generations (QUARANTINE_PENDING, UNRESOLVED), every former location (historical generation paths, operation
+   targets, ledger sources, removed quarantine paths) and every remaining open record against
+   `Set.of(authoritative)`. An object there whose bytes equal the content's authoritative bytes was deleted although
+   nothing currently claims that location and no Administrator attested the object: the hash stood in for
+   ownership and authorization.
+2. **Enumeration on an unverified volume.** `IntegrityService.checkUnexpected` listed `originals` on the volume
+   opened at the start of the scan and recorded UNEXPECTED_OBJECT / LINK_OR_REPARSE findings without checking that
+   the configured volume was still the one mounted: a substituted volume's objects were attributed to the archive.
+
+### Correction design (documented before coding)
+
+* **Ownership, then evidence, never one for the other.** A location's object may be deleted only when (1) a
+  current record claims the location for this content - the CURRENT generation (vacated or not), an operation's
+  live claim, a QUARANTINED ledger entry with trusted move evidence, or an Administrator's attestation on an open
+  record whose operation lock the destruction holds; (2) evidence established before now identifies the object -
+  the authoritative hash for the current generation, `OperationCopies` for a claim, the move's trusted hash, the
+  attested hash; (3) no Administrator decision (release) applies to the location; (4) the configured volume's
+  identity was just verified (`Presence`). Superseded generations, former locations and open records are
+  classified with **no** trusted hash: their objects - matching or not - are recorded unresolved and left; only
+  an attestation (delete/quarantine) or a release (leave) disposes of them. BYTES_REMOVED therefore means every
+  claimed copy was removed or verified absent and every other occupied location was decided by an Administrator.
+* **Enumeration only on the verified volume.** `checkUnexpected` verifies the configured archive and volume
+  identity (through the same seam as `Presence`) before listing, and again after listing and before recording
+  anything derived from it; if either check fails nothing from the listing is recorded and the scan reports the
+  volume as unavailable (counted as a problem, retried by the next scan). Two fault points mark the boundaries.
+
+No migration: both are application rules.
+
+### Implemented (third round)
+
+| Finding | Correction | Regression tests (`Phase2AuditCorrectionsIT`) |
+|---|---|---|
+| **1. Former locations deleted on a hash match** (MAJOR) | Superseded generations (QUARANTINE_PENDING, UNRESOLVED), former locations and open records are classified with no trusted hash; only an attestation (whose record's lock destruction holds) removes their object, and a release leaves it. A record closed in the completion transaction says what happened: DESTROYED only when this pass deleted the object, ABSENT when it was already gone. | `v0022_anObjectAtAFormerLocationIsNeverDeletedOnAHashMatchWithoutACurrentClaim` (matching and non-matching bytes; repeated recovery and destruction; the owned current generation removed meanwhile; attestation -> removed, release -> left; then BYTES_REMOVED), `v0022_aSupersededGenerationWithTheAuthoritativeBytesIsNotDeletedWithoutAttestation`, `v0021_aReleasedObjectWithTheAuthoritativeBytesIsNeverDeleted` |
+| **2. Enumeration on an unverified volume** (MINOR) | `checkUnexpected` confirms this archive's marker for this volume before listing and again before recording anything derived from the listing; otherwise it records VOLUME_UNAVAILABLE ("nothing from that listing was recorded") and the next scan retries. Fault points `BEFORE_ENUMERATION`, `AFTER_ENUMERATION`. | `v0022_unexpectedObjectsAreEnumeratedOnlyOnTheConfiguredVolume` (substituted before and during enumeration; restored volume reports the stray object) |
+
+**Authorization matrix verification (finding 3).** For every deletion path the five conditions are checked
+independently (none stands in for another):
+
+| Path | 1. Ownership / authorization | 2. Identity evidence | 3. Disposition state | 4. Volume identity | 5. Accounting |
+|---|---|---|---|---|---|
+| Current generation | CURRENT generation of DESTROY_PENDING content (destruction request) | authoritative SHA-256 | no release of the location | `Presence` before examining and deleting | removed / verified absent -> counts; else unresolved |
+| Former generations and other former locations | none | (not consulted) | release -> left; attestation -> may be removed | as above | unresolved until attested or released |
+| Superseded generation (QP / UNRESOLVED) | generation record only (no current claim on the bytes) | attestation only | as above | as above | as above |
+| Operation-created copies | live operation claim + destruction request | `OperationCopies` | no release of the location | as above | removed; otherwise claim -> unresolved |
+| Quarantine objects | QUARANTINED ledger entry with trusted basis; attested moves also need the record they resolved | the move's recorded SHA-256 | no release of the location | as above | removed (ledger REMOVED); released -> ledger stays QUARANTINED |
+| Attested objects in place | attestation + the record's operation lock held by the destruction | attested SHA-256 | open, attested record | as above | record DESTROYED in the completion transaction |
+| Repair cleanup / supersession | nothing deleted | - | MISSING / UNRESOLVED by verified presence | as above; otherwise the repair waits | - |
+| Cancellation | live claim | `OperationCopies` | - | as above | moved to quarantine, never deleted |
+| Crash recovery (interrupted moves) | the recorded intent; attested moves need a current attestation | the intent's SHA-256 | no unsettled conflicting decision | as above | single final disposition in the settle transaction |
 
 ## Remaining limitations (unchanged scope decisions)
 

@@ -49,7 +49,11 @@ public interface FaultPoints {
         /** Repair: the superseded location was inspected, before the commit transaction (V0019 audit). */
         AFTER_SUPERSEDED_INSPECTION,
         /** An unresolved record: absence verified under its operation's lock, before it is recorded closed. */
-        BEFORE_ABSENCE_RECORDED
+        BEFORE_ABSENCE_RECORDED,
+        /** Integrity scan: before managed storage is listed for unexpected objects (keyed by the scan id). */
+        BEFORE_ENUMERATION,
+        /** Integrity scan: storage listed, before anything derived from the listing is recorded (scan id). */
+        AFTER_ENUMERATION
     }
 
     FaultPoints NONE = (point, operationId) -> { };

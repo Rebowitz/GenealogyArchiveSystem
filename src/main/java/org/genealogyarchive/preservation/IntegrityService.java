@@ -332,7 +332,21 @@ public final class IntegrityService {
         // Unresolved objects are already recorded (and counted by checkUnresolved), not unaccounted for.
         accounted.addAll(ctx.unresolved().openPaths(volume.volumeId()));
         try {
-            for (ManagedVolume.Entry entry : volume.listOriginals()) {
+            // Third V0019 audit: list only the configured volume, and record nothing from the listing unless that
+            // volume is still the one mounted afterwards. Otherwise another volume's objects would be attributed to
+            // this archive; the scan reports the volume as unavailable instead and the next scan retries.
+            ctx.faults().reach(FaultPoints.Point.BEFORE_ENUMERATION, scanId);
+            if (!Presence.isThisVolume(ctx, volume)) {
+                volumeNotConfirmed(scanId, volume, counts);
+                return;
+            }
+            List<ManagedVolume.Entry> listed = volume.listOriginals();
+            ctx.faults().reach(FaultPoints.Point.AFTER_ENUMERATION, scanId);
+            if (!Presence.isThisVolume(ctx, volume)) {
+                volumeNotConfirmed(scanId, volume, counts);
+                return;
+            }
+            for (ManagedVolume.Entry entry : listed) {
                 if (entry.kind() == ManagedVolume.Entry.Kind.LINK_OR_REPARSE) {
                     record(scanId, new IntegrityRepository.NewFinding(FindingKind.LINK_OR_REPARSE, volume.volumeId(), null,
                             null, entry.path().value(), null, null, null,
@@ -349,6 +363,12 @@ public final class IntegrityService {
                     "originals", null, null, null, "Managed storage could not be listed (" + e.getClass().getSimpleName() + ")"),
                     counts);
         }
+    }
+
+    private void volumeNotConfirmed(UUID scanId, ManagedVolume volume, int[] counts) {
+        record(scanId, new IntegrityRepository.NewFinding(FindingKind.VOLUME_UNAVAILABLE, volume.volumeId(), null, null, null,
+                null, null, null, "The configured volume's identity could not be confirmed at its root while managed storage "
+                + "was listed (it may have been unmounted or replaced). Nothing from that listing was recorded."), counts);
     }
 
     private void checkStaging(UUID scanId, int[] counts) {
