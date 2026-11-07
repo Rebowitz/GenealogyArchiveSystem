@@ -120,6 +120,34 @@ public final class DestructionProcessor {
         return ids;
     }
 
+    /**
+     * Stops every unfinished repair of the destroyed content (GAS-P2-R01), under its lock, so none can
+     * write, commit or move bytes after removal. A copy one of them created (and only such a copy) is
+     * removed below with the content's other copies; an object it did not create is left untouched.
+     */
+    private void stopUnfinishedRepairs(FileOperation op) {
+        for (FileOperation w : ctx.operations().writersOfContent(op.contentId())) {
+            if (w.kind() != OperationKind.REPAIR || !STOPPABLE.contains(w.state())) {
+                continue;
+            }
+            String message = stoppedRepairMessage(op.operationId(), w);
+            if (ctx.operations().transition(w.operationId(), w.state(), OperationState.CANCELLED, message,
+                    Map.of("message", message))) {
+                ctx.operations().note(op.operationId(), "unfinished repair " + w.operationId() + " (" + w.state()
+                        + ") stopped");
+                ctx.staging().ifPresent(staging -> {
+                    try {
+                        if (staging.delete(w.operationId())) {
+                            ctx.operations().markStagingCleaned(w.operationId());
+                        }
+                    } catch (IOException e) {
+                        // recovery retries the clean-up of a final operation's staged bytes
+                    }
+                });
+            }
+        }
+    }
+
     /** Why an unfinished repair was stopped by destruction (intent or removal), and what of it remains. */
     static String stoppedRepairMessage(UUID destruction, FileOperation w) {
         String copy = w.targetPath() == null ? "nothing was written"
