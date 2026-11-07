@@ -366,6 +366,38 @@ No migration. The lifecycle uses the V0019 columns (attestation, status, resolut
 a deterministic path; synchronization uses the existing operation advisory locks; presence and former-location
 accounting are application rules over the existing `unresolved_object` table. V0001-V0019 are unchanged.
 
+### Implemented
+
+| Finding | Correction | Regression tests (`Phase2AuditCorrectionsIT`) |
+|---|---|---|
+| **1. Attestation executed after release** (MAJOR) | `UnresolvedObjects.release` takes the record's operation lock (refused while a worker or destruction holds it) and, under the record's row lock, is refused once an attested move was recorded (message names its state and destination); otherwise it resolves the record and writes an operation event in the same transaction. `quarantineAttested` holds that lock from re-reading the authorization through the intent, rename and settlement. `QuarantineMoves.settle` re-validates an attested move (record still open, attested, same hash) before any rename, so recovery never resurrects a released authorization. Destruction holds the locks of every open record of the content and deletes an attested object only for records whose locks it holds; it trusts an attested ledger hash only together with a record resolved QUARANTINED for that hash. | `v0020_aReleaseBeforeExecutionMeansNoWorkerRetryOrRecoveryMovesTheObject`, `v0020_aReleaseDuringExecutionIsRefusedAndCannotInvalidateTheMove` (release attempted at three points inside the execution), `v0020_afterAWorkerCrashTheRecordedMoveIsFinishedAndAReleaseIsRefusedWithItsDisposition` (crash, restarts, repeated recovery), `v0020_staleAuthorizationIsNeverResurrectedByRecoveryNorInheritedByDestruction` |
+| **2. Repair inspection-to-commit race** (MAJOR) | The inspection decides only the commit; destruction re-inspects every former location (historical generation paths, operation targets, ledger sources, removed quarantine paths). Empty or authoritative bytes: nothing of the content remains there. A released object: reported. Anything else: `unresolved_object` (OBJECT_AT_VACATED_LOCATION), untouched, `CLEANUP_INCOMPLETE`. Scans report objects at historical locations as unexpected. New fault point `AFTER_SUPERSEDED_INSPECTION`. | `v0020_anObjectAppearingBetweenTheRepairsInspectionAndCommitIsNeverExcludedFromCleanup` (barrier at the boundary), `v0020_theAuthoritativeBytesAtAFormerLocationAreRemovedWithTheContent`, `gasP2_IV01_anUnrelatedObjectAtAMissingGenerationsOldPathSurvivesDestruction` and `…aRepairStoppedAfterItsCommitLeaves…` (object after repair completion, before destruction) |
+| **3. Filesystem access failures** (MAJOR) | `Presence` probes PRESENT / VERIFIED_ABSENT / UNKNOWN component by component through `FaultPoints.stat`; absence only from "no such file" while the volume marker is still there. Used by integrity scans (UNKNOWN -> UNREADABLE, no MISSING), unresolved-record closing, repair inspection and promotion, quarantine move intent and settlement, cancellation, downloads and destruction. `ManagedVolume.locate`, `listOriginals` and `StagingArea` treat only "no such file" as missing. | `v0020_anInaccessibleOriginalIsNeverRecordedMissing` (permission, I/O error, parent directory, vanished mount), `v0020_anUnresolvedRecordIsNotClosedByAnInconclusiveInspection`, `v0020_aRepairDoesNotCommitWhileTheSupersededLocationCannotBeExamined`, `v0020_aQuarantineMoveIsNotSettledAsSourceAbsentWhileItsSourceCannotBeExamined`, `v0020_destructionNeverReportsBytesRemovedWhileACopyCannotBeExamined` |
+| **4. Attestation atomicity** (MINOR) | Attestation, operation event and job in one transaction under the record's row lock; a repeated attestation returns the existing one without a second job or event. | `v0020_attestationAuditEventAndJobAreOneTransactionAndRepeatsAreIdempotent` (job insert made to fail: nothing remains) |
+
+Access failures are injected through the fault seam (`ScriptedFaults.denyAccess`, `failIo`, `vanish`), so the
+tests behave identically on Windows and Linux and under any account's privileges.
+
+**Lifecycle verification (finding 5).**
+
+| Transition | Authoritative database state | Physical state | Authorization evidence | Audit event | Recovery |
+|---|---|---|---|---|---|
+| Attestation -> job -> execution -> quarantine | record ATTESTED; ledger INTENDED at `att-<record>`; then record RESOLVED QUARANTINED + generation QUARANTINED + ledger QUARANTINED in one transaction | object at its location; renamed into quarantine; verified after the rename | attestation of the observed SHA-256, re-read under the operation lock; settle re-validates | operation events: attested, moved | `reconcileAll` settles the intent only while the attestation is current; the job re-runs harmlessly |
+| Attestation -> release -> queued retry | record RESOLVED NOT_ARCHIVAL; generation MISSING; no ledger entry | object left where it is | none (released); release refused once an intent exists | operation event: released, attestation withdrawn | the job and recovery find the record resolved and do nothing |
+| Repair inspection -> retirement -> destruction | generation MISSING (absent) or UNRESOLVED + record (present) | whatever is there at destruction time | authoritative SHA-256 only | repair resolution; destruction message | destruction re-inspects every former location; unidentified objects become records; CLEANUP_INCOMPLETE until resolved |
+| Access failure -> recovery -> reinspection | unchanged (no MISSING, record open, intent INTENDED, CLEANUP_INCOMPLETE) | unchanged | none needed: nothing is decided | UNREADABLE finding / operation note | retried each pass; decides once the probe is conclusive |
+| Worker crash -> restart -> reconciliation | intent INTENDED (or nothing) | before or after the rename | the intent's recorded evidence plus current attestation | note of the interrupted attempt | settle finishes or refuses visibly; never moves under a released authorization |
+| Unresolved object -> Administrator resolution -> destruction | record RESOLVED (NOT_ARCHIVAL / QUARANTINED / ABSENT / DESTROYED) | released: untouched; attested: quarantined or removed | named Administrator, reason, time on the record | operation event | destruction completes only when no open record remains |
+
+**Remaining limitations (this round).**
+* An attested move whose source object changed after its intent was recorded cannot be released (a move was
+  recorded) and cannot be settled (the object differs): it stays visibly blocked until the object is removed or
+  restored, after which recovery settles it.
+* The probe examines attributes; between a conclusive probe and the following action a local writer can still
+  change the filesystem (the accepted P2-E residual race).
+* The access-failure tests inject failures at the probe; real permission behaviour is not exercised by tests,
+  because it differs between platforms and privileged accounts.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback
