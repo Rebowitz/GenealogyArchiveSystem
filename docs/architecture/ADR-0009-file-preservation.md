@@ -128,6 +128,19 @@ workers from driving the same operation.
   refuses if an unheld repair has started, and cancels unfinished repairs. A repair creates its copy and
   records ownership in one transaction holding the content row in share mode after re-reading its state, so
   no repair byte is created after the intent commits.
+- **Single owner and physical evidence (V0016, structural):** each location has exactly one owner at a time.
+  An operation owns only a copy it created and has not committed; the commit records the copy as a
+  generation and ends the operation's claim in the same transaction. The database checks at commit, for
+  every INSERT and UPDATE of operations and generations, that no operation claims a location any generation
+  records. Generations carry their own physical evidence: `vacated` is set in the same statement that
+  records content as MISSING (the finding is written in the same transaction) and cleared only when the
+  bytes are verified again; content cannot go from MISSING to DAMAGED, and a vacated generation can never
+  be QUARANTINE_PENDING. An object that appears at a vacated location is reported as unexpected and never
+  quarantined, adopted or deleted; destruction removes a vacated location only if the object there is
+  verifiably the content. Quarantine intents record the moved object's size and last-modified time; an
+  interrupted move is finished only for that object, otherwise nothing is moved and the operation reports
+  it. Recovery reconciles an interrupted or legacy missing recording (open MISSING finding, content still
+  ACTIVE) before settling moves or processing operations; destruction does the same for its content.
 - Unfinished repairs of the content are part of that accounting (GAS-P2-R01). Removal first takes the lock
   of every unfinished operation on the content and of every owner of an unsettled quarantine move of it
   (if one is busy, removal waits and is retried), then stops each unfinished repair (`CANCELLED`, with the

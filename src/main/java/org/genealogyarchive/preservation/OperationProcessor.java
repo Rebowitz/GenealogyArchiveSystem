@@ -498,6 +498,8 @@ public final class OperationProcessor {
                 return false;
             }
             Instant now = ctx.clock().instant();
+            // One owner at a time (V0016): the committed copy now belongs to its generation, not to this operation.
+            ctx.operations().releaseTarget(op.operationId(), op.targetPath());
             ctx.contents().insert(op.contentId(), op.volumeId(), op.expectedSize(), op.expectedSha256(),
                     op.operationId(), op.targetGeneration(), PortableRelativePath.of(op.targetPath()), now);
             insertFile(op, fileId, op.contentId(), mediaType, false);
@@ -555,8 +557,16 @@ public final class OperationProcessor {
                 return false;
             }
             int old = content.currentGeneration();
+            // V0016: only a location the archive still holds bytes at (damaged, not vacated) has a copy to
+            // quarantine. A vacated location is retired as MISSING whatever is found there now: an object that
+            // appeared after the bytes left is not the archive's and is never moved or adopted.
+            boolean vacated = ctx.contents().generations(content.contentId()).stream()
+                    .anyMatch(g -> g.generation() == old && g.vacated());
             ctx.contents().setGenerationState(content.contentId(), old, GenerationState.CURRENT,
-                    content.state() == ContentState.DAMAGED ? GenerationState.QUARANTINE_PENDING : GenerationState.MISSING, null);
+                    content.state() == ContentState.DAMAGED && !vacated ? GenerationState.QUARANTINE_PENDING
+                            : GenerationState.MISSING, null);
+            // One owner at a time: the committed copy now belongs to its generation, not to this operation.
+            ctx.operations().releaseTarget(op.operationId(), op.targetPath());
             ctx.contents().addGeneration(content.contentId(), op.targetGeneration(), content.volumeId(),
                     PortableRelativePath.of(op.targetPath()), GenerationState.CURRENT, op.operationId());
             ctx.contents().setState(content.contentId(), content.state(), ContentState.ACTIVE);
@@ -631,7 +641,8 @@ public final class OperationProcessor {
                 }
             } catch (IOException e) {
                 ctx.operations().note(op.operationId(), "damaged generation " + g.generation()
-                        + " could not be moved to quarantine yet (" + e.getClass().getSimpleName() + "); it remains accounted for");
+                        + " could not be moved to quarantine yet (" + e.getClass().getSimpleName()
+                        + (e.getMessage() == null ? "" : ": " + e.getMessage()) + "); it remains accounted for");
                 return false;
             }
         }

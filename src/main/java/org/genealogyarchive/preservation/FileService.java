@@ -365,10 +365,13 @@ public final class FileService {
             Optional<Path> located = volume.locate(content.currentPath());
             if (located.isEmpty() || !Files.exists(located.get(), LinkOption.NOFOLLOW_LINKS)) {
                 // GAS-P2-007: a missing directory above the original is missing content too (repairable).
-                ctx.integrity().insertFindingIfNew(null, new org.genealogyarchive.data.IntegrityRepository.NewFinding(
-                        FindingKind.MISSING, content.volumeId(), content.contentId(), content.currentGeneration(),
-                        content.currentPath().value(), null, null, null, "Stored original not found when a download was requested."));
-                ctx.contents().setState(content.contentId(), ContentState.ACTIVE, ContentState.MISSING);
+                // V0016: the finding and the content state (which vacates the location) are one transaction.
+                ctx.tx().executeWithoutResult(status -> {
+                    ctx.integrity().insertFindingIfNew(null, new org.genealogyarchive.data.IntegrityRepository.NewFinding(
+                            FindingKind.MISSING, content.volumeId(), content.contentId(), content.currentGeneration(),
+                            content.currentPath().value(), null, null, null, "Stored original not found when a download was requested."));
+                    ctx.contents().setState(content.contentId(), ContentState.ACTIVE, ContentState.MISSING);
+                });
                 throw new RuleViolationException("This File's stored original is missing. The problem has been recorded.");
             }
             Path path = located.get();

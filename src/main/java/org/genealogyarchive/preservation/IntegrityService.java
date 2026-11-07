@@ -177,13 +177,40 @@ public final class IntegrityService {
             // the original is missing, so it can be repaired.
             Optional<Path> located = volume.locate(content.currentPath());
             if (located.isEmpty() || !Files.exists(located.get(), LinkOption.NOFOLLOW_LINKS)) {
-                record(scanId, finding(FindingKind.MISSING, content, null, null, located.isEmpty()
+                IntegrityRepository.NewFinding missing = finding(FindingKind.MISSING, content, null, null, located.isEmpty()
                         ? "Expected stored original not found at " + where + " (a directory above it is missing)"
-                        : "Expected stored original not found at " + where), counts);
-                ctx.contents().setState(content.contentId(), ContentState.ACTIVE, ContentState.MISSING);
+                        : "Expected stored original not found at " + where);
+                // V0016: the finding and the content state (which vacates the location) are one transaction.
+                ctx.tx().executeWithoutResult(status -> {
+                    record(scanId, missing, counts);
+                    try {
+                        ctx.faults().reach(FaultPoints.Point.AFTER_MISSING_FINDING, content.contentId());
+                    } catch (IOException e) {
+                        throw new java.io.UncheckedIOException(e);
+                    }
+                    ctx.contents().setState(content.contentId(), ContentState.ACTIVE, ContentState.MISSING);
+                });
                 return;
             }
             Path path = located.get();
+            if (content.state() == ContentState.MISSING) {
+                // V0016: the bytes left this location. Whatever is here now is not the archive's copy unless it is
+                // verifiably the content (full scan); otherwise it is reported as an unexpected object, never
+                // treated as damaged content (which a repair would quarantine) and never touched.
+                if (full && !SafeFiles.isLinkOrReparsePoint(path)) {
+                    ContentIo.Measurement m = ContentIo.measure(path);
+                    if (m.size() == content.byteSize() && m.sha256().equals(content.sha256())) {
+                        ctx.contents().markVerified(content.contentId(), ctx.clock().instant());
+                        reappeared(content, "The stored original is present again and matches its authoritative SHA-256.");
+                        return;
+                    }
+                }
+                record(scanId, new IntegrityRepository.NewFinding(FindingKind.UNEXPECTED_OBJECT, content.volumeId(), null,
+                        null, where, null, null, null, "An object is at the location of missing content " + content.contentId()
+                        + "; it is not the archived bytes (or could not be verified by this scan) and was left untouched."),
+                        counts);
+                return;
+            }
             if (SafeFiles.isLinkOrReparsePoint(path)) {
                 record(scanId, finding(FindingKind.LINK_OR_REPARSE, content, null, null,
                         "The stored original's location is a link or reparse point"), counts);
@@ -210,9 +237,6 @@ public final class IntegrityService {
                 }
                 ctx.contents().markVerified(content.contentId(), ctx.clock().instant());
             }
-            if (content.state() == ContentState.MISSING && full) {
-                reappeared(content, "The stored original is present again and matches its authoritative SHA-256.");
-            }
         } catch (SafeFiles.UnsafePathException e) {
             record(scanId, finding(FindingKind.LINK_OR_REPARSE, content, null, null,
                     "A directory above the stored original is a link, junction or reparse point"), counts);
@@ -223,7 +247,8 @@ public final class IntegrityService {
     }
 
     private void markDamaged(FileContent content) {
-        if (content.state() == ContentState.ACTIVE || content.state() == ContentState.MISSING) {
+        // Never from MISSING (V0016): an object at a vacated location is not damaged archive content.
+        if (content.state() == ContentState.ACTIVE) {
             ctx.contents().setState(content.contentId(), content.state(), ContentState.DAMAGED);
         }
     }

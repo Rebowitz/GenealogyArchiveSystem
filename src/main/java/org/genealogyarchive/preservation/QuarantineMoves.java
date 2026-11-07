@@ -12,7 +12,9 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.UUID;
 
 /**
@@ -45,9 +47,38 @@ final class QuarantineMoves {
     QuarantineRepository.Entry move(ManagedVolume volume, UUID operationId, UUID contentId, PortableRelativePath source,
                                     String suffix, QuarantineRepository.Reason reason) throws IOException {
         PortableRelativePath q = ManagedVolume.quarantinePath(operationId, suffix);
+        // V0016: the intent records which object is moved (size and last-modified time), so that an interrupted
+        // move is only ever finished for that object - never for one that appeared at either end later.
+        Optional<Path> at = volume.locate(source);
+        Optional<BasicFileAttributes> seen = Optional.empty();
+        if (at.isPresent() && Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
+            SafeFiles.requirePlainFile(at.get());
+            seen = Optional.of(Files.readAttributes(at.get(), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS));
+        }
         QuarantineRepository.Entry entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId,
-                source.value(), q.value(), reason);
+                source.value(), q.value(), reason, seen.map(BasicFileAttributes::size).orElse(null),
+                seen.map(a -> a.lastModifiedTime().to(TimeUnit.MICROSECONDS)).orElse(null));
+        ctx.faults().reach(FaultPoints.Point.AFTER_QUARANTINE_INTENT, operationId);
         return settle(volume, entry);
+    }
+
+    /** Thrown when the object at a move's source or destination is not the one the move was recorded for. */
+    static final class UnexplainedObjectException extends IOException {
+        UnexplainedObjectException(String message) {
+            super(message);
+        }
+    }
+
+    /** Whether the object at {@code path} is the one recorded when the move was intended. */
+    private static boolean isRecordedObject(QuarantineRepository.Entry entry, Path path) throws IOException {
+        if (!entry.hasEvidence()) {
+            // Only entries recorded before V0016 lack evidence; and an intent recorded when nothing was at the
+            // source has none either - then no object found later can be the one meant.
+            return entry.sourceSize() == null && entry.sourceModifiedMicros() == null && !entry.recordedAbsent();
+        }
+        BasicFileAttributes a = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        return a.isRegularFile() && a.size() == entry.sourceSize()
+                && a.lastModifiedTime().to(TimeUnit.MICROSECONDS) == entry.sourceModifiedMicros();
     }
 
     /** Finishes an INTENDED entry from the state on disk; other states are returned unchanged. */
@@ -63,6 +94,14 @@ final class QuarantineMoves {
         if (sourcePresent && destinationPresent) {
             throw new FileAlreadyExistsException(entry.quarantinePath(), entry.sourcePath(),
                     "both the object and its quarantine destination exist; nothing was moved");
+        }
+        if (sourcePresent && !isRecordedObject(entry, source.get())) {
+            throw new UnexplainedObjectException("the object now at " + entry.sourcePath() + " is not the one this move to "
+                    + entry.quarantinePath() + " was recorded for; it was not moved or adopted");
+        }
+        if (!sourcePresent && destinationPresent && !isRecordedObject(entry, destination)) {
+            throw new UnexplainedObjectException("the object at " + entry.quarantinePath() + " is not the one moved from "
+                    + entry.sourcePath() + "; nothing was confirmed");
         }
         QuarantineRepository.State outcome;
         String detail;

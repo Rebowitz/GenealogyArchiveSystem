@@ -199,8 +199,8 @@ public final class DestructionProcessor {
             }
             // Current physical inventory only: a location counts if a record says the bytes are there now.
             // Locations bytes were moved away from (or never reached) are historical and never deleted.
-            // A current location the archive recorded as missing is not evidence that whatever is there now is
-            // the content (IV01): it is removed only if it is verifiably the content's own bytes.
+            // A current location the archive recorded as vacated (V0016; or with an open MISSING finding) is not
+            // evidence that whatever is there now is the content: it is removed only if it verifiably is.
             Set<String> recordedMissing = new java.util.HashSet<>();
             for (IntegrityFinding finding : ctx.integrity().openFindingsFor(op.contentId())) {
                 if (finding.kind() == FindingKind.MISSING && finding.storagePath() != null) {
@@ -211,7 +211,12 @@ public final class DestructionProcessor {
             for (FileContentRepository.Generation g : ctx.contents().generations(op.contentId())) {
                 switch (g.state()) {
                     case CURRENT, QUARANTINE_PENDING -> {
-                        if (!recordedMissing.contains(g.storagePath()) || isTheContent(volume, g.storagePath(), content)) {
+                        boolean vacated = g.vacated() || recordedMissing.contains(g.storagePath());
+                        if (vacated && !g.vacated() && g.state() == GenerationState.CURRENT) {
+                            // An interrupted or legacy recording: reconcile it before anything is deleted.
+                            ctx.contents().markVacated(g.contentId(), g.generation());
+                        }
+                        if (!vacated || isTheContent(volume, g.storagePath(), content)) {
                             known.add(g.storagePath());
                         } else {
                             historical.add(g.storagePath());

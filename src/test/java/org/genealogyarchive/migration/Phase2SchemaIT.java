@@ -50,7 +50,7 @@ class Phase2SchemaIT {
         SchemaMigrator.MigrationReport report = current.migrate();
 
         assertThat(report.fromVersion()).isEqualTo("0008");
-        assertThat(report.migrationsApplied()).as("V0009-V0015").isEqualTo(7);
+        assertThat(report.migrationsApplied()).as("V0009-V0016").isEqualTo(8);
         assertThat(current.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
         assertThat(new PostMigrationValidator(ds, current).validate()).isEmpty();
     }

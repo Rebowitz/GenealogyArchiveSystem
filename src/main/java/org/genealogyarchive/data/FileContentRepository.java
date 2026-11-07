@@ -35,8 +35,12 @@ public final class FileContentRepository {
     };
 
     /** One physical generation. */
+    /**
+     * @param vacated the archive recorded that the bytes left {@code storagePath} (content MISSING); an object
+     *                found there later is not this generation's copy until verified (V0016)
+     */
     public record Generation(UUID contentId, int generation, UUID volumeId, String storagePath, GenerationState state,
-                             String quarantinePath, UUID operationId) {
+                             String quarantinePath, UUID operationId, boolean vacated) {
     }
 
     private final JdbcClient jdbc;
@@ -128,7 +132,7 @@ public final class FileContentRepository {
 
     public List<Generation> generations(UUID contentId) {
         return jdbc.sql("""
-                SELECT content_id, generation, volume_id, storage_path, state, quarantine_path, operation_id
+                SELECT content_id, generation, volume_id, storage_path, state, quarantine_path, operation_id, vacated
                   FROM gas.file_content_generation WHERE content_id = :id ORDER BY generation
                 """).param("id", contentId).query(GENERATION).list();
     }
@@ -149,10 +153,32 @@ public final class FileContentRepository {
                 .param("from", from.name()).update() == 1;
     }
 
+    /** Records that the bytes left a generation's location (V0016), for content no longer able to say MISSING. */
+    public void markVacated(UUID contentId, int generation) {
+        jdbc.sql("""
+                UPDATE gas.file_content_generation SET vacated = true, updated_at = clock_timestamp()
+                 WHERE content_id = :id AND generation = :gen AND state = 'CURRENT' AND NOT vacated
+                """).param("id", contentId).param("gen", generation).update();
+    }
+
+    /**
+     * Content still ACTIVE although an open MISSING finding records its current location as empty - an
+     * interrupted or legacy recording that recovery reconciles before anything else (V0016).
+     */
+    public List<UUID> activeButRecordedMissing() {
+        return jdbc.sql("""
+                SELECT DISTINCT c.content_id FROM gas.file_content c
+                  JOIN gas.file_content_generation g ON g.content_id = c.content_id AND g.state = 'CURRENT'
+                  JOIN gas.integrity_finding f ON f.content_id = c.content_id AND f.kind = 'MISSING' AND f.status = 'OPEN'
+                                              AND f.storage_path = g.storage_path
+                 WHERE c.state = 'ACTIVE'
+                """).query((rs, n) -> Rows.uuid(rs, "content_id")).list();
+    }
+
     /** Generations awaiting confirmation that their damaged bytes are in quarantine. */
     public List<Generation> quarantinePending() {
         return jdbc.sql("""
-                SELECT content_id, generation, volume_id, storage_path, state, quarantine_path, operation_id
+                SELECT content_id, generation, volume_id, storage_path, state, quarantine_path, operation_id, vacated
                   FROM gas.file_content_generation WHERE state = 'QUARANTINE_PENDING' ORDER BY created_at
                 """).query(GENERATION).list();
     }
@@ -167,7 +193,7 @@ public final class FileContentRepository {
     public Set<String> accountedPaths(UUID volumeId) {
         return Set.copyOf(jdbc.sql("""
                 SELECT storage_path FROM gas.file_content_generation
-                 WHERE volume_id = :v AND state IN ('CURRENT', 'QUARANTINE_PENDING')
+                 WHERE volume_id = :v AND state IN ('CURRENT', 'QUARANTINE_PENDING') AND NOT vacated
                 """).param("v", volumeId).query(String.class).list());
     }
 
@@ -178,5 +204,6 @@ public final class FileContentRepository {
 
     private static final RowMapper<Generation> GENERATION = (rs, n) -> new Generation(Rows.uuid(rs, "content_id"),
             rs.getInt("generation"), Rows.uuid(rs, "volume_id"), rs.getString("storage_path"),
-            GenerationState.valueOf(rs.getString("state")), rs.getString("quarantine_path"), Rows.uuid(rs, "operation_id"));
+            GenerationState.valueOf(rs.getString("state")), rs.getString("quarantine_path"), Rows.uuid(rs, "operation_id"),
+            rs.getBoolean("vacated"));
 }

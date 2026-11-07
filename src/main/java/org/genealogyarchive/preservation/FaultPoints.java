@@ -33,7 +33,11 @@ public interface FaultPoints {
         /** Repair: repaired generation committed, before the damaged copy is moved to quarantine. */
         BEFORE_QUARANTINE_MOVE,
         /** Any quarantine move: the object has been moved, before the move is recorded (GAS-P2-008). */
+        /** A quarantine move's intent (with the object's evidence) is committed; nothing has moved yet. */
+        AFTER_QUARANTINE_INTENT,
         AFTER_QUARANTINE_MOVE,
+        /** Integrity: inside the transaction recording content MISSING, after the finding, before the state. */
+        AFTER_MISSING_FINDING,
         /** Partial copy: its quarantine move is recorded, before the operation is replanned (GAS-P2-008). */
         AFTER_QUARANTINE_RECORDED
     }

@@ -104,6 +104,36 @@ request made while a repair of the same content is writing is refused with a mes
 
 Schema: new **V0015** (triggers and a one-time consistency update). V0001–V0014 unchanged.
 
+## Ownership consistency corrections (audited revision `0a563d4875cc2a03eafc71415b655792fd5959d9`)
+
+**Structural correction (explained before implementation).** The ownership representation was not
+sufficient: a location could be claimed in three places that drifted apart (an operation's
+`target_created`, a generation row, and content state MISSING). V0016 gives each location exactly one owner
+and puts the physical evidence on that owner:
+
+1. *One owner at a time.* An operation owns only an uncommitted copy; ownership passes to the generation in the
+   commit transaction (`commitNewContent`, `commitRepair`). A deferred constraint trigger on both tables
+   rejects, at commit, any state in which an operation claims a location a generation records - for every
+   INSERT/UPDATE, whatever code path or SQL issues it. Existing rows are corrected by the migration.
+2. *Generations carry missing evidence.* `file_content_generation.vacated` is set by trigger in the same
+   statement that records content MISSING (and the scan/download writes the finding in the same transaction),
+   cleared only on MISSING -> ACTIVE (after verification). MISSING -> DAMAGED is rejected by the database;
+   a vacated generation cannot be QUARANTINE_PENDING (check constraint).
+3. *Evidence for moves.* Quarantine intents record the source object's size and last-modified time; settling
+   moves or confirms only that object, otherwise raises `UnexplainedObjectException` (nothing moved, operation
+   reports it).
+
+| Finding | Root cause traced | Correction | Regression tests |
+|---|---|---|---|
+| **Repair adopted a foreign object** (MAJOR) | content MISSING -> object appears -> scan marks `MISSING -> DAMAGED` -> repair sets the old generation `QUARANTINE_PENDING` -> the foreign object is moved to quarantine and later destroyed | scans keep MISSING content MISSING and report the object as `UNEXPECTED_OBJECT` unless it verifies (then ACTIVE); repair retires a vacated generation as MISSING; moves require the recorded object | `v0016_aForeignObjectAppearingAtAMissingLocationBeforeRepairIsNeverAdopted` (QUICK and FULL scans, repair, destruction), `v0016_anObjectSwappedInDuringAnInterruptedQuarantineMoveIsNotMovedOrAdopted` (crash after the intent; recovery, worker and destruction refuse; finishes once removed), `v0016_anInterruptedQuarantineMoveOfTheRecordedObjectIsStillFinished` |
+| **Ownership retirement not atomic** (MAJOR) | the MISSING finding and the content state were separate transactions; a stale ingest claim then overrode destruction's verification | missing recording is one transaction (scan and download); vacated set by the same statement; ownership ends at commit; recovery and destruction reconcile an open MISSING finding on ACTIVE content before anything else | `v0016_recordingMissingContentIsAtomic` (crash between finding and state), `v0016_recoveryReconcilesAnInterruptedMissingRecordingBeforeAnythingIsDeleted`, `v0016_destructionReconcilesAnInterruptedMissingRecordingItself`, `v0016_ownershipPassesToTheGenerationWhenTheCopyIsCommitted` |
+| **V0015 enforcement incomplete** (MINOR) | V0015 checked only `UPDATE OF target_created` against retired generations | V0016 replaces it with the single-owner constraint on INSERT and UPDATE (of `target_created`, `target_path`, `volume_id`; generation `storage_path`, `volume_id`) checked at commit | `v0016_theDatabaseRefusesEveryStatementThatWouldOwnARecordedLocation` (direct SQL: UPDATE claim, UPDATE path onto a generation, INSERT claiming operation, INSERT generation at a claimed path, claim released before commit allowed, MISSING -> DAMAGED refused, vacated QUARANTINE_PENDING refused, vacated set/cleared by content state) |
+
+Every new test also checks the ownership invariants against the whole database (`assertOwnershipInvariants`).
+Test changed (stronger rule, not weakened): `gasP2_IV01_theDatabaseRefusesOwnershipOfARetiredLocation` now
+expects the single-owner refusal. Schema: new **V0016**; V0001–V0015 unchanged; `Phase2SchemaIT` expects 8
+Phase 2 migrations from the Phase 1 baseline.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback
