@@ -1431,9 +1431,8 @@ class Phase2AuditCorrectionsIT {
             assertThat(fx.operation(op.operationId()).state()).isNotEqualTo(OperationState.COMPLETED);
             assertThat(vacated).hasBinaryContent(b("foreign"));
         }
-        fx.preservation().recovery().runOnce();
-        fx.preservation().recovery().runOnce();
-        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        // V0019 audit: the foreign object at the former location keeps removal incomplete until released.
+        releasedThenCompleted(op, vacated, b("foreign"));
         assertThat(vacated).hasBinaryContent(b("foreign"));
         assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
     }
