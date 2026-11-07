@@ -46,6 +46,22 @@ final class QuarantineMoves {
     /** Records the intent, moves {@code source} into quarantine, and confirms it. */
     QuarantineRepository.Entry move(ManagedVolume volume, UUID operationId, UUID contentId, PortableRelativePath source,
                                     String suffix, QuarantineRepository.Reason reason) throws IOException {
+        return move(volume, operationId, contentId, source, suffix, null, reason);
+    }
+
+    /** Evidence, recorded before this move, of the object it is meant to move (V0018). */
+    record Evidence(long size, String sha256) {
+    }
+
+    /**
+     * Moves an object to quarantine. With {@code trusted} evidence - recorded earlier, such as when a damaged
+     * copy was found - the object must still match it: otherwise nothing is recorded or moved and the
+     * discrepancy is reported, and the intent carries the trusted evidence, never a fresh hash of the object.
+     * Without it, the object is the operation's own copy (its claim is the ownership evidence) and its hash
+     * at intent time identifies it for recovery.
+     */
+    QuarantineRepository.Entry move(ManagedVolume volume, UUID operationId, UUID contentId, PortableRelativePath source,
+                                    String suffix, Evidence trusted, QuarantineRepository.Reason reason) throws IOException {
         PortableRelativePath q = ManagedVolume.quarantinePath(operationId, suffix);
         // V0017: the intent records which object is moved - its size and the SHA-256 of its bytes (with its
         // last-modified time, for information) - so an interrupted move is only ever finished for an object with
@@ -55,9 +71,20 @@ final class QuarantineMoves {
         if (at.isPresent() && Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
             SafeFiles.requirePlainFile(at.get());
             BasicFileAttributes seen = Files.readAttributes(at.get(), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            ContentIo.Measurement m = ContentIo.measure(at.get());
-            entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId, source.value(), q.value(), reason,
-                    m.size(), seen.lastModifiedTime().to(TimeUnit.MICROSECONDS), m.sha256());
+            Optional<QuarantineRepository.Entry> recorded = ctx.quarantine().find(volume.volumeId(), q.value());
+            if (recorded.isPresent()) {
+                // Already intended: its recorded evidence governs (settle verifies the object against it).
+                entry = recorded.get();
+            } else {
+                ContentIo.Measurement m = ContentIo.measure(at.get());
+                if (trusted != null && (m.size() != trusted.size() || !m.sha256().equals(trusted.sha256()))) {
+                    throw new UnexplainedObjectException("the object at " + source.value() + " is not the copy recorded "
+                            + "earlier (size and SHA-256 differ); it was not moved");
+                }
+                entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId, source.value(), q.value(), reason,
+                        trusted != null ? trusted.size() : m.size(), seen.lastModifiedTime().to(TimeUnit.MICROSECONDS),
+                        trusted != null ? trusted.sha256() : m.sha256());
+            }
         } else {
             entry = ctx.quarantine().intend(volume.volumeId(), operationId, contentId, source.value(), q.value(), reason,
                     null, null, null);

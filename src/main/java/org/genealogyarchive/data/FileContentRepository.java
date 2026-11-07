@@ -36,11 +36,18 @@ public final class FileContentRepository {
 
     /** One physical generation. */
     /**
-     * @param vacated the archive recorded that the bytes left {@code storagePath} (content MISSING); an object
-     *                found there later is not this generation's copy until verified (V0016)
+     * @param vacated        the archive recorded that the bytes left {@code storagePath} (content MISSING); an object
+     *                       found there later is not this generation's copy until verified (V0016)
+     * @param damagedSize    size of the copy when it was first found damaged (V0018)
+     * @param damagedSha256  its SHA-256 then - the trusted evidence of which object the damaged copy is
      */
     public record Generation(UUID contentId, int generation, UUID volumeId, String storagePath, GenerationState state,
-                             String quarantinePath, UUID operationId, boolean vacated) {
+                             String quarantinePath, UUID operationId, boolean vacated, Long damagedSize,
+                             String damagedSha256) {
+        /** Evidence recorded when this generation's copy was first found damaged (V0018); never replaced. */
+        public boolean hasDamageEvidence() {
+            return damagedSize != null && damagedSha256 != null;
+        }
     }
 
     private final JdbcClient jdbc;
@@ -132,7 +139,8 @@ public final class FileContentRepository {
 
     public List<Generation> generations(UUID contentId) {
         return jdbc.sql("""
-                SELECT content_id, generation, volume_id, storage_path, state, quarantine_path, operation_id, vacated
+                SELECT content_id, generation, volume_id, storage_path, state, quarantine_path, operation_id, vacated,
+                       damaged_size, damaged_sha256
                   FROM gas.file_content_generation WHERE content_id = :id ORDER BY generation
                 """).param("id", contentId).query(GENERATION).list();
     }
@@ -151,6 +159,17 @@ public final class FileContentRepository {
                  WHERE content_id = :id AND generation = :gen AND state = :from
                 """).param("to", to.name()).param("qpath", quarantinePath).param("id", contentId).param("gen", generation)
                 .param("from", from.name()).update() == 1;
+    }
+
+    /**
+     * Records the damaged copy's evidence once, when the damage is first detected (V0018). Never replaces
+     * evidence already recorded (the database refuses that too).
+     */
+    public void recordDamageEvidence(UUID contentId, int generation, long size, String sha256) {
+        jdbc.sql("""
+                UPDATE gas.file_content_generation SET damaged_size = :size, damaged_sha256 = :sha, updated_at = clock_timestamp()
+                 WHERE content_id = :id AND generation = :gen AND damaged_sha256 IS NULL
+                """).param("size", size).param("sha", sha256).param("id", contentId).param("gen", generation).update();
     }
 
     /** Records that the bytes left a generation's location (V0016), for content no longer able to say MISSING. */
@@ -177,7 +196,8 @@ public final class FileContentRepository {
     /** Generations awaiting confirmation that their damaged bytes are in quarantine. */
     public List<Generation> quarantinePending() {
         return jdbc.sql("""
-                SELECT content_id, generation, volume_id, storage_path, state, quarantine_path, operation_id, vacated
+                SELECT content_id, generation, volume_id, storage_path, state, quarantine_path, operation_id, vacated,
+                       damaged_size, damaged_sha256
                   FROM gas.file_content_generation WHERE state = 'QUARANTINE_PENDING' ORDER BY created_at
                 """).query(GENERATION).list();
     }
@@ -204,5 +224,5 @@ public final class FileContentRepository {
     private static final RowMapper<Generation> GENERATION = (rs, n) -> new Generation(Rows.uuid(rs, "content_id"),
             rs.getInt("generation"), Rows.uuid(rs, "volume_id"), rs.getString("storage_path"),
             GenerationState.valueOf(rs.getString("state")), rs.getString("quarantine_path"), Rows.uuid(rs, "operation_id"),
-            rs.getBoolean("vacated"));
+            rs.getBoolean("vacated"), rs.getObject("damaged_size", Long.class), rs.getString("damaged_sha256"));
 }

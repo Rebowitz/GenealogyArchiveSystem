@@ -636,8 +636,10 @@ public final class OperationProcessor {
                 }
                 ctx.faults().reach(FaultPoints.Point.BEFORE_QUARANTINE_MOVE, op.operationId());
                 // Ledger intent first (GAS-P2-006/-008): the damaged copy is accounted for at every moment.
+                // The intent records the trusted damage evidence, not a fresh hash of the object (V0018).
                 QuarantineRepository.Entry moved = quarantine.move(volume, op.operationId(), g.contentId(),
                         PortableRelativePath.of(g.storagePath()), suffix,
+                        g.hasDamageEvidence() ? new QuarantineMoves.Evidence(g.damagedSize(), g.damagedSha256()) : null,
                         QuarantineRepository.Reason.DAMAGED_GENERATION);
                 if (moved.state() == QuarantineRepository.State.QUARANTINED) {
                     ctx.contents().setGenerationState(g.contentId(), g.generation(), GenerationState.QUARANTINE_PENDING,
@@ -673,16 +675,14 @@ public final class OperationProcessor {
         if (at.isEmpty() || !Files.exists(at.get(), LinkOption.NOFOLLOW_LINKS)) {
             return Optional.empty();
         }
-        Optional<IntegrityFinding> damage = ctx.integrity().findingsFor(g.contentId()).stream()
-                .filter(f -> (f.kind() == FindingKind.HASH_MISMATCH || f.kind() == FindingKind.SIZE_MISMATCH)
-                        && Integer.valueOf(g.generation()).equals(f.generation()) && f.observedSha256() != null)
-                .reduce((first, second) -> second);
-        if (damage.isEmpty()) {
-            return Optional.of("no damage finding records the damaged copy's SHA-256");
+        // V0018: only the evidence recorded when the damage was first found identifies the damaged copy; the hash
+        // of whatever occupies the location now never does.
+        if (!g.hasDamageEvidence()) {
+            return Optional.of("no evidence of the damaged copy was recorded when the damage was found");
         }
         SafeFiles.requirePlainFile(at.get());
         ContentIo.Measurement m = ContentIo.measure(at.get());
-        if (m.size() != damage.get().observedSize() || !m.sha256().equals(damage.get().observedSha256())) {
+        if (m.size() != g.damagedSize() || !m.sha256().equals(g.damagedSha256())) {
             return Optional.of("the object there does not have the size and SHA-256 recorded when the damage was found");
         }
         return Optional.empty();

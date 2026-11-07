@@ -2244,4 +2244,153 @@ class Phase2AuditCorrectionsIT {
         sql().sql("UPDATE gas.file_operation SET target_created = false WHERE operation_id = :o").param("o", opA).update();
         assertOwnershipInvariants();
     }
+
+    // ---- V0018: trusted evidence for every destructive step; no false BYTES_REMOVED --------------------
+
+    private void assertStaysIncomplete(UUID destruction, Path untouched, byte[] bytes, ArchivalFile f) throws Exception {
+        for (int i = 0; i < 3; i++) {
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(destruction);
+            FileOperation d = fx.operation(destruction);
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+            assertThat(untouched).hasBinaryContent(bytes);
+            assertThat(content(f).state()).as("still accounted: not destroyed").isEqualTo(ContentState.DESTROY_PENDING);
+        }
+    }
+
+    @Test
+    void v0018_aCorruptedCurrentCopyKeepsDestructionIncompleteUntilResolved() throws Exception {
+        ArchivalFile f = ingestAs(fx.editor, "rotten.tif", b("baptisms 1802, corrupted, never scanned"), Restriction.NORMAL, null, null);
+        Path stored = fx.storedPath(f);
+        SafeFiles.clearReadOnly(stored);
+        byte[] corrupted = b("baptisms 1802, CORRUPTED, never scanned");
+        Files.write(stored, corrupted);
+
+        FileOperation op = destroy(f);
+        fx.preservation().destruction().process(op.operationId());
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+        assertThat(d.message()).contains(generation(f.contentId(), 1).storagePath(), "left untouched",
+                "matches neither the authoritative SHA-256");
+        assertThat(d.message()).doesNotContain("rotten.tif");
+        assertStaysIncomplete(op.operationId(), stored, corrupted, f);
+        assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.CURRENT);
+
+        // An Administrator inspects and removes it; then removal completes.
+        SafeFiles.clearReadOnly(stored);
+        Files.delete(stored);
+        fx.preservation().recovery().runOnce();
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(fx.operation(op.operationId()).outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(content(f).state()).isEqualTo(ContentState.DESTROYED);
+    }
+
+    @Test
+    void v0018_anInterruptedCleanupWithAnUnresolvedCopyNeverBecomesBytesRemoved() throws Exception {
+        Repaired r = corruptAndRepair("parish.tif", b("parish book, interrupted cleanup with an unresolved copy"));
+        fx.faults.crashAt(FaultPoints.Point.AFTER_VERIFY_BEFORE_COMMIT);
+        assertThatThrownBy(() -> fx.process(r.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        // The damaged current copy is replaced by something else after the damage was recorded.
+        Path current = onVolume(generation(r.contentId(), 1).storagePath());
+        SafeFiles.clearReadOnly(current);
+        byte[] other = b("not the recorded damaged copy");
+        Files.write(current, other);
+        FileOperation op = destroy(fx.file(r.fileId()));
+        fx.faults.crashAt(FaultPoints.Point.DURING_PHYSICAL_DELETE);
+        assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(fx.operation(op.operationId()).outcome()).isNotEqualTo("BYTES_REMOVED");
+        assertStaysIncomplete(op.operationId(), current, other, fx.file(r.fileId()));
+        assertThat(onVolume(fx.operation(r.repairOperation()).targetPath())).as("the owned repair copy was removed").doesNotExist();
+    }
+
+    @Test
+    void v0018_aLegacySettledQuarantineRecordNeverAuthorisesDeletingAReplacement() throws Exception {
+        ArchivalFile f = ingestAs(fx.editor, "legacyq.tif", b("legacy settled quarantine record"), Restriction.NORMAL, null, null);
+        UUID ingest = fx.preservation().context().operations().writersOfContent(f.contentId()).get(0).operationId();
+        String q = org.genealogyarchive.files.ManagedVolume.quarantinePath(ingest, "partial-g1").value();
+        // As settled before V0017: the ledger says the move completed, with no content evidence.
+        sql().sql("""
+                INSERT INTO gas.quarantine_object (quarantine_id, volume_id, operation_id, content_id, source_path,
+                                                   quarantine_path, reason, state)
+                VALUES (gen_random_uuid(), :v, :op, :c, :src, :q, 'PARTIAL_COPY', 'QUARANTINED')""")
+                .param("v", fx.volumeId).param("op", ingest).param("c", f.contentId())
+                .param("src", generation(f.contentId(), 1).storagePath() + ".old").param("q", q).update();
+        Path atQ = onVolume(q);
+        Files.createDirectories(atQ.getParent());
+        byte[] replacement = b("an unrelated object now at the recorded quarantine path");
+        Files.write(atQ, replacement);
+
+        FileOperation op = destroy(f);
+        fx.preservation().destruction().process(op.operationId());
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+        assertThat(d.message()).contains(q, "before content evidence was recorded");
+        assertThat(fx.storedPath(f)).as("the verified original was removed").doesNotExist();
+        assertStaysIncomplete(op.operationId(), atQ, replacement, f);
+
+        Files.delete(atQ);
+        fx.preservation().recovery().runOnce();
+        assertThat(fx.operation(op.operationId()).state()).isEqualTo(OperationState.COMPLETED);
+    }
+
+    @Test
+    void v0018_aQuarantinedCopyReplacedAfterItsMoveIsNotDeleted() throws Exception {
+        ArchivalFile f = repairedCompletely("quar.tif", b("deed, quarantined copy replaced"));
+        Path quarantined = onVolume(generation(f.contentId(), 1).quarantinePath());
+        SafeFiles.clearReadOnly(quarantined);
+        byte[] other = b("replacement in quarantine");
+        Files.write(quarantined, other);
+        FileOperation op = destroy(f);
+        fx.preservation().destruction().process(op.operationId());
+        assertThat(fx.operation(op.operationId()).message()).contains("does not have the SHA-256 recorded for the copy moved");
+        assertStaysIncomplete(op.operationId(), quarantined, other, f);
+        assertThat(filesUnder(fx.volumeRoot.resolve("originals"))).as("the verified current copy was removed").isEmpty();
+    }
+
+    @Test
+    void v0018_damageEvidenceIsKeptWhenAReplacementAppearsAndALaterScanRunsAndTheRepairDoesNotAdoptIt() throws Exception {
+        Repaired r = corruptAndRepair("evidence.tif", b("marriage bond, trusted damage evidence"));
+        FileContentRepository.Generation g1 = generation(r.contentId(), 1);
+        assertThat(g1.hasDamageEvidence()).isTrue();
+        Path location = onVolume(g1.storagePath());
+        SafeFiles.clearReadOnly(location);
+        byte[] replacement = b("an unrelated replacement of the damaged copy");
+        Files.write(location, replacement);
+
+        for (String kind : List.of("QUICK", "FULL")) {
+            fx.scan(fx.services(), kind);
+            FileContentRepository.Generation now = generation(r.contentId(), 1);
+            assertThat(now.damagedSha256()).as("%s scan: evidence from detection kept", kind).isEqualTo(g1.damagedSha256());
+            assertThat(now.damagedSize()).isEqualTo(g1.damagedSize());
+        }
+        assertThat(fx.preservation().integrity().openFindings(fx.admin, 50))
+                .anyMatch(x -> x.kind() == FindingKind.UNEXPECTED_OBJECT && location.equals(onVolume(x.storagePath())));
+        assertThatThrownBy(() -> sql().sql("""
+                UPDATE gas.file_content_generation SET damaged_sha256 = repeat('0', 64)
+                 WHERE content_id = :c AND generation = 1""").param("c", r.contentId()).update())
+                .hasMessageContaining("never replaced");
+
+        FileOperation repaired = fx.process(r.repairOperation());
+        assertThat(repaired.state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(generation(r.contentId(), 1).state()).as("retired, not quarantined").isEqualTo(GenerationState.MISSING);
+        assertThat(location).hasBinaryContent(replacement);
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        assertOwnershipInvariants();
+    }
+
+    @Test
+    void v0018_quarantineIntentsCarryTheTrustedDamageEvidenceNotAFreshHash() throws Exception {
+        Repaired r = corruptAndRepair("intent.tif", b("will, intent evidence"));
+        fx.faults.crashAt(FaultPoints.Point.AFTER_QUARANTINE_INTENT);
+        assertThatThrownBy(() -> fx.process(r.repairOperation())).isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        QuarantineRepository.Entry intent = fx.preservation().context().quarantine().forContent(r.contentId()).get(0);
+        FileContentRepository.Generation g1 = generation(r.contentId(), 1);
+        assertThat(intent.sourceSha256()).isEqualTo(g1.damagedSha256());
+        assertThat(intent.sourceSize()).isEqualTo(g1.damagedSize());
+        fx.preservation().recovery().runOnce();
+        assertThat(fx.operation(r.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(generation(r.contentId(), 1).state()).isEqualTo(GenerationState.QUARANTINED);
+    }
 }

@@ -3,6 +3,7 @@ package org.genealogyarchive.preservation;
 import org.genealogyarchive.access.AccessPolicy;
 import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.access.Permission;
+import org.genealogyarchive.data.FileContentRepository;
 import org.genealogyarchive.data.IntegrityRepository;
 import org.genealogyarchive.files.ManagedVolume;
 import org.genealogyarchive.files.StagingArea;
@@ -236,9 +237,8 @@ public final class IntegrityService {
                 // V0017: the damaged object's SHA-256 is recorded too - the evidence a later repair needs to show
                 // that what it moves to quarantine is this damaged copy and not something put there since.
                 ContentIo.Measurement damaged = ContentIo.measure(path);
-                record(scanId, finding(FindingKind.SIZE_MISMATCH, content, damaged.size(), damaged.sha256(),
+                damaged(scanId, content, damaged, finding(FindingKind.SIZE_MISMATCH, content, damaged.size(), damaged.sha256(),
                         "Stored size " + size + " differs from the authoritative " + content.byteSize() + " bytes"), counts);
-                markDamaged(content);
                 return;
             }
             if (!SafeFiles.isReadOnly(path)) {
@@ -248,9 +248,8 @@ public final class IntegrityService {
             if (full) {
                 ContentIo.Measurement m = ContentIo.measure(path);
                 if (!m.sha256().equals(content.sha256())) {
-                    record(scanId, finding(FindingKind.HASH_MISMATCH, content, m.size(), m.sha256(),
+                    damaged(scanId, content, m, finding(FindingKind.HASH_MISMATCH, content, m.size(), m.sha256(),
                             "SHA-256 of the stored original differs from the authoritative ingestion hash"), counts);
-                    markDamaged(content);
                     return;
                 }
                 ctx.contents().markVerified(content.contentId(), ctx.clock().instant());
@@ -264,11 +263,31 @@ public final class IntegrityService {
         }
     }
 
-    private void markDamaged(FileContent content) {
-        // Never from MISSING (V0016): an object at a vacated location is not damaged archive content.
-        if (content.state() == ContentState.ACTIVE) {
-            ctx.contents().setState(content.contentId(), content.state(), ContentState.DAMAGED);
-        }
+    /**
+     * Records damage. When ACTIVE content first becomes DAMAGED, the copy's size and SHA-256 are recorded on its
+     * generation in the same transaction (V0018): the trusted evidence of which object the damaged copy is.
+     * Never from MISSING (V0016), and never replacing evidence already recorded: if the bytes at a DAMAGED
+     * content's location are no longer the recorded damaged copy, that change is reported instead.
+     */
+    private void damaged(UUID scanId, FileContent content, ContentIo.Measurement observed, IntegrityRepository.NewFinding f,
+                         int[] counts) {
+        Optional<FileContentRepository.Generation> current = ctx.contents().generations(content.contentId()).stream()
+                .filter(g -> g.generation() == content.currentGeneration()).findFirst();
+        ctx.tx().executeWithoutResult(status -> {
+            record(scanId, f, counts);
+            if (content.state() == ContentState.ACTIVE
+                    && ctx.contents().setState(content.contentId(), ContentState.ACTIVE, ContentState.DAMAGED)) {
+                ctx.contents().recordDamageEvidence(content.contentId(), content.currentGeneration(), observed.size(),
+                        observed.sha256());
+            } else if (content.state() == ContentState.DAMAGED && current.isPresent() && current.get().hasDamageEvidence()
+                    && (observed.size() != current.get().damagedSize() || !observed.sha256().equals(current.get().damagedSha256()))) {
+                record(scanId, new IntegrityRepository.NewFinding(FindingKind.UNEXPECTED_OBJECT, content.volumeId(), null, null,
+                        content.currentPath().value(), null, observed.size(), observed.sha256(),
+                        "The object at the location of damaged content " + content.contentId() + " is no longer the damaged "
+                        + "copy recorded when the damage was found; that evidence is kept and this object is not the "
+                        + "archive's copy"), counts);
+            }
+        });
     }
 
     private void reappeared(FileContent content, String resolution) {

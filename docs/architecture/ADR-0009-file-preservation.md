@@ -160,6 +160,21 @@ workers from driving the same operation.
     copy is vouched for by its claim. Anything else is left and reported.
   - A MISSING original is restored to ACTIVE only when its bytes verify and it is already protected
     read-only; scans never change protection. Worker re-verification checks the bytes before it protects.
+- **Deletion and quarantine authorization (V0018).** For every physical copy:
+
+  | Copy | Record claiming it | Evidence identifying the object | Recorded | Destructive action allowed when |
+  |---|---|---|---|---|
+  | Current generation, content ACTIVE/DAMAGED | generation (CURRENT) | authoritative SHA-256; damaged-copy SHA-256 | at ingestion; at first damage detection (never replaced) | object absent, or its SHA-256 is one of these |
+  | Current generation, content MISSING (vacated) | none (location vacated) | authoritative SHA-256 only | at ingestion | object verifies; otherwise it is not the archive's: left, reported |
+  | Superseded damaged generation (QUARANTINE_PENDING) | generation | damaged-copy SHA-256 | at first damage detection | quarantine/delete only if it matches; otherwise left and reported |
+  | Quarantined generation / ledger entry | ledger (QUARANTINED) | hash recorded with the move (the damage evidence for damaged copies) | before the move | object absent or matches; a pre-V0017 record without a hash authorises nothing |
+  | Uncommitted copy of an operation | operation claim (`physical_location_owner`) | its exclusive create | at creation | deletion by destruction of the content |
+  | Anything else at a recorded or vacated location | none | - | - | never |
+
+  A claimed copy that cannot be shown to be the content's keeps destruction `CLEANUP_INCOMPLETE` (naming the
+  path and reason, visible only to Administrators); `BYTES_REMOVED` is recorded only when no claimed copy
+  remains. Path occupancy, a fresh hash of the current object, and historical ledger status are never
+  evidence.
 - Unfinished repairs of the content are part of that accounting (GAS-P2-R01). Removal first takes the lock
   of every unfinished operation on the content and of every owner of an unsettled quarantine move of it
   (if one is busy, removal waits and is retried), then stops each unfinished repair (`CANCELLED`, with the

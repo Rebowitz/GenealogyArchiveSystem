@@ -158,6 +158,25 @@ replacement between the hash and the rename is detected by re-hashing the destin
 replacement during that re-hash/move-back window, or by a local writer racing directory components, remains
 the accepted P2-E residual risk (native `openat`-style code would be needed).
 
+## V0017 audit corrections (audited revision `006081c0eb4630de1a17443f1f7e9c53f65d1d3e`)
+
+Three MAJOR, one MINOR; V0016/V0017 kept; new **V0018**.
+
+| Finding | Reproduced cause | Correction | Regression tests |
+|---|---|---|---|
+| **1. Legacy settled quarantine records** (MAJOR) | destruction treated a QUARANTINED ledger record without a hash as sufficient evidence | quarantined objects are deleted only if they match a hash recorded before now (move hash, or the damage evidence for a damaged generation); otherwise the cleanup stays `CLEANUP_INCOMPLETE` naming the path and reason | `v0018_aLegacySettledQuarantineRecordNeverAuthorisesDeletingAReplacement`, `v0018_aQuarantinedCopyReplacedAfterItsMoveIsNotDeleted` |
+| **2. False BYTES_REMOVED** (MAJOR) | a claimed copy that failed verification was only "reported" and destruction completed | a claimed copy that cannot be shown to be the content's is *unresolved*: left untouched, destruction stays `CLEANUP_INCOMPLETE` (content `DESTROY_PENDING`, generation unchanged) on every retry until an Administrator resolves it; vacated locations remain merely reported | `v0018_aCorruptedCurrentCopyKeepsDestructionIncompleteUntilResolved`, `v0018_anInterruptedCleanupWithAnUnresolvedCopyNeverBecomesBytesRemoved` |
+| **3. Trusted damage-hash evidence** (MAJOR) | repairs/destruction used the latest damage finding, and quarantine intents a fresh hash of whatever was at the path | the generation stores the size/SHA-256 seen when the damage was first detected (`damaged_size`/`damaged_sha256`, set in the transaction ACTIVE -> DAMAGED, never replaced - database trigger); later scans report a changed object instead; repair planning, quarantine intents (trusted evidence recorded, mismatch blocks before anything is recorded), recovery and destruction verify against it | `v0018_damageEvidenceIsKeptWhenAReplacementAppearsAndALaterScanRunsAndTheRepairDoesNotAdoptIt`, `v0018_quarantineIntentsCarryTheTrustedDamageEvidenceNotAFreshHash`; earlier v0017 replacement/swap tests kept |
+| **4. Legacy migration conflicts** (MINOR) | V0017's backfill used `ON CONFLICT DO NOTHING` | V0018 audits every operation and generation claim; any claim without its owner row stops the upgrade with a diagnostic (each operation/generation, location and current owner, plus the remedy); nothing is changed or chosen; re-running after resolution succeeds; V0018 also backfills damage evidence from the earliest damage finding | `Phase2SchemaIT.conflictingLegacyClaimsStopTheUpgradeWithADiagnosticAndNothingIsChosen` (repeated), `…anExistingPhase2InstallationUpgradesAndItsClaimsAreRecorded`, `…acceptedPhase1DatabaseUpgradesCleanlyToPhase2` (V0008 -> V0018) |
+
+Cross-cutting: ADR-0009 now has the deletion/quarantine authorization table (claiming record, evidence, when
+recorded, what is allowed). No path, current-object hash or historical ledger status is accepted as evidence.
+
+Remaining evidence limitations: the first damage observation is trusted as "the damaged copy" (an object
+replaced before any scan saw the damage cannot be told apart from damage); an operation's uncommitted copy
+is identified by its exclusive-create claim, not by a hash; pre-V0017 quarantined copies without a hash
+need Administrator resolution before their content can be fully destroyed.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback
