@@ -57,13 +57,20 @@ public final class ChangeHistoryRepository {
 
     /**
      * The most recent entries. With {@code excludeRestrictedFiles}, entries about Archival Files that are
-     * restricted now are left out before the limit is applied, so a reader without access to restricted
+     * restricted now (and, since Phase 3, restricted Archival Records and Citations of them) are left out before
+     * the limit is applied, so a reader without access to restricted
      * Files still gets a full page and learns nothing from gaps (Phase 2, P2-H/B2, GAS-P2-003).
      */
     public List<ChangeRecord> recent(int limit, boolean excludeRestrictedFiles) {
+        // Phase 3 (D3-04): entries about restricted Archival Records and Citations of them are left out the same way.
         String filter = excludeRestrictedFiles ? """
                  WHERE NOT (c.object_type = 'archival_file' AND EXISTS (
                        SELECT 1 FROM gas.archival_file a WHERE a.file_id = c.object_id AND a.restriction = 'RESTRICTED'))
+                   AND NOT (c.object_type = 'archival_record' AND EXISTS (
+                       SELECT 1 FROM gas.archival_record r WHERE r.record_id = c.object_id AND r.restriction = 'RESTRICTED'))
+                   AND NOT (c.object_type = 'citation' AND EXISTS (
+                       SELECT 1 FROM gas.citation t JOIN gas.archival_record r ON r.record_id = t.record_id
+                        WHERE t.citation_id = c.object_id AND r.restriction = 'RESTRICTED'))
                 """ : "";
         return group(jdbc.sql(SELECT + """
                  WHERE h.change_id IN (SELECT c.change_id FROM gas.change_history c

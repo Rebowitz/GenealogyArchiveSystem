@@ -1,0 +1,206 @@
+package org.genealogyarchive.data;
+
+import org.genealogyarchive.identity.FriendlyId;
+import org.genealogyarchive.records.CaptureRow;
+import org.genealogyarchive.records.CaptureSession;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.simple.JdbcClient;
+
+import javax.sql.DataSource;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+/** capture_session, file_capture_context and capture_session_group (V0021, V0022). */
+public final class CaptureSessionRepository {
+
+    public static final String OBJECT_TYPE = "capture_session";
+    public static final String PREFIX = "CS";
+
+    private static final String SESSION_COLUMNS = """
+            capture_session_id, friendly_number, title, repository_id, source_id, capture_date, researcher,
+            equipment_method, notes, created_at, row_version""";
+
+    private static final RowMapper<CaptureSession> SESSION = (rs, n) -> new CaptureSession(
+            Rows.uuid(rs, "capture_session_id"), new FriendlyId(PREFIX, rs.getLong("friendly_number"), 4).value(),
+            rs.getString("title"), Rows.uuid(rs, "repository_id"), Rows.uuid(rs, "source_id"),
+            rs.getObject("capture_date", LocalDate.class), rs.getString("researcher"), rs.getString("equipment_method"),
+            rs.getString("notes"), Rows.instant(rs, "created_at"), rs.getLong("row_version"));
+
+    private static final String ROW_COLUMNS = """
+            file_id, capture_session_id, sequence_number, override_repository_id, override_source_id,
+            override_capture_date, override_researcher, override_equipment_method, override_note, start_new_record,
+            record_group, page_designation, classification_code, applied_record_id, row_version""";
+
+    private static final RowMapper<CaptureRow> ROW = (rs, n) -> new CaptureRow(Rows.uuid(rs, "file_id"),
+            Rows.uuid(rs, "capture_session_id"), rs.getInt("sequence_number"), Rows.uuid(rs, "override_repository_id"),
+            Rows.uuid(rs, "override_source_id"), rs.getObject("override_capture_date", LocalDate.class),
+            rs.getString("override_researcher"), rs.getString("override_equipment_method"), rs.getString("override_note"),
+            rs.getBoolean("start_new_record"), rs.getString("record_group"), rs.getString("page_designation"),
+            rs.getString("classification_code"), Rows.uuid(rs, "applied_record_id"), rs.getLong("row_version"));
+
+    private final JdbcClient jdbc;
+
+    public CaptureSessionRepository(DataSource dataSource) {
+        this.jdbc = JdbcClient.create(dataSource);
+    }
+
+    /** Values of a session's correctable context. */
+    public record SessionFields(String title, UUID repositoryId, UUID sourceId, LocalDate captureDate, String researcher,
+                                String equipmentMethod, String notes) {
+    }
+
+    public void insert(UUID id, long number, SessionFields f, Instant at, UUID by) {
+        jdbc.sql("""
+                INSERT INTO gas.capture_session (capture_session_id, friendly_number, title, repository_id, source_id,
+                    capture_date, researcher, equipment_method, notes, created_at, created_by)
+                VALUES (:id, :n, :title, :repo, :source, :date, :researcher, :method, :notes, :at, :by)
+                """).param("id", id).param("n", number).param("title", f.title()).param("repo", f.repositoryId())
+                .param("source", f.sourceId()).param("date", f.captureDate()).param("researcher", f.researcher())
+                .param("method", f.equipmentMethod()).param("notes", f.notes()).param("at", Rows.param(at))
+                .param("by", by).update();
+    }
+
+    public Optional<CaptureSession> find(UUID id) {
+        return jdbc.sql("SELECT " + SESSION_COLUMNS + " FROM gas.capture_session WHERE capture_session_id = :id")
+                .param("id", id).query(SESSION).optional();
+    }
+
+    /** Locks the session row for the caller's transaction (serialises grouping and membership changes). */
+    public Optional<CaptureSession> lock(UUID id) {
+        return jdbc.sql("SELECT " + SESSION_COLUMNS + " FROM gas.capture_session WHERE capture_session_id = :id FOR UPDATE")
+                .param("id", id).query(SESSION).optional();
+    }
+
+    public Optional<CaptureSession> findByNumber(long number) {
+        return jdbc.sql("SELECT " + SESSION_COLUMNS + " FROM gas.capture_session WHERE friendly_number = :n")
+                .param("n", number).query(SESSION).optional();
+    }
+
+    public List<CaptureSession> list(UUID sourceId, int limit) {
+        return jdbc.sql("SELECT " + SESSION_COLUMNS + """
+                 FROM gas.capture_session WHERE (CAST(:source AS uuid) IS NULL OR source_id = :source)
+                 ORDER BY created_at DESC, friendly_number DESC LIMIT :n
+                """).param("source", sourceId).param("n", limit).query(SESSION).list();
+    }
+
+    public boolean update(UUID id, long expectedVersion, SessionFields f) {
+        return jdbc.sql("""
+                UPDATE gas.capture_session SET title = :title, repository_id = :repo, source_id = :source,
+                       capture_date = :date, researcher = :researcher, equipment_method = :method, notes = :notes,
+                       row_version = row_version + 1
+                 WHERE capture_session_id = :id AND row_version = :v
+                """).param("title", f.title()).param("repo", f.repositoryId()).param("source", f.sourceId())
+                .param("date", f.captureDate()).param("researcher", f.researcher()).param("method", f.equipmentMethod())
+                .param("notes", f.notes()).param("id", id).param("v", expectedVersion).update() == 1;
+    }
+
+    // ---- membership ------------------------------------------------------------------------------
+
+    public Optional<CaptureRow> row(UUID fileId) {
+        return jdbc.sql("SELECT " + ROW_COLUMNS + " FROM gas.file_capture_context WHERE file_id = :f").param("f", fileId)
+                .query(ROW).optional();
+    }
+
+    public Optional<CaptureRow> lockRow(UUID fileId) {
+        return jdbc.sql("SELECT " + ROW_COLUMNS + " FROM gas.file_capture_context WHERE file_id = :f FOR UPDATE")
+                .param("f", fileId).query(ROW).optional();
+    }
+
+    /** Every row of the session, in sequence order. */
+    public List<CaptureRow> rows(UUID sessionId) {
+        return jdbc.sql("SELECT " + ROW_COLUMNS + " FROM gas.file_capture_context WHERE capture_session_id = :s ORDER BY sequence_number")
+                .param("s", sessionId).query(ROW).list();
+    }
+
+    public int maxSequence(UUID sessionId) {
+        return jdbc.sql("SELECT coalesce(max(sequence_number), 0) FROM gas.file_capture_context WHERE capture_session_id = :s")
+                .param("s", sessionId).query(Integer.class).single();
+    }
+
+    /** @return false if the File already belongs to a session */
+    public boolean addRow(UUID fileId, UUID sessionId, int sequence, Instant at, UUID by) {
+        return jdbc.sql("""
+                INSERT INTO gas.file_capture_context (file_id, capture_session_id, sequence_number, added_at, added_by)
+                VALUES (:f, :s, :seq, :at, :by) ON CONFLICT (file_id) DO NOTHING
+                """).param("f", fileId).param("s", sessionId).param("seq", sequence).param("at", Rows.param(at))
+                .param("by", by).update() == 1;
+    }
+
+    public boolean removeRow(UUID fileId, long expectedVersion) {
+        return jdbc.sql("DELETE FROM gas.file_capture_context WHERE file_id = :f AND row_version = :v")
+                .param("f", fileId).param("v", expectedVersion).update() == 1;
+    }
+
+    /** Override values (null inherits). */
+    public record Overrides(UUID repositoryId, UUID sourceId, LocalDate captureDate, String researcher,
+                            String equipmentMethod, String note) {
+    }
+
+    public boolean updateOverrides(UUID fileId, long expectedVersion, Overrides o) {
+        return jdbc.sql("""
+                UPDATE gas.file_capture_context SET override_repository_id = :repo, override_source_id = :source,
+                       override_capture_date = :date, override_researcher = :researcher,
+                       override_equipment_method = :method, override_note = :note, row_version = row_version + 1
+                 WHERE file_id = :f AND row_version = :v
+                """).param("repo", o.repositoryId()).param("source", o.sourceId()).param("date", o.captureDate())
+                .param("researcher", o.researcher()).param("method", o.equipmentMethod()).param("note", o.note())
+                .param("f", fileId).param("v", expectedVersion).update() == 1;
+    }
+
+    /** Worksheet marks of one row (D3-02). */
+    public record Marks(boolean startNewRecord, String recordGroup, String pageDesignation, String classificationCode) {
+    }
+
+    public boolean updateMarks(UUID fileId, long expectedVersion, Marks m) {
+        return jdbc.sql("""
+                UPDATE gas.file_capture_context SET start_new_record = :start, record_group = :grp,
+                       page_designation = :page, classification_code = :cls, row_version = row_version + 1
+                 WHERE file_id = :f AND row_version = :v AND applied_record_id IS NULL
+                """).param("start", m.startNewRecord()).param("grp", m.recordGroup()).param("page", m.pageDesignation())
+                .param("cls", m.classificationCode()).param("f", fileId).param("v", expectedVersion).update() == 1;
+    }
+
+    /** Marks a row applied (only once). */
+    public boolean markApplied(UUID fileId, UUID recordId) {
+        return jdbc.sql("""
+                UPDATE gas.file_capture_context SET applied_record_id = :r, row_version = row_version + 1
+                 WHERE file_id = :f AND applied_record_id IS NULL
+                """).param("r", recordId).param("f", fileId).update() == 1;
+    }
+
+    /** Files ingested in an upload batch, in ingestion order (friendly number). */
+    public List<UUID> filesOfBatch(UUID batchId) {
+        return jdbc.sql("SELECT file_id FROM gas.archival_file WHERE batch_id = :b ORDER BY friendly_number")
+                .param("b", batchId).query((rs, n) -> Rows.uuid(rs, "file_id")).list();
+    }
+
+    /** A recent upload batch (no File counts: they could reveal restricted Files). */
+    public record BatchSummary(UUID batchId, Instant createdAt, String createdByLabel, String note) {
+    }
+
+    public List<BatchSummary> recentBatches(int limit) {
+        return jdbc.sql("""
+                SELECT b.batch_id, b.created_at, u.username, b.note
+                  FROM gas.file_upload_batch b JOIN gas.app_user u ON u.user_id = b.created_by
+                 ORDER BY b.created_at DESC LIMIT :n
+                """).param("n", limit).query((rs, n) -> new BatchSummary(Rows.uuid(rs, "batch_id"),
+                        Rows.instant(rs, "created_at"), rs.getString("username"), rs.getString("note"))).list();
+    }
+
+    // ---- explicit groups -------------------------------------------------------------------------
+
+    public Optional<UUID> groupRecord(UUID sessionId, String key) {
+        return jdbc.sql("SELECT record_id FROM gas.capture_session_group WHERE capture_session_id = :s AND group_key = :k")
+                .param("s", sessionId).param("k", key).query((rs, n) -> Rows.uuid(rs, "record_id")).optional();
+    }
+
+    public void insertGroup(UUID sessionId, String key, UUID recordId, Instant at) {
+        jdbc.sql("""
+                INSERT INTO gas.capture_session_group (capture_session_id, group_key, record_id, created_at)
+                VALUES (:s, :k, :r, :at)
+                """).param("s", sessionId).param("k", key).param("r", recordId).param("at", Rows.param(at)).update();
+    }
+}

@@ -37,12 +37,20 @@ public final class FileIdentifiers {
 
     /** The File friendly number a typed identifier resolves to, exactly as the lookup resolves it. */
     public static OptionalLong friendlyNumber(String text) {
+        return friendlyNumber(text, ArchivalFileRepository.PREFIX);
+    }
+
+    /**
+     * The friendly number a typed identifier resolves to for another object type's prefix (Phase 3: Archival
+     * Records), by exactly the same spelling rules as File IDs.
+     */
+    public static OptionalLong friendlyNumber(String text, String prefix) {
         if (text == null) {
             return OptionalLong.empty();
         }
         try {
             FriendlyId.Parsed parsed = FriendlyId.parse(text.strip().toUpperCase(Locale.ROOT));
-            return ArchivalFileRepository.PREFIX.equals(parsed.prefix()) ? OptionalLong.of(parsed.number()) : OptionalLong.empty();
+            return prefix.equals(parsed.prefix()) ? OptionalLong.of(parsed.number()) : OptionalLong.empty();
         } catch (IllegalArgumentException e) {
             return OptionalLong.empty();
         }
@@ -94,6 +102,15 @@ public final class FileIdentifiers {
      * </ul>
      */
     public static References referencesIn(String text) {
+        return referencesIn(text, ArchivalFileRepository.PREFIX);
+    }
+
+    /**
+     * Every identifier the text refers to, as {@link #referencesIn(String)} reads it, but with friendly IDs of the
+     * object type that uses {@code prefix} (Phase 3: Archival Records in Change History). The tokenization -
+     * including which characters belong to a UUID window - is identical, so the same text yields the same UUIDs.
+     */
+    public static References referencesIn(String text, String prefix) {
         Set<UUID> uuids = new LinkedHashSet<>();
         Set<Long> numbers = new LinkedHashSet<>();
         if (text == null || text.isEmpty()) {
@@ -128,7 +145,7 @@ public final class FileIdentifiers {
                 j++;
             }
             if (!partOfUuid) {
-                friendlyNumber(text.substring(i, j)).ifPresent(numbers::add);
+                friendlyNumber(text.substring(i, j), prefix).ifPresent(numbers::add);
             }
             i = j;
         }
