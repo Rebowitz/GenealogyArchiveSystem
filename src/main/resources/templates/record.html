@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head(${r.friendlyId()})}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1><span th:text="${r.friendlyId()}">R00001</span>
+        <span class="muted" th:text="${view.classificationLabel() ?: '(unclassified)'}">Deed</span></h1>
+    <section th:if="${r.lifecycle().name() == 'DELETED'}" class="status problem">
+        <h2>In recoverable deletion</h2>
+        <p>Its links, roles, citations and history are kept. Nothing about it can change until it is restored.</p>
+    </section>
+    <p th:if="${r.restricted()}"><strong>Restricted</strong> &mdash; visible only to Administrators.</p>
+    <dl class="facts">
+        <dt>Summary</dt><dd th:text="${r.summary() ?: '(none)'}">summary</dd>
+        <dt>Source</dt>
+        <dd><a th:if="${view.source().isPresent()}" th:href="@{/sources/{id}(id=${view.source().get().sourceId()})}"
+               th:text="${view.source().get().friendlyId() + ' ' + view.source().get().title()}">S</a>
+            <span th:unless="${view.source().isPresent()}" class="muted">(not recorded)</span></dd>
+        <dt>Book/page reference</dt><dd th:text="${r.sourceLocator() ?: '(not recorded)'}">locator</dd>
+        <dt>Record date (as written)</dt><dd th:text="${r.recordDateText() ?: '(not recorded)'}">date</dd>
+        <dt>Filing date (as written)</dt><dd th:text="${r.filingDateText() ?: '(not recorded)'}">date</dd>
+        <dt>Capture session</dt>
+        <dd><a th:if="${view.session().isPresent()}" th:href="@{/sessions/{id}(id=${view.session().get().captureSessionId()})}"
+               th:text="${view.session().get().friendlyId()}">CS</a>
+            <span th:unless="${view.session().isPresent()}" class="muted">(entered directly)</span></dd>
+        <dt>Created</dt><dd><span th:text="${r.createdAt()}">when</span> <span class="muted" th:text="${r.createdByLabel()}">who</span></dd>
+        <dt>Global ID</dt><dd><code th:text="${r.recordId()}">id</code></dd>
+    </dl>
+    <section>
+        <h2>Verbatim transcription <span class="label-note">(researcher-entered, exactly as written; not OCR)</span></h2>
+        <pre th:if="${r.transcriptionText() != null}" th:text="${r.transcriptionText()}">text</pre>
+        <p th:if="${r.transcriptionText() == null}" class="muted">None entered.</p>
+        <h2>Abstract <span class="label-note">(researcher-written summary; not the source's words)</span></h2>
+        <p th:if="${r.abstractText() != null}" th:text="${r.abstractText()}">text</p>
+        <p th:if="${r.abstractText() == null}" class="muted">None entered.</p>
+    </section>
+    <section>
+        <h2>Files</h2>
+        <p class="muted" th:if="${#lists.isEmpty(view.files())}">No Files linked.</p>
+        <table class="list" th:unless="${#lists.isEmpty(view.files())}">
+            <thead><tr><th>Image</th><th></th><th>File</th><th>Page (as in source)</th><th>Note</th><th th:if="${canEdit}"></th></tr></thead>
+            <tbody>
+            <tr th:each="lf, it : ${view.files()}">
+                <td th:text="${it.count}">1</td>
+                <td class="thumb"><img th:if="${lf.file().lifecycle().name() != 'DESTROYED'}"
+                                       th:src="@{/files/{id}/thumbnail(id=${lf.file().fileId()})}" alt="" loading="lazy"
+                                       onerror="this.style.display='none'"></td>
+                <td><a th:href="@{/files/{id}(id=${lf.file().fileId()})}" th:text="${lf.file().friendlyId()}">F</a>
+                    <span class="muted" th:if="${lf.file().lifecycle().name() != 'ACTIVE'}" th:text="${lf.file().lifecycle()}">DELETED</span></td>
+                <td th:text="${lf.link().pageDesignation()}">227</td>
+                <td th:text="${lf.link().note()}">note</td>
+                <td th:if="${canEdit}">
+                    <form th:action="@{/records/{id}/files/{f}(id=${r.recordId()}, f=${lf.file().fileId()})}" method="post" class="inline">
+                        <input type="hidden" name="version" th:value="${r.version()}">
+                        <input type="text" name="page" maxlength="50" th:value="${lf.link().pageDesignation()}" placeholder="page" size="6">
+                        <input type="text" name="note" maxlength="2000" th:value="${lf.link().note()}" placeholder="note" size="10">
+                        <button type="submit">Save</button>
+                    </form>
+                    <form th:action="@{/records/{id}/files/{f}/move(id=${r.recordId()}, f=${lf.file().fileId()})}" method="post" class="inline">
+                        <input type="hidden" name="version" th:value="${r.version()}">
+                        <button type="submit" name="direction" value="earlier">&uarr;</button>
+                        <button type="submit" name="direction" value="later">&darr;</button>
+                    </form>
+                    <form th:action="@{/records/{id}/files/{f}/unlink(id=${r.recordId()}, f=${lf.file().fileId()})}" method="post" class="inline">
+                        <input type="hidden" name="version" th:value="${r.version()}">
+                        <button type="submit">Unlink</button>
+                    </form>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+        <form th:if="${canEdit}" th:action="@{/records/{id}/files(id=${r.recordId()})}" method="post" class="inline">
+            <input type="hidden" name="version" th:value="${r.version()}">
+            <label>Link File <input type="text" name="file" placeholder="F00042" maxlength="20" required></label>
+            <label>Page <input type="text" name="page" maxlength="50" placeholder="227A" size="8"></label>
+            <label>Note <input type="text" name="note" maxlength="2000"></label>
+            <button type="submit">Link</button>
+        </form>
+    </section>
+    <section>
+        <h2>Roles <span class="label-note">(parties as written; no Persons are created)</span></h2>
+        <p class="muted" th:if="${#lists.isEmpty(view.roles())}">No roles recorded.</p>
+        <table class="list" th:unless="${#lists.isEmpty(view.roles())}">
+            <thead><tr><th>Role</th><th>Party as written</th><th>Note</th><th th:if="${canEdit}"></th></tr></thead>
+            <tbody>
+            <tr th:each="ro : ${view.roles()}">
+                <td th:text="${view.roleLabels()[ro.roleCode()] ?: ro.roleCode()}">Grantor</td>
+                <td th:text="${ro.partyAsWritten() ?: '(unreadable or not recorded)'}">party</td>
+                <td th:text="${ro.note()}">note</td>
+                <td th:if="${canEdit}">
+                    <form th:action="@{/records/{id}/roles/{ro}(id=${r.recordId()}, ro=${ro.roleId()})}" method="post" class="inline">
+                        <input type="hidden" name="version" th:value="${r.version()}">
+                        <input type="hidden" name="roleVersion" th:value="${ro.version()}">
+                        <select name="roleCode">
+                            <option th:value="${ro.roleCode()}" th:text="${view.roleLabels()[ro.roleCode()] ?: ro.roleCode()}" selected>current</option>
+                            <option th:each="t : ${activeRoles}" th:if="${t.code() != ro.roleCode()}" th:value="${t.code()}" th:text="${t.label()}">Grantee</option>
+                        </select>
+                        <input type="text" name="party" maxlength="500" th:value="${ro.partyAsWritten()}" size="14">
+                        <input type="text" name="note" maxlength="2000" th:value="${ro.note()}" size="10">
+                        <button type="submit">Save</button>
+                    </form>
+                    <form th:action="@{/records/{id}/roles/{ro}/remove(id=${r.recordId()}, ro=${ro.roleId()})}" method="post" class="inline">
+                        <input type="hidden" name="version" th:value="${r.version()}">
+                        <input type="hidden" name="roleVersion" th:value="${ro.version()}">
+                        <button type="submit">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+        <form th:if="${canEdit}" th:action="@{/records/{id}/roles(id=${r.recordId()})}" method="post" class="inline">
+            <input type="hidden" name="version" th:value="${r.version()}">
+            <select name="roleCode" required>
+                <option th:each="t : ${activeRoles}" th:value="${t.code()}" th:text="${t.label()}">Grantor</option>
+            </select>
+            <label>Party as written <input type="text" name="party" maxlength="500"></label>
+            <label>Note <input type="text" name="note" maxlength="2000"></label>
+            <button type="submit">Add role</button>
+        </form>
+    </section>
+    <section>
+        <h2>Citations</h2>
+        <p class="muted" th:if="${#lists.isEmpty(view.citations())}">No Citations of this Record.</p>
+        <ul><li th:each="c : ${view.citations()}"><a th:href="@{/citations/{id}(id=${c.citationId()})}" th:text="${c.friendlyId()}">CT</a>
+            <span th:text="${c.locator()}">locator</span> <strong th:if="${c.lifecycle().name() == 'DELETED'}">(deleted)</strong></li></ul>
+        <form th:if="${canEdit}" th:action="@{/citations}" method="post" class="form">
+            <input type="hidden" name="recordId" th:value="${r.recordId()}">
+            <label>Also cite Source (optional)
+                <select name="sourceId">
+                    <option value="">(Record only)</option>
+                    <option th:each="s : ${sources}" th:value="${s.sourceId()}" th:text="${s.friendlyId() + ' ' + s.title()}">S</option>
+                </select></label>
+            <label>Locator <input type="text" name="locator" maxlength="500"></label>
+            <label>Citation as entered <textarea name="citationText" maxlength="4000"></textarea></label>
+            <label>Note <input type="text" name="note" maxlength="2000"></label>
+            <button type="submit">Add citation of this Record</button>
+        </form>
+    </section>
+    <section th:if="${canEdit}">
+        <h2>Correct</h2>
+        <form th:action="@{/records/{id}(id=${r.recordId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${r.version()}">
+            <div th:replace="~{fragments :: recordFields(${r}, ${activeClassifications}, ${sources}, ${canRestrict})}"></div>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Save</button>
+        </form>
+    </section>
+    <section th:if="${canLifecycle}">
+        <form th:if="${r.lifecycle().name() == 'ACTIVE'}" th:action="@{/records/{id}/delete(id=${r.recordId()})}" method="post" class="inline">
+            <input type="hidden" name="version" th:value="${r.version()}">
+            <label>Reason <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Move to recoverable deletion</button>
+        </form>
+        <form th:if="${r.lifecycle().name() == 'DELETED'}" th:action="@{/records/{id}/restore(id=${r.recordId()})}" method="post" class="inline">
+            <input type="hidden" name="version" th:value="${r.version()}">
+            <label>Reason <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Restore</button>
+        </form>
+    </section>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

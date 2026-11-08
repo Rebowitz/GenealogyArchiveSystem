@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Archival Records')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Archival Records</h1>
+    <p>
+        <a th:if="${canEdit and !showingDeleted}" th:href="@{/records(deleted=true, classification=${classification})}">Include deleted records</a>
+        <a th:if="${showingDeleted}" th:href="@{/records(classification=${classification})}">Hide deleted records</a>
+    </p>
+    <form th:action="@{/records/find}" method="get" class="inline">
+        <label>Go to Record ID <input type="text" name="id" placeholder="R00001" maxlength="20"></label>
+        <button type="submit">Open</button>
+    </form>
+    <form th:action="@{/records}" method="get" class="inline">
+        <input type="hidden" name="deleted" th:value="${showingDeleted}">
+        <label>Classification
+            <select name="classification">
+                <option value="">(any)</option>
+                <option th:each="t : ${classifications}" th:value="${t.code()}" th:text="${t.label()}"
+                        th:selected="${t.code() == classification}">Deed</option>
+            </select></label>
+        <button type="submit">Filter</button>
+    </form>
+    <p class="muted" th:if="${#lists.isEmpty(records)}">No records.</p>
+    <table class="list" th:unless="${#lists.isEmpty(records)}">
+        <thead><tr><th>Record</th><th>Classification</th><th>Summary</th><th>Date (as written)</th><th>Status</th></tr></thead>
+        <tbody>
+        <tr th:each="r : ${records}">
+            <td><a th:href="@{/records/{id}(id=${r.recordId()})}" th:text="${r.friendlyId()}">R00001</a></td>
+            <td th:text="${r.classificationCode() == null ? '(unclassified)' : (labels[r.classificationCode()] ?: r.classificationCode())}">Deed</td>
+            <td th:text="${r.summary()}">summary</td>
+            <td th:text="${r.recordDateText()}">date</td>
+            <td><span th:if="${r.lifecycle().name() == 'DELETED'}">Deleted</span> <strong th:if="${r.restricted()}">Restricted</strong></td>
+        </tr>
+        </tbody>
+    </table>
+    <section th:if="${canEdit}">
+        <h2>New record</h2>
+        <p class="muted">Everything is optional; an incomplete Record is valid and can be completed later.</p>
+        <form th:action="@{/records}" method="post" class="form">
+            <div th:replace="~{fragments :: recordFields(${null}, ${activeClassifications}, ${sources}, ${canRestrict})}"></div>
+            <button type="submit">Create</button>
+        </form>
+    </section>
+</main>
+</body>
+</html>

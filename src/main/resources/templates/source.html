@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head(${s.friendlyId()})}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1><span th:text="${s.friendlyId()}">S00001</span> <span class="muted" th:text="${s.title()}">title</span></h1>
+    <dl class="facts">
+        <dt>Repository (custody)</dt>
+        <dd><a th:if="${repository != null}" th:href="@{/repositories/{id}(id=${repository.repositoryId()})}"
+               th:text="${repository.friendlyId() + ' ' + repository.name()}">RP</a>
+            <span th:if="${repository == null}" class="muted">(not recorded)</span></dd>
+        <dt>Source type</dt><dd th:text="${s.sourceType() ?: '(not recorded)'}">type</dd>
+        <dt>Book or volume</dt><dd th:text="${s.volumeDesignation() ?: '(not recorded)'}">vol</dd>
+        <dt>Historical creator (as written)</dt><dd th:text="${s.creatorText() ?: '(not recorded)'}">creator</dd>
+        <dt>Access Provider (as written)</dt><dd th:text="${s.accessProviderText() ?: '(not recorded)'}">provider</dd>
+        <dt>Jurisdiction (as written)</dt><dd th:text="${s.jurisdictionText() ?: '(not recorded)'}">jurisdiction</dd>
+        <dt>Notes</dt><dd th:text="${s.notes() ?: '(none)'}">notes</dd>
+        <dt>Global ID</dt><dd><code th:text="${s.sourceId()}">id</code></dd>
+    </dl>
+    <section>
+        <h2>Archival Records</h2>
+        <p class="muted" th:if="${#lists.isEmpty(records)}">No Records name this Source.</p>
+        <ul><li th:each="x : ${records}"><a th:href="@{/records/{id}(id=${x.recordId()})}" th:text="${x.friendlyId()}">R</a>
+            <span th:text="${x.classificationCode()}">DEED</span> <span th:text="${x.summary()}">summary</span></li></ul>
+    </section>
+    <section>
+        <h2>Capture sessions</h2>
+        <p class="muted" th:if="${#lists.isEmpty(sessions)}">No capture sessions name this Source.</p>
+        <ul><li th:each="c : ${sessions}"><a th:href="@{/sessions/{id}(id=${c.captureSessionId()})}" th:text="${c.friendlyId()}">CS</a>
+            <span th:text="${c.title()}">title</span></li></ul>
+    </section>
+    <section>
+        <h2>Citations</h2>
+        <p class="muted" th:if="${#lists.isEmpty(citations)}">No Citations of this Source.</p>
+        <ul><li th:each="c : ${citations}"><a th:href="@{/citations/{id}(id=${c.citationId()})}" th:text="${c.friendlyId()}">CT</a>
+            <span th:text="${c.locator()}">locator</span> <strong th:if="${c.lifecycle().name() == 'DELETED'}">(deleted)</strong></li></ul>
+        <form th:if="${canEdit}" th:action="@{/citations}" method="post" class="form">
+            <input type="hidden" name="sourceId" th:value="${s.sourceId()}">
+            <label>Locator (where in the Source) <input type="text" name="locator" maxlength="500"></label>
+            <label>Citation as entered <textarea name="citationText" maxlength="4000"></textarea></label>
+            <label>Note <input type="text" name="note" maxlength="2000"></label>
+            <button type="submit">Add citation of this Source</button>
+        </form>
+    </section>
+    <section th:if="${canEdit}">
+        <h2>Correct</h2>
+        <form th:action="@{/sources/{id}(id=${s.sourceId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${s.version()}">
+            <div th:replace="~{fragments :: sourceFields(${s}, ${repositories})}"></div>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Save</button>
+        </form>
+    </section>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

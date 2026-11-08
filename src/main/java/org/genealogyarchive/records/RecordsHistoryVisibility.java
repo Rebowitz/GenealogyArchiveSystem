@@ -21,6 +21,10 @@ import java.util.UUID;
  * history is read, after the File filter it wraps, so it follows the current restriction:
  * <ul>
  *   <li>entries about a restricted Record, or about a Citation of one, are removed;</li>
+ *   <li>an entry of a Record or Capture Session that is about one of its Files (it names the File in a {@code file}
+ *       field: linking, re-paging, moving, unlinking, adding to a session, worksheet marks) is removed whole when the
+ *       File filter withheld that File, so a hidden File's page designation, note, group or marks never show
+ *       (plan section 10.3);</li>
  *   <li>in the remaining entries a value or reason is withheld (simply absent) unless every Record it refers to is
  *       visible: an {@code R} friendly ID must name an existing unrestricted Record, and a UUID must not be a
  *       restricted Record's or such a Citation's.</li>
@@ -44,9 +48,22 @@ public final class RecordsHistoryVisibility implements HistoryVisibility {
         return inner.seesEverything(actor) && RecordAccess.seesRestrictedRecords(actor);
     }
 
+    /** Phase 3 objects whose entries can be about one of their Files. */
+    private static final Set<String> FILE_SCOPED = Set.of(ArchivalRecordRepository.OBJECT_TYPE,
+            org.genealogyarchive.data.CaptureSessionRepository.OBJECT_TYPE);
+
     @Override
     public List<ChangeRecord> visibleTo(Actor actor, List<ChangeRecord> history) {
-        List<ChangeRecord> filtered = inner.visibleTo(actor, history);
+        Set<UUID> aboutAFile = new HashSet<>();
+        for (ChangeRecord r : history) {
+            if (FILE_SCOPED.contains(r.objectType()) && r.fieldChanges().stream().anyMatch(f -> f.field().equals("file"))) {
+                aboutAFile.add(r.changeId());
+            }
+        }
+        List<ChangeRecord> filtered = inner.visibleTo(actor, history).stream()
+                .filter(r -> !aboutAFile.contains(r.changeId())
+                        || r.fieldChanges().stream().anyMatch(f -> f.field().equals("file")))
+                .toList();
         if (RecordAccess.seesRestrictedRecords(actor) || filtered.isEmpty()) {
             return filtered;
         }

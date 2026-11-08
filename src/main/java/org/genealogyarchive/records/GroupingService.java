@@ -44,6 +44,9 @@ import java.util.UUID;
  * a crash extend the same Record; applied rows are final, so nothing is linked twice. A group whose rows were edited
  * after planning stops at that chunk (earlier chunks stay valid) and is counted as conflicted. A group is recorded as
  * completed only by the chunk that applies its last row.
+ * <p><b>Stopping part-way (R-005).</b> A run may be bounded to the rows up to and including one File, so a researcher
+ * who has marked only the first part of a batch applies only that part; later rows stay unapplied, valid archived
+ * material, until they are marked and applied.
  * <p>One run per session at a time (advisory lock); a run left RUNNING by a process that stopped is closed as
  * INTERRUPTED by the next one. Nothing here touches preservation originals.
  */
@@ -102,10 +105,27 @@ public final class GroupingService {
         }
     }
 
-    /** Applies the session's worksheet. @return the run as recorded */
+    /** Applies the whole worksheet. @return the run as recorded */
     public GroupingRun apply(Actor actor, UUID sessionId) {
+        return apply(actor, sessionId, null);
+    }
+
+    /**
+     * Applies the worksheet up to and including the row of {@code throughFileId} (all rows when null). That File
+     * must be one of the session's rows the actor may see; otherwise it is "not found", as for a nonexistent File.
+     *
+     * @return the run as recorded
+     */
+    public GroupingRun apply(Actor actor, UUID sessionId, UUID throughFileId) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
         sessions.get(actor, sessionId);
+        if (throughFileId != null) {
+            boolean ok = ctx.sessions().row(throughFileId).filter(r -> r.captureSessionId().equals(sessionId)).isPresent()
+                    && ctx.files().find(throughFileId).filter(f -> RecordAccess.canSee(actor, f)).isPresent();
+            if (!ok) {
+                throw new NotFoundException("The file");
+            }
+        }
         Optional<OperationLocks.Held> held = ctx.locks().tryLock(LOCK_NAMESPACE, sessionId);
         if (held.isEmpty()) {
             throw new RuleViolationException("Grouping is already running for this capture session.");
@@ -118,7 +138,7 @@ public final class GroupingService {
                 ctx.runs().start(runId, sessionId, restrictedView, ctx.clock().instant(), actor.userId());
             });
             try {
-                Plan plan = plan(actor, sessionId);
+                Plan plan = plan(actor, sessionId, throughFileId);
                 int planned = 0;
                 int heldRows = 0;
                 int heldGroups = 0;
@@ -167,11 +187,16 @@ public final class GroupingService {
 
     // ---- planning --------------------------------------------------------------------------------
 
-    private Plan plan(Actor actor, UUID sessionId) {
+    private Plan plan(Actor actor, UUID sessionId, UUID throughFileId) {
         Map<String, Group> groups = new LinkedHashMap<>();
         Group current = null;
         int ungrouped = 0;
+        boolean reachedBound = false;
         for (CaptureRow row : ctx.sessions().rows(sessionId)) {
+            if (reachedBound) {
+                break;
+            }
+            reachedBound = row.fileId().equals(throughFileId);
             ArchivalFile file = ctx.files().find(row.fileId()).orElseThrow();
             boolean visible = RecordAccess.canSee(actor, file);
             if (row.applied()) {

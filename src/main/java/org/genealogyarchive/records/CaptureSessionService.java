@@ -371,7 +371,7 @@ public final class CaptureSessionService {
         });
     }
 
-    private static CaptureSessionRepository.Override<String> text(CaptureSessionRepository.Override<String> o,
+    private static CaptureSessionRepository.FieldOverride<String> text(CaptureSessionRepository.FieldOverride<String> o,
                                                                     String what, int max) {
         if (o.mode() != OverrideMode.VALUE) {
             return o;
@@ -380,7 +380,7 @@ public final class CaptureSessionService {
         if (clean == null) {
             throw new RuleViolationException(what + " override needs a value; choose \"not known for this File\" instead.");
         }
-        return CaptureSessionRepository.Override.of(clean);
+        return CaptureSessionRepository.FieldOverride.of(clean);
     }
 
     private static void overrideChanges(List<FieldChange> out, String field, OverrideMode modeBefore, OverrideMode modeAfter,

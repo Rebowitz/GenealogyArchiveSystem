@@ -5,6 +5,8 @@ import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.access.Permission;
 import org.genealogyarchive.data.ArchivalRecordRepository;
 import org.genealogyarchive.history.ChangeKinds;
+import org.genealogyarchive.history.ChangeRecord;
+import org.genealogyarchive.history.HistoryService;
 import org.genealogyarchive.history.FieldChange;
 import org.genealogyarchive.history.FieldClass;
 import org.genealogyarchive.identity.FriendlyId;
@@ -111,6 +113,11 @@ public final class CitationService {
                     changes, null);
             return ctx.records().citation(citationId).orElseThrow();
         });
+    }
+
+    public List<ChangeRecord> history(Actor actor, UUID citationId, HistoryService history) {
+        get(actor, citationId);
+        return history.forObject(actor, ArchivalRecordRepository.CITATION_TYPE, citationId);
     }
 
     private boolean visible(Actor actor, Citation c) {

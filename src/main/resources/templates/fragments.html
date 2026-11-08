@@ -13,11 +13,16 @@
     <nav th:if="${currentUser != null}">
         <a th:href="@{/archive}">Archive</a>
         <a th:href="@{/files}">Files</a>
+        <a th:href="@{/records}">Records</a>
+        <a th:href="@{/sources}">Sources</a>
+        <a th:href="@{/repositories}">Repositories</a>
+        <a th:href="@{/sessions}">Capture sessions</a>
         <a th:href="@{/volumes}">Storage volumes</a>
         <a th:href="@{/history}">Change history</a>
         <a th:if="${currentUser.role().name() == 'ADMINISTRATOR'}" th:href="@{/users}">Users</a>
         <a th:if="${currentUser.role().name() == 'ADMINISTRATOR'}" th:href="@{/operations}">Operations</a>
         <a th:if="${currentUser.role().name() == 'ADMINISTRATOR'}" th:href="@{/preservation}">Preservation</a>
+        <a th:if="${currentUser.role().name() == 'ADMINISTRATOR'}" th:href="@{/vocabularies}">Vocabularies</a>
         <a th:href="@{/account/password}">My password</a>
         <form class="inline" th:action="@{/logout}" method="post">
             <span class="who" th:text="${currentUser.displayName()} + ' (' + ${currentUser.role()} + ')'">user</span>
@@ -51,5 +56,68 @@
         </tbody>
     </table>
 </section>
+<div th:fragment="sourceFields(s, repositories)" class="form">
+    <label>Title <input type="text" name="title" maxlength="500" th:value="${s?.title()}" required></label>
+    <label>Repository (custody, optional)
+        <select name="repositoryId">
+            <option value="">(not recorded)</option>
+            <option th:each="r : ${repositories}" th:value="${r.repositoryId()}" th:text="${r.friendlyId() + ' ' + r.name()}"
+                    th:selected="${s != null and r.repositoryId() == s.repositoryId()}">RP</option>
+        </select></label>
+    <label>Source type <input type="text" name="sourceType" maxlength="200" th:value="${s?.sourceType()}" placeholder="Deed book"></label>
+    <label>Book or volume <input type="text" name="volumeDesignation" maxlength="200" th:value="${s?.volumeDesignation()}" placeholder="Book 12"></label>
+    <label>Historical creator, as written <textarea name="creatorText" maxlength="1000" th:text="${s?.creatorText()}"></textarea></label>
+    <label>Access Provider, as written <textarea name="accessProviderText" maxlength="1000" th:text="${s?.accessProviderText()}"></textarea></label>
+    <label>Jurisdiction, as written <textarea name="jurisdictionText" maxlength="1000" th:text="${s?.jurisdictionText()}"></textarea></label>
+    <label>Notes <textarea name="notes" maxlength="8000" th:text="${s?.notes()}"></textarea></label>
+</div>
+<div th:fragment="recordFields(r, classifications, sources, canRestrict)" class="form">
+    <label>Classification
+        <select name="classificationCode">
+            <option value="">(unclassified)</option>
+            <option th:if="${r != null and r.classificationCode() != null}" th:value="${r.classificationCode()}"
+                    th:text="${r.classificationCode()}" selected>current</option>
+            <option th:each="t : ${classifications}" th:if="${r == null or t.code() != r.classificationCode()}"
+                    th:value="${t.code()}" th:text="${t.label()}">Deed</option>
+        </select></label>
+    <label>Summary <input type="text" name="summary" maxlength="500" th:value="${r?.summary()}"></label>
+    <label>Source
+        <select name="sourceId">
+            <option value="">(not recorded)</option>
+            <option th:each="s : ${sources}" th:value="${s.sourceId()}" th:text="${s.friendlyId() + ' ' + s.title()}"
+                    th:selected="${r != null and s.sourceId() == r.sourceId()}">S</option>
+        </select></label>
+    <label>Book/page reference <input type="text" name="sourceLocator" maxlength="500" th:value="${r?.sourceLocator()}" placeholder="Book 12, p. 227"></label>
+    <label>Record date, as written <input type="text" name="recordDateText" maxlength="200" th:value="${r?.recordDateText()}" placeholder="the 3d day of March 1803"></label>
+    <label>Filing date, as written <input type="text" name="filingDateText" maxlength="200" th:value="${r?.filingDateText()}"></label>
+    <label>Verbatim transcription (exactly as written, researcher-entered)
+        <textarea class="long" name="transcriptionText" maxlength="100000" th:text="${r?.transcriptionText()}"></textarea></label>
+    <label>Abstract (researcher-written summary)
+        <textarea name="abstractText" maxlength="20000" th:text="${r?.abstractText()}"></textarea></label>
+    <label th:if="${canRestrict}">Restriction
+        <select name="restriction">
+            <option value="NORMAL" th:selected="${r == null or !r.restricted()}">Normal</option>
+            <option value="RESTRICTED" th:selected="${r != null and r.restricted()}">Restricted (Administrators only)</option>
+        </select></label>
+</div>
+<div th:fragment="sessionFields(c, repositories, sources)" class="form">
+    <label>Title <input type="text" name="title" maxlength="300" th:value="${c?.title()}" required placeholder="Augusta County courthouse, deed books 10-14"></label>
+    <label>Repository
+        <select name="repositoryId">
+            <option value="">(not recorded)</option>
+            <option th:each="r : ${repositories}" th:value="${r.repositoryId()}" th:text="${r.friendlyId() + ' ' + r.name()}"
+                    th:selected="${c != null and r.repositoryId() == c.repositoryId()}">RP</option>
+        </select></label>
+    <label>Source
+        <select name="sourceId">
+            <option value="">(not recorded)</option>
+            <option th:each="x : ${sources}" th:value="${x.sourceId()}" th:text="${x.friendlyId() + ' ' + x.title()}"
+                    th:selected="${c != null and x.sourceId() == c.sourceId()}">S</option>
+        </select></label>
+    <label>Capture date <input type="date" name="captureDate" th:value="${c?.captureDate()}"></label>
+    <label>Researcher <input type="text" name="researcher" maxlength="200" th:value="${c?.researcher()}"></label>
+    <label>Equipment or method <input type="text" name="equipmentMethod" maxlength="500" th:value="${c?.equipmentMethod()}"></label>
+    <label>Notes <textarea name="notes" maxlength="8000" th:text="${c?.notes()}"></textarea></label>
+</div>
 </body>
 </html>

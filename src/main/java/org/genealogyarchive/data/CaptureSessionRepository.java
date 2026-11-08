@@ -141,36 +141,36 @@ public final class CaptureSessionRepository {
     }
 
     /** One field's override: a mode, and a value present exactly in VALUE mode (plan section 10.2). */
-    public record Override<T>(OverrideMode mode, T value) {
-        public Override {
+    public record FieldOverride<T>(OverrideMode mode, T value) {
+        public FieldOverride {
             if ((mode == OverrideMode.VALUE) != (value != null)) {
                 throw new IllegalArgumentException("An override has a value exactly when its mode is VALUE");
             }
         }
 
-        public static <T> Override<T> inherit() {
-            return new Override<>(OverrideMode.INHERIT, null);
+        public static <T> FieldOverride<T> inherit() {
+            return new FieldOverride<>(OverrideMode.INHERIT, null);
         }
 
-        public static <T> Override<T> blank() {
-            return new Override<>(OverrideMode.BLANK, null);
+        public static <T> FieldOverride<T> blank() {
+            return new FieldOverride<>(OverrideMode.BLANK, null);
         }
 
-        public static <T> Override<T> of(T value) {
-            return new Override<>(OverrideMode.VALUE, value);
+        public static <T> FieldOverride<T> of(T value) {
+            return new FieldOverride<>(OverrideMode.VALUE, value);
         }
     }
 
     /** All of one File's overrides. */
-    public record Overrides(Override<UUID> repository, Override<UUID> source, Override<LocalDate> captureDate,
-                            Override<String> researcher, Override<String> equipmentMethod) {
+    public record Overrides(FieldOverride<UUID> repository, FieldOverride<UUID> source, FieldOverride<LocalDate> captureDate,
+                            FieldOverride<String> researcher, FieldOverride<String> equipmentMethod) {
 
         public static Overrides of(CaptureRow r) {
-            return new Overrides(new Override<>(r.repositoryMode(), r.overrideRepositoryId()),
-                    new Override<>(r.sourceMode(), r.overrideSourceId()),
-                    new Override<>(r.captureDateMode(), r.overrideCaptureDate()),
-                    new Override<>(r.researcherMode(), r.overrideResearcher()),
-                    new Override<>(r.equipmentMethodMode(), r.overrideEquipmentMethod()));
+            return new Overrides(new FieldOverride<>(r.repositoryMode(), r.overrideRepositoryId()),
+                    new FieldOverride<>(r.sourceMode(), r.overrideSourceId()),
+                    new FieldOverride<>(r.captureDateMode(), r.overrideCaptureDate()),
+                    new FieldOverride<>(r.researcherMode(), r.overrideResearcher()),
+                    new FieldOverride<>(r.equipmentMethodMode(), r.overrideEquipmentMethod()));
         }
     }
 

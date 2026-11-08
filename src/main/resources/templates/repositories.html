@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Repositories')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Repositories</h1>
+    <p class="muted">A Repository holds or stewards source material. It is not the creator of a record or an Access Provider.</p>
+    <form th:action="@{/repositories/find}" method="get" class="inline">
+        <label>Go to Repository ID <input type="text" name="id" placeholder="RP0001" maxlength="20"></label>
+        <button type="submit">Open</button>
+    </form>
+    <p class="muted" th:if="${#lists.isEmpty(repositories)}">No repositories yet.</p>
+    <table class="list" th:unless="${#lists.isEmpty(repositories)}">
+        <thead><tr><th>Repository</th><th>Name</th><th>Location</th></tr></thead>
+        <tbody>
+        <tr th:each="r : ${repositories}">
+            <td><a th:href="@{/repositories/{id}(id=${r.repositoryId()})}" th:text="${r.friendlyId()}">RP0001</a></td>
+            <td th:text="${r.name()}">name</td>
+            <td th:text="${r.locationText()}">where</td>
+        </tr>
+        </tbody>
+    </table>
+    <section th:if="${canEdit}">
+        <h2>New repository</h2>
+        <form th:action="@{/repositories}" method="post" class="form">
+            <label>Name <input type="text" name="name" maxlength="300" required></label>
+            <label>Address or location <input type="text" name="location" maxlength="1000"></label>
+            <label>Description <textarea name="description" maxlength="4000"></textarea></label>
+            <button type="submit">Create</button>
+        </form>
+    </section>
+</main>
+</body>
+</html>
