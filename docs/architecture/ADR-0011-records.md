@@ -1,9 +1,7 @@
 # ADR-0011: Repository, Source, Capture Session and Archival Record model (Phase 3)
 
 ## Status
-Proposed for owner review (WP0). It implements the decisions in plan §9 and defines the clarifications in
-plan §10 ([`PHASE-3-DECISIONS.md`](../PHASE-3-DECISIONS.md)). Coding starts only after owner approval
-(plan §11).
+Approved by owner 2026-11-08 (WP0), with two mandatory safeguards below. Phase 3 coding is authorized; merge, formal acceptance and tagging require separate owner approval. See [`PHASE-3-DECISIONS.md`](../PHASE-3-DECISIONS.md).
 
 ## Context
 Governing requirements:
@@ -96,8 +94,8 @@ See §9.
   - The marks of an applied row are final.
 - **Stable ordering.** Rows are ordered by `(sequence_number, file_id)`. Sequence numbers are unique per
   session (deferrable UNIQUE).
-- **Group rules.** These are applied over the rows the applying person can see (§8), skipping Files that are
-  not ACTIVE:
+- **Group rules.** These are applied over rows the applying person can see (§8), skipping Files that are
+  not ACTIVE, **only where restricted or omitted rows cannot change group boundaries**. A hidden Start New Record marker, explicit group assignment or other omitted boundary must never cause separate Records to be silently merged. Ambiguous groups are flagged and remain unapplied pending authorized resolution:
   1. A row with `record_group` joins that group. The explicit group wins over Start New Record.
   2. Otherwise, a Start New Record row starts a new group.
   3. Otherwise, a blank row continues the preceding row's group. If the preceding row is already applied, it
@@ -111,13 +109,13 @@ See §9.
     - `s:<file id>` for a group begun by a Start New Record row;
     - `r:<record id>` for continuing an existing Record.
   - `capture_session_group` permanently maps a session's explicit key to the Record it created.
-- **One transaction per group.** Each group commits on its own, and that one transaction:
+- **Bounded transaction processing.** Groups of up to 1,000 rows may commit in one transaction. Larger logical groups use a stable group-to-Record identity and durable progress checkpoints across multiple bounded transactions, with atomic row/link progress in each transaction. A crash or retry must never create duplicate Records or links. Each transaction:
   - creates or extends the Record;
   - inserts its links in order, with pages;
   - marks the rows applied, setting `applied_record_id` and `applied_run_id` (final, enforced by trigger);
   - writes a `grouping_run_group` completion row and the run's counters.
 
-  So a group is either wholly applied or not applied at all. A crash loses at most the group in progress.
+  For groups of up to 1,000 rows, application is atomic per group. For larger groups, committed chunks remain valid and identifiable as partial progress; an interrupted chunk rolls back atomically. The group must not be reported COMPLETED until all intended visible rows are applied. Never treat partial progress as a completed group.
 - **Replay.**
   - Every run plans again from the durable row state. Applied rows are final, so a retry never creates a second
     Record or link for them.
@@ -141,7 +139,7 @@ See §9.
     it manually.
   - Start and continuation groups never span runs. The only exception is a blank row that extends an applied
     row's Record (rule 3).
-- **Bounds.** A group may have at most 1,000 rows. A larger group is reported and not applied.
+- **Bounds.** At most 1,000 rows are processed in one transaction; this is not a maximum group or Record size. Larger groups must be processed in bounded, resumable chunks with stable Record identity, ordering and crash-safe progress.
 - **New Records.**
   - A Record created by grouping takes the session's Source and its group's first classification.
   - It is NORMAL, because restriction never propagates (D3-04). Its creation history names the session.
@@ -149,7 +147,9 @@ See §9.
   - before a group's transaction;
   - inside it, before commit;
   - after commit, before the next group;
-  - after the last group, before the run is finished.
+  - after the last group, before the run is finished;
+  - after a committed chunk of a group larger than 1,000 rows;
+  - with a restricted Start New Record or explicit-group boundary hidden from the applying user (must not silently merge Records).
 
   Each replay must have no duplicate Records or links, correct counts and an `INTERRUPTED` → new-run
   sequence.
@@ -216,7 +216,7 @@ See §9.
 | A NORMAL Record's Files | restricted Files omitted: no link, page designation, note, thumbnail or count. Positions are numbered among the visible Files, never by stored sequence |
 | Citations | Citations of a restricted Record are treated as nonexistent |
 | Capture Session worksheet and counts | restricted rows omitted; counts cover visible rows; positions renumbered |
-| Grouping | runs use only visible rows; restricted rows stay unapplied. Runs started by an Administrator are shown only to Administrators. A grouping-run group whose Record is restricted is omitted |
+| Grouping | runs use only visible rows **where omitted rows cannot affect archival grouping semantics**; ambiguous boundaries block or flag the affected group. Restricted rows stay unapplied for non-Administrators. Runs started by an Administrator are shown only to Administrators. A grouping-run group whose Record is restricted is omitted |
 | Saving marks or overrides for a hidden File | not found, exactly as for a nonexistent File |
 | Change History | entries about restricted Records and their Citations are removed. A value is withheld unless every `R`/`F` ID or UUID it names is visible (the File filter's tokenization, extended to `R`). Stored sequence numbers are not written to history |
 | Friendly-number gaps | valid (BUILD-SPEC §8). They are no more informative than the gaps from Phase 2 Files |
