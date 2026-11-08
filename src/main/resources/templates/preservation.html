@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Preservation')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>File preservation</h1>
+    <p class="status ok" th:if="${param.reverifyRequested != null}">Re-verification requested; the worker runs it shortly and the findings below update.</p>
+    <section th:class="${status.attentionNeeded()} ? 'status problem' : 'status ok'">
+        <p th:text="${status.ingestion()}">ingestion</p>
+        <p>Blocked: <span th:text="${status.blocked()}">0</span> &middot; Waiting for volume: <span th:text="${status.waiting()}">0</span>
+            &middot; Cleanup incomplete: <span th:text="${status.cleanupIncomplete()}">0</span>
+            &middot; Open integrity findings: <span th:text="${status.openFindings()}">0</span>
+            &middot; Unresolved objects: <span th:text="${status.unresolvedObjects()}">0</span></p>
+    </section>
+    <section>
+        <h2>Storage volumes</h2>
+        <table class="list">
+            <thead><tr><th>Name</th><th>Volume ID</th><th>Marker</th><th>Free space</th><th>Ingestion destination</th></tr></thead>
+            <tbody>
+            <tr th:each="v : ${status.volumes()}">
+                <td th:text="${v.volume().name()}">name</td>
+                <td><code th:text="${v.volume().volumeId()}">id</code></td>
+                <td th:text="${v.markerStatus()}">status</td>
+                <td th:text="${v.usableBytes() == null} ? '-' : ${v.usableBytes()} + ' bytes'">-</td>
+                <td><strong th:if="${v.ingestionTarget()}">Yes</strong></td>
+            </tr>
+            </tbody>
+        </table>
+        <form th:action="@{/preservation/ingestion-volume}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${archive.version()}">
+            <label>New uploads go to
+                <select name="volumeId" required>
+                    <option th:each="v : ${status.volumes()}" th:if="${v.usable()}" th:value="${v.volume().volumeId()}"
+                            th:text="${v.volume().name()}" th:selected="${v.ingestionTarget()}">volume</option>
+                </select></label>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Set ingestion volume</button>
+        </form>
+        <p class="muted">Volumes are initialized from the command line (<code>init-volume</code>), which writes the volume marker.</p>
+    </section>
+    <section>
+        <h2>Integrity scans</h2>
+        <form th:action="@{/preservation/scans}" method="post" class="inline">
+            <input type="hidden" name="kind" value="QUICK"><button type="submit">Quick scan (presence, size, protection)</button>
+        </form>
+        <form th:action="@{/preservation/scans}" method="post" class="inline">
+            <input type="hidden" name="kind" value="FULL"><button type="submit">Full scan (also re-hashes every original)</button>
+        </form>
+        <ul><li th:each="s : ${scans}"><a th:href="@{/preservation/scans/{id}(id=${s.scanId()})}"
+                th:text="${s.kind()} + ' ' + ${s.state()} + ' ' + ${s.requestedAt()}">scan</a>
+            <span class="muted" th:text="${s.contentsChecked()} + ' checked, ' + ${s.findingsCount()} + ' findings'">-</span></li></ul>
+    </section>
+    <section>
+        <h2>Open findings</h2>
+        <p class="muted" th:if="${#lists.isEmpty(findings)}">None.</p>
+        <table class="list" th:unless="${#lists.isEmpty(findings)}">
+            <thead><tr><th>Found</th><th>Kind</th><th>Detail</th><th></th></tr></thead>
+            <tbody>
+            <tr th:each="x : ${findings}">
+                <td th:text="${x.foundAt()}">when</td><td th:text="${x.kind()}">kind</td><td th:text="${x.detail()}">detail</td>
+                <td th:if="${x.contentId() != null}">
+                    <form th:action="@{/preservation/contents/{c}/reverify(c=${x.contentId()})}" method="post" class="inline">
+                        <button type="submit">Re-verify</button></form>
+                    <a th:href="@{/preservation/contents/{c}/repair(c=${x.contentId()})}">Repair</a></td>
+                <td th:if="${x.contentId() == null and x.operationId() != null}">
+                    <a th:href="@{/preservation/operations/{o}(o=${x.operationId()})}">Operation</a></td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+    <section>
+        <h2>Unresolved objects</h2>
+        <p class="muted">Objects at archive locations that the archive cannot identify as its own copy. They are never
+            moved or deleted automatically. Inspect each on its volume, then attest that it is the archive's copy (it is
+            moved to quarantine, or removed by a pending destruction, only while it is still exactly the object recorded:
+            same size, SHA-256, file times and file key where the system has one) or release it as not the archive's (it
+            stays where it is). Objects recorded before identity evidence was kept cannot be attested; release them.</p>
+        <p class="muted" th:if="${#lists.isEmpty(unresolved)}">None.</p>
+        <table class="list" th:unless="${#lists.isEmpty(unresolved)}">
+            <thead><tr><th>Found</th><th>Kind</th><th>Location</th><th>Observed</th><th>Detail</th><th></th></tr></thead>
+            <tbody>
+            <tr th:each="u : ${unresolved}">
+                <td th:text="${u.detectedAt()}">when</td><td th:text="${u.kind()}">kind</td>
+                <td><code th:text="${u.path()}">path</code></td>
+                <td><span th:if="${u.observedSha256() != null}" th:text="${u.observedSize()} + ' bytes, SHA-256 ' + ${u.observedSha256()}">-</span>
+                    <span th:if="${u.identityEvidence().name() == 'LEGACY'}" class="muted">(recorded before identity evidence was kept)</span>
+                    <strong th:if="${u.attested()}">Attested</strong></td>
+                <td th:text="${u.detail()}">detail</td>
+                <td>
+                    <form th:action="@{/preservation/unresolved/{id}/attest(id=${u.unresolvedId()})}" method="post" class="inline"
+                          th:if="${u.identityEvidence().name() == 'RECORDED' and !u.attested()}">
+                        <input type="text" name="reason" maxlength="2000" required placeholder="Reason">
+                        <button type="submit">Attest: archive's copy</button></form>
+                    <form th:action="@{/preservation/unresolved/{id}/release(id=${u.unresolvedId()})}" method="post" class="inline">
+                        <input type="text" name="reason" maxlength="2000" required placeholder="Reason">
+                        <button type="submit">Release: not the archive's</button></form>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+    <section>
+        <h2>Recent file operations</h2>
+        <table class="list">
+            <thead><tr><th>Started</th><th>Kind</th><th>State</th><th>File</th><th>By</th></tr></thead>
+            <tbody>
+            <tr th:each="o : ${operations}">
+                <td><a th:href="@{/preservation/operations/{id}(id=${o.operationId()})}" th:text="${o.createdAt()}">when</a></td>
+                <td th:text="${o.kind()}">k</td><td th:text="${o.state()}">s</td>
+                <td th:text="${o.originalFilename()}">name</td><td th:text="${o.actorLabel()}">who</td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+</main>
+</body>
+</html>

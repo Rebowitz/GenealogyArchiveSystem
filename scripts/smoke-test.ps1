@@ -1,6 +1,8 @@
 # Packaged-application smoke test (Windows): drives the built jar exactly as an administrator would -
 # check-config, status, migrate (twice), serve with readiness polling, worker start/stop - using a
-# Storage Volume root given as a native Windows path. Requires:
+# Storage Volume root given as a native Windows path. Phase 2: registers and initializes the volume,
+# uploads a file through the browser upload API, lets the worker archive it, and downloads it again
+# byte for byte. Requires:
 #   target\genealogy-archive.jar      (.\mvnw.cmd package or verify)
 #   GAS_SMOKE_DB_URL                  JDBC URL of an EMPTY database
 #   GAS_TEST_DB_USER, GAS_TEST_DB_PASSWORD
@@ -53,6 +55,34 @@ Expect-Exit 0 @('create-admin', '--username=smoke-admin')
 Remove-Item Env:GAS_NEW_ADMIN_PASSWORD
 Expect-Exit 0 @('status')
 
+# ---- Phase 2: Storage Volume registration and initialization (P2-C, P2-D) ----------------------
+$registered = & java -jar $Jar register-volume '--name=Primary' '--purpose=primary' $Config
+if ($LASTEXITCODE -ne 0) { Fail "register-volume exited $LASTEXITCODE" }
+$VolumeId = ($registered | Select-String -Pattern 'Volume ID\s*:\s*([0-9a-f-]{36})').Matches[0].Groups[1].Value
+if (-not $VolumeId) { Fail "register-volume printed no Volume ID" }
+New-Item -ItemType Directory -Path "$Work\staging", "$Work\cache" | Out-Null
+@"
+database:
+  url: '$($env:GAS_SMOKE_DB_URL)'
+  username: '$($env:GAS_TEST_DB_USER)'
+server:
+  bindAddress: 127.0.0.1
+  port: $Port
+logging:
+  format: json
+  directory: '$Work\logs'
+storageRoots:
+  '$VolumeId': '$Work\volume-primary'
+files:
+  stagingDirectory: '$Work\staging'
+  cacheDirectory: '$Work\cache'
+"@ | Set-Content -Path "$Work\installation.yml" -Encoding utf8
+Expect-Exit 0 @('check-config')
+Expect-Exit 0 @('init-volume', "--volume-id=$VolumeId")
+Expect-Exit 5 @('init-volume', "--volume-id=$VolumeId")   # a marker is never written twice
+if (-not (Test-Path "$Work\volume-primary\.genealogy-archive-volume")) { Fail "volume marker not written" }
+Expect-Exit 0 @('set-ingestion-volume', "--volume-id=$VolumeId")
+
 $web = Start-Process -FilePath 'java' -ArgumentList @('-jar', "`"$Jar`"", 'serve', "`"$Config`"") -PassThru -NoNewWindow
 $ready = $false
 for ($i = 0; $i -lt 90; $i++) {
@@ -80,6 +110,46 @@ if ($archivePage.Content -notmatch 'Smoke Test Archive') { Stop-Process -Id $web
 $anonymous = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/archive" -UseBasicParsing -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction SilentlyContinue
 if ($anonymous.StatusCode -ne 302) { Stop-Process -Id $web.Id -Force; Fail "archive page reachable without sign-in" }
 Write-Output "ok: local sign-in works and protects archive pages"
+
+# ---- Phase 2: browser upload -> worker -> verified, protected original -> download --------------
+$worker = Start-Process -FilePath 'java' -ArgumentList @('-jar', "`"$Jar`"", 'worker', "`"$Config`"") -PassThru -NoNewWindow
+try {
+    $scan = "$Work\scan.bin"
+    $bytes = New-Object byte[] 3145731
+    [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    [IO.File]::WriteAllBytes($scan, $bytes)
+    $uploadPage = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/files/upload" -WebSession $browser -UseBasicParsing
+    if ($uploadPage.Content -notmatch 'Uploads are stored on volume') { Fail "upload page does not report readiness" }
+    $token = [regex]::Match($uploadPage.Content, 'name="_csrf" value="([^"]+)"').Groups[1].Value
+    $batchResponse = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/files/batches" -Method Post -WebSession $browser -UseBasicParsing `
+        -Body @{ _csrf = $token; note = 'smoke test' } -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction SilentlyContinue
+    $batch = [regex]::Match([string]$batchResponse.Headers.Location, '/files/batches/([0-9a-f-]{36})').Groups[1].Value
+    if (-not $batch) { Fail "no upload batch created (redirect: $($batchResponse.Headers.Location))" }
+    $put = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/files/batches/$batch/items/smoke-1" -Method Put -WebSession $browser `
+        -UseBasicParsing -InFile $scan -ContentType 'application/octet-stream' -SkipHttpErrorCheck `
+        -Headers @{ 'X-CSRF-TOKEN' = $token; 'X-File-Name' = 'smoke%20scan%201.tif'; 'X-File-Last-Modified' = '1577934245000' }
+    $op = [regex]::Match($put.Content, '"operationId":"([0-9a-f-]{36})"').Groups[1].Value
+    if (-not $op) { Fail "upload not accepted: HTTP $($put.StatusCode) $($put.Content)" }
+    $fileId = $null
+    $st = ''
+    for ($i = 0; $i -lt 60; $i++) {
+        $st = (Invoke-WebRequest -Uri "http://127.0.0.1:$Port/files/operations/$op/status" -WebSession $browser -UseBasicParsing).Content
+        if ($st -match '"archived":true') { $fileId = [regex]::Match($st, '"fileId":"([0-9a-f-]{36})"').Groups[1].Value; break }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $fileId) { Fail "upload was not archived by the worker (last status: $st)" }
+    Invoke-WebRequest -Uri "http://127.0.0.1:$Port/files/$fileId/download" -WebSession $browser -UseBasicParsing -OutFile "$Work\downloaded.bin"
+    if ((Get-FileHash $scan).Hash -ne (Get-FileHash "$Work\downloaded.bin").Hash) { Fail "downloaded original differs from the uploaded bytes" }
+    $stored = Get-ChildItem "$Work\volume-primary\originals" -Recurse -File | Select-Object -First 1
+    if (-not $stored -or -not $stored.IsReadOnly) { Fail "stored original is not read-only" }
+    if ($stored.Name -match 'smoke') { Fail "stored filename derived from the uploaded name" }
+    for ($i = 0; $i -lt 20 -and (Get-ChildItem "$Work\staging" -Force); $i++) { Start-Sleep -Seconds 1 }
+    if (Get-ChildItem "$Work\staging" -Force) { Fail "staging not cleaned after archiving" }
+} finally {
+    Stop-Process -Id $worker.Id -Force -ErrorAction SilentlyContinue
+    $worker.WaitForExit()
+}
+Write-Output "ok: browser upload archived by the worker, protected, downloaded byte for byte"
 Stop-Process -Id $web.Id -Force   # graceful stop on Windows is exercised by the WinSW service test
 $web.WaitForExit()
 Write-Output "ok: web application started, ready, stopped"

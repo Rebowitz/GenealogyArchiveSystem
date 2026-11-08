@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Integrity scan')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1><span th:text="${scan.kind()}">FULL</span> integrity scan</h1>
+    <table>
+        <tr><th>State</th><td th:text="${scan.state()}">-</td></tr>
+        <tr><th>Requested</th><td th:text="${scan.requestedAt()}">-</td></tr>
+        <tr><th>Started</th><td th:text="${scan.startedAt()}">-</td></tr>
+        <tr><th>Finished</th><td th:text="${scan.finishedAt()}">-</td></tr>
+        <tr><th>Contents checked</th><td th:text="${scan.contentsChecked()}">0</td></tr>
+        <tr th:if="${scan.message() != null}"><th>Message</th><td th:text="${scan.message()}">-</td></tr>
+    </table>
+    <h2>Findings</h2>
+    <p class="muted" th:if="${#lists.isEmpty(findings)}">None.</p>
+    <ul><li th:each="x : ${findings}"><span th:text="${x.kind()}">k</span>: <span th:text="${x.detail()}">d</span>
+        <span class="muted" th:text="${x.open()} ? '(open)' : '(resolved: ' + ${x.resolution()} + ')'">-</span>
+        <span class="muted" th:if="${x.scanId() != scan.scanId()}">&mdash; first recorded by an earlier check, still present</span></li></ul>
+    <p><a th:href="@{/preservation}">Back to preservation</a></p>
+</main>
+</body>
+</html>

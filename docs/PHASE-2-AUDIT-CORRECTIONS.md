@@ -1,0 +1,811 @@
+# Phase 2 audit corrections
+
+Corrections for the independent Codex Phase 2 audit of implementation
+`438649f2d0a88cf861675c5cb8234f46ca607eaa` (reviewed head `587a79ea949447442b811cb01a1ea4051cb8198b`):
+9 MAJOR and 2 MINOR findings. **Phase 2 is not accepted**; the corrected commit goes back for an
+independent audit. PR #5 stays a draft and unmerged.
+
+Governing rules kept: V0001–V0013 unchanged (all schema changes are in the new V0014); no test or
+security check weakened; no approved requirement changed. Two existing tests asserted behaviour the audit
+found defective and were replaced (listed below). The exact corrected SHA, CI run and test counts are in
+the PR description.
+
+## Correction matrix
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **GAS-P2-003** (MAJOR) restricted metadata in Change History | `HistoryVisibility` hook applied by `HistoryService` to global and per-object reads; `RestrictedFileHistory` (preservation) removes entries about Files restricted now (so earlier entries are covered too) and withholds fields/reasons naming a restricted File's UUID, friendly ID, or content it uses; the global query excludes restricted Files in SQL so the page stays full. Upload status/batch lists withhold a File reference restricted since. | `Phase2AuditCorrectionsIT.gasP2_003_*` (restricted at ingestion; restricted later; references from visible history: replacement, reason, shared content; upload status); `FileWebIT.gasP2_003_theHistoryPageDoesNotShowRestrictedFiles` |
+| **GAS-P2-004** (MAJOR) derivatives of a restricted parent | V0014 triggers make inheritance a database invariant: restricting a File restricts derivatives at every depth; a derivation recorded under a restricted parent (row-lock ordered) is restricted; a derivative of a restricted File cannot be lowered. The worker re-checks ancestors under the parent's row lock when committing a derivative; `FileService.correct` records each inherited restriction with its cause and uses an ancestor-aware lowering rule. V0014 also makes existing data consistent. | `gasP2_004_restrictingAParentRestrictsExistingDerivativesAtEveryLevel`, `…ADerivativeReceivedBeforeItsParentWasRestrictedIsCommittedRestricted` (pending upload), `…RemovingAnInheritedRestrictionStaysDeliberate` (application and database refuse; lowering stays per File) |
+| **GAS-P2-005** (MAJOR) sharing without protection | Before sharing, the worker verifies the stored original against its authoritative size/SHA-256, compares bytes with the upload, and re-applies lost read-only protection (recording a `NOT_PROTECTED` finding) or blocks with `PROTECTION`; the commit re-checks that the verified generation is still current. | `gasP2_005_sharingAnUnprotectedOriginalRestoresProtectionBeforeReportingSuccess`, `…IfProtectionCannotBeRestoredTheUploadBlocksAndIsNotArchived`; existing `IngestionIT.f004_*` |
+| **GAS-P2-006** (MAJOR) destruction left quarantined bytes | Destruction removes every known copy: each generation's storage path (any state), quarantined generations' copies, and quarantine-ledger entries of the content (interrupted moves settled first); `BYTES_REMOVED` only after re-checking every location, otherwise `CLEANUP_INCOMPLETE` naming what remains. Destroyed generations keep their quarantine path (V0014 constraint). | `gasP2_006_destroyingAfterARepairRemovesTheQuarantinedGenerationToo`, `…DestructionFinishesAndRemovesAQuarantineMoveThatWasInterrupted`, `…DestructionRemovesQuarantinedPartialCopiesOfTheContent`; existing `DestructionIT.tx007_*` |
+| **GAS-P2-007** (MAJOR) lost storage subdirectory | `ManagedVolume.locate`: on a volume whose marker verified, a missing `originals`/shard directory means "not present" (links and non-directories still refused; a missing root stays "volume unavailable"). Used by scans, downloads (which now record the content as MISSING), thumbnails, re-verification, quarantine moves and destruction. | `gasP2_007_aLostShardDirectoryIsMissingContentAndCanBeRepaired`, `…ALostOriginalsDirectoryIsMissingContentAndCanBeRepaired` |
+| **GAS-P2-008** (MAJOR) partial-copy move/commit window | Quarantine ledger `quarantine_object` (V0014): intent recorded and committed before every move (partial, unverified, cancelled copies and damaged generations), confirmed after; `QuarantineMoves.settle` finishes an entry from what is on disk and is idempotent; workers settle their operation's entries before deciding anything; recovery settles the rest under the operation lock. | `gasP2_008_aStopAfterThePartialCopyMovedButBeforeItWasRecordedIsReconciled` (with repeated recovery), `…AStopAfterTheMoveWasRecordedButBeforeTheOperationWasReplannedIsReconciled`, `…ADatabaseFailureAfterTheMoveIsRetriedWithoutLosingTheRecord`; `WorkerProcessKillIT` |
+| **GAS-P2-009** (MAJOR) cancellation moved a foreign object | `file_operation.target_created` (V0014) is set immediately after the operation's exclusive create succeeds and cleared on replanning. Only an owned target is measured, adopted, quarantined or cancelled; any other object is a `COLLISION` across retries and volume waits. Cancellation leaves it untouched and says so; scans report it. | `gasP2_009_cancellingAWaitingOperationNeverMovesAnObjectItDidNotCreate` (the audit's exact scenario), `…ACollisionStaysUntouchedAcrossRetriesAndCancellation`; existing `RecoveryIT.tx005_*` |
+| **GAS-P2-001** (MAJOR) live receiver abandoned | Receiver lease `receiver_alive_at` (V0014) renewed on a timer by the receiving process independently of bytes; recovery abandons only when neither lease nor progress was renewed within `files.receivingTimeout`. The live-request timeout (server read timeout) ends a silent client's upload in the receiver itself, with its own message. | `gasP2_001_aLiveReceiverBlockedLongerThanTheTimeoutKeepsItsUpload`, `…ADeadReceiverIsAbandonedAndCleanedOnceItsLeaseLapses`; `FileWebIT.gasP2_001_aClientThatStopsSendingIsEndedByItsLiveReceiverNotByRecovery`; existing `RecoveryIT.requirement1_*` |
+| **GAS-P2-002** (MAJOR) no real process termination | `WorkerProcessKillIT` launches a separate production-wired worker JVM (`KillableWorkerMain`, test sources only), waits until it is blocked mid-copy with a genuine partial copy on disk, terminates it with `Process#destroyForcibly` (SIGKILL / TerminateProcess), launches a fresh worker JVM, and verifies one File with its permanent identity and provenance, authoritative size/SHA-256, protected bytes, the partial copy quarantined and accounted in the ledger, staging cleaned, and no change after further recovery passes. Runs in all four CI jobs. | `WorkerProcessKillIT.gasP2_002_aWorkerProcessKilledMidCopyIsRecoveredByAFreshWorkerProcess` |
+| **GAS-P2-010** (MINOR) empty required volumes | Scans check every active required volume plus the ingestion destination, whether or not they hold content. | `gasP2_010_anEmptyRequiredVolumeThatIsNotTheIngestionDestinationIsScanned` |
+| **GAS-P2-011** (MINOR) repeated scans | `integrity_finding_observation` (V0014) links each scan to every finding it observed; unresolved findings of missing/damaged content are observed by later scans even when a quick scan cannot re-detect them; the scan summary distinguishes new and still-unresolved problems; the scan page marks findings first recorded earlier. | `gasP2_011_aRepeatedScanReportsDamageThatIsStillUnresolved`; updated `IntegrityRepairIT.iv005_*` |
+
+## Tests replaced because they asserted the audited behaviour
+
+- `RecoveryIT.requirement1_anUploadThatStallsPastTheTimeoutIsAbandonedAndCannotLaterBeArchived` expected
+  a live receiver to be abandoned for lack of byte progress, which the audit identified as the GAS-P2-001
+  defect. It is replaced by the live-receiver, dead-receiver and live-request-timeout tests above.
+- `IntegrityRepairIT.iv005_…`'s final assertion expected a repeated scan to report nothing for problems
+  still present (GAS-P2-011). It now expects the same findings to be reported again, without duplicate rows.
+- `Phase2SchemaIT` counts V0014 in the Phase 2 upgrade and lists its two new tables.
+
+## Specification reconciliation
+
+- **ADR-0009 receiving timeout:** the ADR described abandonment by byte-progress time. As the audit noted,
+  that implementation choice did not satisfy authorization requirement 1, which governs; ADR-0009 now
+  describes the receiver lease. No owner requirement changed.
+- No other conflict with an approved requirement was found; no owner decision is needed for these
+  corrections.
+
+## Re-audit corrections (audited revision `83031267c8c37394462c4cf8346cc5a1d8108cde`)
+
+The independent re-audit found GAS-P2-001 … GAS-P2-011 resolved and two remaining MAJOR findings. Only
+those were corrected; the nine accepted corrections and their tests are unchanged. No schema change (no
+new migration).
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **GAS-P2-R01** (MAJOR) destruction left an uncommitted repair copy | `DestructionProcessor` first locks every unfinished operation on the content and every owner of an unsettled quarantine move of it (busy → `CLEANUP_INCOMPLETE`, "waits for operation …", retried). It then stops each unfinished repair (`STAGED`, `PROMOTING`, `PROMOTED`, `WAITING_FOR_VOLUME`, `BLOCKED` → `CANCELLED`, reason recorded on both operations, staging cleaned) so none can write, commit or move bytes later. Known locations now include each copy an operation on the content created itself (`target_created`) and did not since move through the quarantine ledger; an object it did not create is never included. Stopping is committed before removal; a new fault point `DURING_PHYSICAL_DELETE` (after each removal) exercises interruption mid-cleanup. `BYTES_REMOVED` still only after every known location is re-checked. | `Phase2AuditCorrectionsIT.gasP2_R01_aRepairCopyVerifiedButNotCommittedIsRemovedByDestructionAndRecovery` (crash after verify, before commit; destruction via recovery; repeated recovery, destruction and repair passes change nothing); `…CleanupInterruptedBeforeAndDuringRemovalIsFinishedByRepeatedRecovery` (crash after the repair is stopped and before removal; crash after the first of two copies is removed — never `COMPLETED`/`BYTES_REMOVED` while a copy remains; repeated recovery finishes); `…RemovalWaitsWhileTheRepairIsBusyElsewhere`; `…AnObjectTheRepairNeverCreatedIsLeftUntouched` |
+| **GAS-P2-R02** (MAJOR) history authorization missed accepted File spellings | New `FileIdentifiers` is the single definition of File identifier spellings: the friendly-ID lookup (`FileService.getByFriendlyId`) now uses it, and `RestrictedFileHistory` uses the same rules to find references in history values and reasons — friendly IDs in any case and with any leading zeros (`F00001`, `f00001`, `F1`, `f1`, `F01`), UUIDs in every spelling `UUID.fromString` (the web layer's conversion) accepts (upper case, abbreviated groups), alone or embedded in text. The previous separate patterns (`F\d{5,}`, canonical lower-case UUID only) are removed. | `FileIdentifiersTest` (accepted and rejected spellings agree with the lookup; embedded references; ordinary text such as `F-1990`, `Fairfax` is not a reference); `Phase2AuditCorrectionsIT.gasP2_R02_historyOfOtherObjectsDoesNotLeakARestrictedFileByAnyResolvableSpelling` (each spelling is first shown to resolve, then withheld from per-object and global history for Viewer and Editor after restriction, still shown to Administrators; ordinary text stays visible) |
+
+Known consequence (by design, R02): because `F1` is a valid File identifier, a reason containing the
+standalone token `F1` (or `f1`) is withheld from non-Administrators when File F00001 is restricted, even if
+the writer meant something else. Only tokens that resolve to a currently restricted File are withheld.
+
+## Final verification corrections (audited revision `c58e6cd92602ba0a3a5f76657dc5230d8522a6a6`)
+
+Codex reported two MAJOR findings (FV01, FV02) and one MINOR (FV03). The thirteen earlier corrections and
+their tests are kept; no schema change (no new migration).
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **GAS-P2-FV01** (MAJOR) a recreated copy at a vacated target was ignored by destruction | Replaced R01's "moved away" special case with one accounting rule: a copy is accounted by a generation, the quarantine ledger, or its owning operation (`target_created`), and ownership ends only in the transaction that records where the copy went. `QuarantineMoves.settle` confirms a move and releases the mover's ownership of the vacated location together (`FileOperationRepository.releaseTarget`); the worker re-reads the operation after settling, so an object appearing at a vacated location is a `COLLISION`, never adopted; destruction counts every owned target and releases ownership in its completion transaction; a repair never writes a copy of content in `DESTROY_PENDING`/`DESTROYED`. | `Phase2AuditCorrectionsIT.gasP2_FV01_aCopyRecreatedWhereARecordedMoveVacatedIsRemovedByDestruction` (the audit's sequence), `…AfterAnUnconfirmedMoveWasSettled…`, `…AnUnconfirmedMoveSettledByDestructionLeavesNothingAndNoRepairWritesAgain`, `…AnUnknownObjectAtAVacatedTargetIsNeitherAdoptedNorRemoved`, `…CleanupInterruptedAfterEachRemovalNeverReportsCompletionEarly` (stop after the 1st, 2nd and 3rd removal). Each step checks the invariants independently: every object under `originals/`/`quarantine/` is accounted for, and `BYTES_REMOVED` never coexists with a remaining copy. |
+| **GAS-P2-FV02** (MAJOR) redaction revealed whether a guessed identifier was a restricted File | `RestrictedFileHistory` now decides by what the reader may see, not by what is hidden: a value or reason is withheld when an identifier written in it as a whole (friendly ID, delimited UUID) names no unrestricted File, content of only unrestricted Files, or other object with history - so a restricted and a nonexistent identifier give identical results - and also when any embedded spelling is a restricted File's (or its content's) UUID. | `gasP2_FV02_aGuessedIdentifierLooksTheSameWhetherItsFileIsRestrictedOrDoesNotExist` (restricted vs nonexistent vs unrestricted; canonical, short, embedded friendly IDs; canonical, upper-case, Arabic-Indic UUIDs; several identifiers in one text; a user-chosen filename; per-object and global; Viewer and Editor; Administrator sees all), `…TextWithoutIdentifiersAndReferencesToVisibleObjectsAreNotSuppressed` |
+| **GAS-P2-FV03** (MINOR) Unicode-digit UUIDs bypassed reference detection | Compatibility assessed: the JDK (and so Spring's conversion) has always resolved UUIDs written with any Unicode decimal digit or full-width letter, so URLs using them keep working. `FileIdentifiers.uuid` is now the web layer's String-to-UUID conversion (`IdentifierConversion`, same results as Spring's default) and the parsed-header path, and reference detection finds every substring that conversion resolves (any script, glued or over-long groups). Friendly IDs stay ASCII, as the lookup always required. | `FileIdentifiersTest.gasP2_FV03_*` (Arabic-Indic, Extended Arabic-Indic, Devanagari, Malayalam, full-width digits and letters, mixed scripts, Cyrillic/Greek look-alikes, Unicode hyphen, over-long groups, and a seeded generator checking every resolvable substring of 400 mixed texts); `IdentifierConversionTest` (agrees with Spring's default conversion); `FileWebIT.gasP2_FV03_aUnicodeDigitSpellingInTheUrlResolvesAsBeforeAndStillHidesRestrictedFiles`; `Phase2AuditCorrectionsIT.gasP2_FV03_unicodeDigitSpellingsOfARestrictedFileAreWithheld` |
+
+Consequences, by design: (FV02) text naming a File identifier that resolves to no visible File - including a
+nonexistent one such as a filename `F1.jpg` before any F00001 exists, or an unrelated UUID typed into a
+reason - is withheld from non-Administrators. (FV02) The embedded-spelling rule can only be triggered by
+someone who already knows a restricted File's UUID (UUIDs cannot be guessed); such a person already sees
+"not found" on that File's page, so history reveals nothing more. Content shared by a restricted and an
+unrestricted File stays withheld (GAS-P2-003 behaviour, unchanged).
+
+## Corrections IV01 – IV03 (audited revision `d2a2349920ed352a258920d5aca46b36f83cf92e`)
+
+Two MAJOR findings (IV01, IV02) and one MINOR (IV03). Earlier corrections are kept; no schema change.
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **GAS-P2-IV01** (MAJOR) destruction deleted a foreign object at a historical path | Destruction's inventory is now only locations a record says hold bytes now: `CURRENT`/`QUARANTINE_PENDING` generation storage paths, `QUARANTINED` generation and ledger quarantine paths, and owned targets. Storage paths of `QUARANTINED`/`MISSING`/`DESTROYED` generations, ledger sources, `REMOVED` quarantine paths and unowned targets are historical: never deleted; an object found there is reported as left untouched. `QuarantineMoves.settle` retires the source in the confirming transaction for every record (all operations' ownership via `releaseTargetsAt`; the superseded generation via `retireGenerationAt`), closing the window between the ledger confirmation and the separate generation update. Generation/ledger/content retirement moved into the completion transaction. | `Phase2AuditCorrectionsIT.gasP2_IV01_aForeignObjectAtAQuarantinedGenerationsVacatedPathSurvivesDestruction` (the audit's case), `…DestructionBeforeTheDamagedGenerationWasMovedRemovesItWhereItIs` (before the move), `…AMoveInterruptedBeforeItWasRecordedFailsVisiblyIfSomethingAppearedAtItsSource` (after the move, before its record: `CLEANUP_INCOMPLETE`, nothing touched, completes once resolved), `…AMoveSettledAfterAnInterruptionRetiresTheSourceSoAForeignObjectThereSurvives` (after the record), `…CleanupInterruptedAfterEachRemovalNeverTouchesHistoricalLocations` |
+| **GAS-P2-IV02** (MAJOR) embedded-UUID deny-list was existence-dependent | The deny-list is removed. `FileIdentifiers.referencesIn` reads references from the text alone (UUID windows read as the JDK reads them; canonical-shaped windows take precedence over windows overlapping them) and `RestrictedFileHistory` shows a value only if every reference is visible. Whole and embedded identifiers follow the same policy; restricted and nonexistent are never distinguished. | `gasP2_IV02_restrictedAndNonexistentUuidsLookTheSameInEveryContext` (canonical, upper-case, Arabic-Indic, full-width × 8 contexts incl. glued and hyphen-joined; Viewer, Editor, Administrator; per-object and global), `…FilenamesAndIndirectReferencesFollowTheSamePolicy` (filenames, content IDs); `FileIdentifiersTest.gasP2_IV02_*` (overlap rule, text-only reading, seeded generator: any text containing a resolvable spelling is governed by the allow-list, delimited spellings read exactly) |
+| **GAS-P2-IV03** (MINOR) repair could write after destruction intent | `FileService.destroy` takes the locks of the content's unfinished repairs before its transaction (bounded 2 s wait, then a visible refusal), re-checks under the content row lock that no unheld repair has started, and cancels unfinished repairs in the intent transaction. `OperationProcessor.createOwned` creates the copy and records ownership in one transaction holding the content row `FOR SHARE` after re-reading its state. | `gasP2_IV03_destructionIntentCannotCommitWhileARepairThatPassedItsCheckIsWriting` (the reported interleaving, before creation and during copying), `…ARepairCreatesNothingOnceDestructionIntentHasCommitted`, `…AConcurrentDestructionRequestIsRefusedNotBlockedWhileARepairCopies` (two threads), `…DestructionIntentStopsARepairThatIsNotRunningSoItNeverWrites` |
+
+Tests changed because they asserted superseded behaviour (none weakened): `gasP2_R01_removalWaitsWhileTheRepairIsBusyElsewhere`
+now uses a committed repair, since unfinished repairs are stopped by the intent (IV03); `FileIdentifiersTest`'s
+FV03 completeness test (every resolvable substring is a reference, for the removed deny-list) is replaced by
+the IV02 allow-list property, and the glued-hex example now expects the UUID the JDK reads.
+
+Consequences, by design: hyphen-joined text whose groups form an extra UUID window with no canonical
+window to anchor it (rare) is withheld from non-Administrators unless that UUID is visible. A destruction
+request made while a repair of the same content is writing is refused with a message to retry.
+
+## Final outstanding corrections (audited revision `9b27418d6b744016a65a332d86d33f53c0083c3e`)
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **IV01** (MAJOR) stale ownership after a missing-content repair | Repair of MISSING content retired the old generation (`CURRENT` → `MISSING`) outside the quarantine ledger, so the ingest operation still "owned" the old path and destruction deleted whatever was there. **V0015** makes the invariant a database rule for every retirement path: retiring a generation (QUARANTINED, MISSING, DESTROYED) or recording content as MISSING ends all operations' ownership of that location in the same transaction; an operation can never take ownership of a retired generation's location; existing contradictory rows are corrected. Destruction removes a current location recorded missing (open MISSING finding) only if the object there is verifiably the content (authoritative size and SHA-256). | `Phase2AuditCorrectionsIT.gasP2_IV01_anUnrelatedObjectAtAMissingGenerationsOldPathSurvivesDestruction` (the exact reproduction), `…AtTheLocationOfContentRecordedMissingIsNotRemoved` (repair stopped before commit), `…TheVerifiedOriginalBackAtAMissingLocationIsRemoved`, `…ARepairStoppedAfterItsCommitLeavesAnUnrelatedObjectAtTheOldPathUntouched`, `…TheDatabaseRefusesOwnershipOfARetiredLocation`; every step checks the ownership invariant independently and that `BYTES_REMOVED` never coexists with a known copy; repeated recovery |
+| **Pool exhaustion** (MINOR) one pooled connection per repair lock | Destruction intent takes repair locks as transaction-scoped advisory locks on its own transaction connection (same key as the workers' session locks; bounded 2 s wait, then a visible refusal; lock order operation-then-rows unchanged). Removal holds all other writers' locks together on one connection (`OperationLocks.tryLockAll`). The IV03 guarantees are unchanged: a repair still creates and owns its copy in one transaction holding the content row `FOR SHARE`. | `RepairLockPoolIT` (pool of 3 connections, 6 idle repairs): destruction proceeds without waiting for a connection and leaves none in use; no stopped repair writes; with one repair writing among the idle ones, destruction is refused in bounded time while other work still gets connections, and succeeds once the repair finishes; any number of locks held on one connection. Existing IV03 tests unchanged. |
+
+Schema: new **V0015** (triggers and a one-time consistency update). V0001–V0014 unchanged.
+
+## Ownership consistency corrections (audited revision `0a563d4875cc2a03eafc71415b655792fd5959d9`)
+
+**Structural correction (explained before implementation).** The ownership representation was not
+sufficient: a location could be claimed in three places that drifted apart (an operation's
+`target_created`, a generation row, and content state MISSING). V0016 gives each location exactly one owner
+and puts the physical evidence on that owner:
+
+1. *One owner at a time.* An operation owns only an uncommitted copy; ownership passes to the generation in the
+   commit transaction (`commitNewContent`, `commitRepair`). A deferred constraint trigger on both tables
+   rejects, at commit, any state in which an operation claims a location a generation records - for every
+   INSERT/UPDATE, whatever code path or SQL issues it. Existing rows are corrected by the migration.
+2. *Generations carry missing evidence.* `file_content_generation.vacated` is set by trigger in the same
+   statement that records content MISSING (and the scan/download writes the finding in the same transaction),
+   cleared only on MISSING -> ACTIVE (after verification). MISSING -> DAMAGED is rejected by the database;
+   a vacated generation cannot be QUARANTINE_PENDING (check constraint).
+3. *Evidence for moves.* Quarantine intents record the source object's size and last-modified time; settling
+   moves or confirms only that object, otherwise raises `UnexplainedObjectException` (nothing moved, operation
+   reports it).
+
+| Finding | Root cause traced | Correction | Regression tests |
+|---|---|---|---|
+| **Repair adopted a foreign object** (MAJOR) | content MISSING -> object appears -> scan marks `MISSING -> DAMAGED` -> repair sets the old generation `QUARANTINE_PENDING` -> the foreign object is moved to quarantine and later destroyed | scans keep MISSING content MISSING and report the object as `UNEXPECTED_OBJECT` unless it verifies (then ACTIVE); repair retires a vacated generation as MISSING; moves require the recorded object | `v0016_aForeignObjectAppearingAtAMissingLocationBeforeRepairIsNeverAdopted` (QUICK and FULL scans, repair, destruction), `v0016_anObjectSwappedInDuringAnInterruptedQuarantineMoveIsNotMovedOrAdopted` (crash after the intent; recovery, worker and destruction refuse; finishes once removed), `v0016_anInterruptedQuarantineMoveOfTheRecordedObjectIsStillFinished` |
+| **Ownership retirement not atomic** (MAJOR) | the MISSING finding and the content state were separate transactions; a stale ingest claim then overrode destruction's verification | missing recording is one transaction (scan and download); vacated set by the same statement; ownership ends at commit; recovery and destruction reconcile an open MISSING finding on ACTIVE content before anything else | `v0016_recordingMissingContentIsAtomic` (crash between finding and state), `v0016_recoveryReconcilesAnInterruptedMissingRecordingBeforeAnythingIsDeleted`, `v0016_destructionReconcilesAnInterruptedMissingRecordingItself`, `v0016_ownershipPassesToTheGenerationWhenTheCopyIsCommitted` |
+| **V0015 enforcement incomplete** (MINOR) | V0015 checked only `UPDATE OF target_created` against retired generations | V0016 replaces it with the single-owner constraint on INSERT and UPDATE (of `target_created`, `target_path`, `volume_id`; generation `storage_path`, `volume_id`) checked at commit | `v0016_theDatabaseRefusesEveryStatementThatWouldOwnARecordedLocation` (direct SQL: UPDATE claim, UPDATE path onto a generation, INSERT claiming operation, INSERT generation at a claimed path, claim released before commit allowed, MISSING -> DAMAGED refused, vacated QUARANTINE_PENDING refused, vacated set/cleared by content state) |
+
+Every new test also checks the ownership invariants against the whole database (`assertOwnershipInvariants`).
+Test changed (stronger rule, not weakened): `gasP2_IV01_theDatabaseRefusesOwnershipOfARetiredLocation` now
+expects the single-owner refusal. Schema: new **V0016**; V0001–V0015 unchanged; `Phase2SchemaIT` expects 8
+Phase 2 migrations from the Phase 1 baseline.
+
+## Structural audit corrections (audited revision `c422e8cb16486f3d12f98b147437873d9afec2d0`)
+
+Three MAJOR and one MINOR finding; the V0016 redesign is kept and extended in **V0017**.
+
+| Finding | Correction | Regression tests |
+|---|---|---|
+| **1. Missing detection for DAMAGED content** (MAJOR) | Scans record MISSING from ACTIVE *or* DAMAGED (one transaction with the finding; vacates the location). Recovery reconciles ACTIVE or DAMAGED content with an open MISSING finding. A repair quarantines a damaged copy only if it still matches the damage evidence (size and SHA-256 recorded by the scan; size-mismatch findings now record the hash too); otherwise the generation is retired and the object reported (`UNEXPECTED_OBJECT`). | `v0017_damagedContentThatGoesMissingIsVacatedAndAForeignObjectThereIsNeverAdopted`, `…ACrashWhileRecordingDamagedContentAsMissing…`, `…RecoveryReconcilesDamagedContentRecordedMissing…`, `…ADamagedCopyReplacedWithoutAScanIsNotQuarantinedByTheRepair`; ACTIVE -> MISSING tests from V0016 kept |
+| **2. Quarantine recovery identity** (MAJOR) | Intents record SHA-256 (V0017 column); settle moves/confirms only matching bytes, verifies the destination after the rename and moves a mismatch back; intents without hash evidence are unverified and block with a visible note. | `v0017_anObjectWithTheSameSizeAndTimestampButDifferentBytesIsNotMoved`, `…ALegacyIntentWithoutContentEvidenceIsNeverFinishedSilently`, `…AnObjectSwappedInBetweenTheCheckAndTheRenameIsPutBackUntouched`; earlier valid-recovery tests kept |
+| **3. Full-scan restoration and protection** (MAJOR) | MISSING -> ACTIVE only when the bytes verify *and* the object is already read-only; verified-but-writable stays MISSING with a `NOT_PROTECTED` finding (downloads, sharing and repair treat it as missing; destruction removes it only because its hash is the authoritative one). Worker re-verification hashes before protecting and confirms protection took effect. | `v0017_restoredBytesThatAreWritableAreNotRestoredUntilProtected`, `…ReverificationProtectsOnlyVerifiedBytesAndNeverTouchesAnotherObject` (both use `SafeFiles` platform checks, run on Windows and Linux) |
+| **4. Concurrent ownership enforcement** (MINOR) | `physical_location_owner` with primary key (volume, path), filled by triggers on INSERT/UPDATE of operations and INSERT of generations; `INSERT … ON CONFLICT DO NOTHING` waits for a concurrent claimant and then refuses. | `v0017_concurrentConflictingClaimsCannotBothCommit` (two connections, both orders, READ COMMITTED and REPEATABLE READ, rollback lets the second succeed, bounded by `statement_timeout`), `…OwnershipTransfersAtomicallyFromOperationToGeneration` |
+
+Broader change: destruction now requires a vouched-for SHA-256 for every generation or quarantine object it
+deletes (authoritative, recorded damage, or recorded at quarantine); unexplained objects are left and reported.
+
+Uncertainties resolved by choice (reported for owner review): verified-but-writable originals are kept
+MISSING with a finding rather than given a new content state; quarantined objects moved before V0017 are
+vouched for by their settled ledger record (no hash was recorded); destruction leaves an undetected damaged
+copy of ACTIVE content (hash neither authoritative nor recorded) in place and reports it.
+
+Residual time-of-check/time-of-use window: there is no portable way to rename "the file just hashed". A
+replacement between the hash and the rename is detected by re-hashing the destination and moved back; a
+replacement during that re-hash/move-back window, or by a local writer racing directory components, remains
+the accepted P2-E residual risk (native `openat`-style code would be needed).
+
+## V0017 audit corrections (audited revision `006081c0eb4630de1a17443f1f7e9c53f65d1d3e`)
+
+Three MAJOR, one MINOR; V0016/V0017 kept; new **V0018**.
+
+| Finding | Reproduced cause | Correction | Regression tests |
+|---|---|---|---|
+| **1. Legacy settled quarantine records** (MAJOR) | destruction treated a QUARANTINED ledger record without a hash as sufficient evidence | quarantined objects are deleted only if they match a hash recorded before now (move hash, or the damage evidence for a damaged generation); otherwise the cleanup stays `CLEANUP_INCOMPLETE` naming the path and reason | `v0018_aLegacySettledQuarantineRecordNeverAuthorisesDeletingAReplacement`, `v0018_aQuarantinedCopyReplacedAfterItsMoveIsNotDeleted` |
+| **2. False BYTES_REMOVED** (MAJOR) | a claimed copy that failed verification was only "reported" and destruction completed | a claimed copy that cannot be shown to be the content's is *unresolved*: left untouched, destruction stays `CLEANUP_INCOMPLETE` (content `DESTROY_PENDING`, generation unchanged) on every retry until an Administrator resolves it; vacated locations remain merely reported | `v0018_aCorruptedCurrentCopyKeepsDestructionIncompleteUntilResolved`, `v0018_anInterruptedCleanupWithAnUnresolvedCopyNeverBecomesBytesRemoved` |
+| **3. Trusted damage-hash evidence** (MAJOR) | repairs/destruction used the latest damage finding, and quarantine intents a fresh hash of whatever was at the path | the generation stores the size/SHA-256 seen when the damage was first detected (`damaged_size`/`damaged_sha256`, set in the transaction ACTIVE -> DAMAGED, never replaced - database trigger); later scans report a changed object instead; repair planning, quarantine intents (trusted evidence recorded, mismatch blocks before anything is recorded), recovery and destruction verify against it | `v0018_damageEvidenceIsKeptWhenAReplacementAppearsAndALaterScanRunsAndTheRepairDoesNotAdoptIt`, `v0018_quarantineIntentsCarryTheTrustedDamageEvidenceNotAFreshHash`; earlier v0017 replacement/swap tests kept |
+| **4. Legacy migration conflicts** (MINOR) | V0017's backfill used `ON CONFLICT DO NOTHING` | V0018 audits every operation and generation claim; any claim without its owner row stops the upgrade with a diagnostic (each operation/generation, location and current owner, plus the remedy); nothing is changed or chosen; re-running after resolution succeeds; V0018 also backfills damage evidence from the earliest damage finding | `Phase2SchemaIT.conflictingLegacyClaimsStopTheUpgradeWithADiagnosticAndNothingIsChosen` (repeated), `…anExistingPhase2InstallationUpgradesAndItsClaimsAreRecorded`, `…acceptedPhase1DatabaseUpgradesCleanlyToPhase2` (V0008 -> V0018) |
+
+Cross-cutting: ADR-0009 now has the deletion/quarantine authorization table (claiming record, evidence, when
+recorded, what is allowed). No path, current-object hash or historical ledger status is accepted as evidence.
+
+Remaining evidence limitations: the first damage observation is trusted as "the damaged copy" (an object
+replaced before any scan saw the damage cannot be told apart from damage); an operation's uncommitted copy
+is identified by its exclusive-create claim, not by a hash; pre-V0017 quarantined copies without a hash
+need Administrator resolution before their content can be fully destroyed.
+
+## V0018 audit corrections (audited revision `70efeef37bff567fc76bbb6813b704750d2c8fa7`)
+
+Three MAJOR findings. The three causes were reproduced from the source before any change:
+
+1. **Stale operation claims.** `DestructionProcessor.ownedTargets` deleted whatever was at a claimed target
+   (`target_created`) with no check of the bytes. In `promote`, the "partial copy" branch and the
+   unverified-copy branch, and in cancellation, the object at the claimed target was hashed *at move time*
+   and that fresh hash became the ledger evidence that destruction later deleted against. A replacement at
+   a claimed location was therefore moved and later deleted.
+2. **First damage observation.** `IntegrityService.damaged` copied the hash observed by the first scan that
+   saw a mismatch into `damaged_sha256`, and repair (`notTheRecordedDamagedCopy`, the quarantine intent),
+   recovery (settle against that intent) and destruction (`vouched`, `classifyQuarantined`) treated it as
+   proof. An object swapped in before that scan became "the damaged copy".
+3. **Retirement of occupied locations.** `commitRepair` retired a vacated generation as `MISSING` without
+   looking, and `retireUnexplained` set an occupied, unverifiable location to `MISSING`. Both locations
+   became historical, so destruction recorded `BYTES_REMOVED` while the object was still there.
+
+### Correction design (documented before coding)
+
+One rule replaces the three special cases. **Bytes are moved or deleted only on evidence the archive
+established itself before the object could have been replaced. An object that cannot be shown that way is
+left exactly where it is, and its presence is recorded durably as unresolved.** The evidence is:
+
+| Object | Ownership record | Trusted identity evidence | Physical disposition |
+|---|---|---|---|
+| Current generation copy | generation (CURRENT) | authoritative size + SHA-256 | kept; destroyed only when it matches |
+| Operation's uncommitted copy | operation claim (`target_created`) | equals the received bytes (receiver's SHA-256), or is a byte prefix of the staged upload after the staged upload re-verifies against that hash; or the size + hash measured by the worker while it wrote it | verified: moved to quarantine / deleted. Otherwise: unresolved, untouched |
+| Damaged copy of a superseded generation | generation | **none** - an observation of a mismatch identifies nothing. Only an Administrator's attestation of the recorded observation (or verified absence) resolves it | unresolved, untouched, unless attested (then quarantined against that hash) |
+| Object at a vacated location | none (bytes left) | authoritative hash only | verified: destroyed with the content. Otherwise unresolved, untouched |
+| Quarantined object | ledger entry (QUARANTINED) | the move's hash, *only* if the entry records that it was trusted when recorded (`evidence_basis`) | trusted and matching: destroyed. Otherwise unresolved, untouched |
+
+What this changes:
+
+* **Operation copies** (finding 1): one check, used by promotion, cancellation, recovery (which drives the
+  same code) and destruction. Staged uploads of operations that still own a copy are kept until the copy is
+  resolved, because they are the evidence. A replacement is never moved, adopted or deleted: the claim
+  becomes an unresolved record and the operation blocks (promotion) or completes its cancellation with the
+  object left in place.
+* **Damage observations** (finding 2): `damaged_size`/`damaged_sha256` stay, but only as a diagnostic
+  observation (the database comment says so; the column cannot be rewritten in a historical migration). No
+  code path uses them, or any other observed hash, to authorize a move or deletion. A repair no longer
+  quarantines the superseded damaged copy automatically: if nothing is at the old location the generation
+  is `MISSING`; if anything is there it is `UNRESOLVED`, untouched, until an Administrator attests that the
+  recorded observation is the archive's damaged copy (it is then quarantined against that hash, which must
+  still match) or that it is not (it is released and left in place), or it is verifiably gone.
+* **Unresolved presence** (finding 3): a durable `unresolved_object` record per occupied location. Repair
+  retirement, cancellation, promotion and destruction create it; destruction never completes while one is
+  open for the content; scans, recovery and destruction re-check it and keep it open while anything is there;
+  it closes only on verified absence or an Administrator's resolution (who, when, why).
+* **Specification note.** ADR-0009 P2-I said repair "keeps the damaged copy in quarantine", and Phase 2
+  decision 4 that repair "retains accountable references to damaged generations until quarantine is
+  confirmed". With an untrusted observation the archive cannot confirm which object is the damaged copy;
+  the audit itself allows "remain recoverable or explicitly unresolved". The damaged copy is therefore kept
+  accountable as `UNRESOLVED` in place (still recoverable), and quarantine happens on an Administrator's
+  attestation. This narrowing of P2-I was recorded here for owner review; the owner has since confirmed it (Phase 2
+  finalization), and PHASE-2-DECISIONS and ADR-0009 record the decision.
+
+### Why a schema migration (V0019) is necessary
+
+* Unresolved presence must survive restarts and repeated recovery, and must be visible to destruction and
+  scans independent of any operation; no existing table can hold it without overloading `MISSING` (which
+  means "bytes absent") or a finding (which is not tied to the disposition of a location). New table
+  `unresolved_object`, at most one open record per location.
+* A superseded generation whose location is occupied but unverifiable needs a state that is neither
+  `MISSING` (absent) nor `QUARANTINE_PENDING` (which a vacated generation may not be, V0016): new generation
+  state `UNRESOLVED`, which the database allows only while an open record exists.
+* Ledger hashes recorded before this correction were fresh hashes of whatever was at a claimed path, so the
+  ledger must say whether its hash was trusted when recorded: `quarantine_object.evidence_basis`
+  (`OPERATION_COPY_VERIFIED`, `ADMINISTRATOR_ATTESTED`, or `UNTRUSTED`; existing rows are `UNTRUSTED`),
+  immutable like the other evidence columns.
+
+V0001–V0018 are unchanged; the V0016 single-owner and vacated rules, the V0017 claims table and move
+evidence, and the V0018 evidence-once trigger and claims audit all remain in force.
+
+### Implemented
+
+| Finding | Correction | Regression tests (`Phase2AuditCorrectionsIT` unless named) |
+|---|---|---|
+| **1. Stale operation claims** (MAJOR) | `OperationCopies` identifies an operation's copy (complete: receiver's size + SHA-256; partial: byte prefix of the staged upload after it re-verifies). Promotion, cancellation, recovery (which drives both) and destruction all use it; quarantine intents carry the verified measurement with basis `OPERATION_COPY_VERIFIED`. An unverified object: claim released, `unresolved_object` (OPERATION_COPY) recorded, operation BLOCKED (promotion) or CANCELLED with the object left (cancellation), destruction `CLEANUP_INCOMPLETE`. Staged uploads of operations that still own a copy are kept (destruction intent, stopped repairs, recovery, final clean-up) and removed once the copy is. | `v0019_aReplacementAtAnOperationsClaimedTargetIsNeitherMovedNorAdoptedAndStaysUnresolved` (interrupted creation, restarts, scan, retry), `v0019_withoutItsStagedUploadAClaimedPartialCopyCannotBeIdentifiedAndIsLeftUntouched`, `v0019_aGenuinePartialCopyIsIdentifiedByItsStagedUploadAndMovedToQuarantine`, `v0019_aCancellationInterruptedAfterItsIntentNeverMovesAReplacement` (crash after the intent; job retry and recovery refuse), `v0019_destructionNeverDeletesAReplacementOfAStoppedRepairsCopy` (interrupted cleanup), `RecoveryIT.cancellingNeverMovesAReplacementOfItsUncommittedCopy`, `RecoveryIT.cancellingAWaitingOperationQuarantinesItsVerifiedUncommittedCopyInTheWorker` |
+| **2. First damage observation** (MAJOR) | `damaged_size`/`damaged_sha256` are an observation (column comments, javadoc); no path authorises a move or deletion from them, nor from any fresh hash. Repair inspects the superseded location before its commit: empty -> MISSING; occupied -> UNRESOLVED + record (DAMAGED_COPY or OBJECT_AT_VACATED_LOCATION), untouched. Legacy QUARANTINE_PENDING generations are retired the same way (never moved). Quarantine of a damaged copy happens only after an Administrator attests the recorded object (`UnresolvedObjects.attest`, worker job `file.quarantine-attested`, intent basis `ADMINISTRATOR_ATTESTED`, verified before and after the rename). Destruction trusts only the authoritative hash, trusted ledger hashes and attestations. | `v0019_anObjectReplacedBeforeTheFirstDamageScanIsNeverMovedOrDeleted` (repair, restarts, scans, destruction, release), `v0019_anAttestedObjectThatChangedAfterwardsIsNeitherMovedNorDeleted`, `v0019_everyMoveRecordsTheBasisOfItsEvidence`, `v0018_damageEvidenceIsKept…` (now: UNRESOLVED, observation not adopted), `v0018_quarantineIntentsCarryTheAttestedEvidenceNotAFreshHash`, `IntegrityRepairIT.iv003…` (damaged copy kept untouched, then quarantined on attestation) |
+| **3. Retirement of occupied locations** (MAJOR) | No occupied location is retired as MISSING: UNRESOLVED generation + durable record (database: UNRESOLVED requires an open record; records never deleted; resolutions final). Destruction never records BYTES_REMOVED while any open record of the content or its operations remains, and records new ones for unidentified objects at current locations (current generation, vacated current location, quarantine path). Scans count open records as unresolved (never "No problems found"); a record closes only on verified absence (a scan or destruction finds nothing there) or an Administrator's resolution - restarting or repeating recovery never closes one. An Administrator can release (left in place) or attest. | `v0019_anUnresolvedObjectAtAFormerGenerationLocationSurvivesRepeatedRecoveryUntilItIsGone`, `v0019_onlyANamedAdministratorResolvesAnUnresolvedObjectAndAResolutionIsFinal`, `v0016_aForeignObjectAppearingAtAMissingLocationBeforeRepairIsNeverAdopted`, `v0017_damagedContentThatGoesMissing…`, `gasP2_IV01_anUnrelatedObjectAtTheLocationOfContentRecordedMissingIsNotRemoved`, `Phase2SchemaIT.anExistingV0018InstallationUpgradesAndEarlierMoveEvidenceIsUntrusted` |
+
+**Unified audit (finding 4).** Every path that moves, quarantines or deletes bytes, with its ownership record,
+identity evidence and disposition:
+
+| Path | Ownership record | Trusted identity evidence | Disposition when the evidence does not hold |
+|---|---|---|---|
+| Ingest/repair promotion: copy found at own target | operation claim | receiver's hash (complete) or prefix of re-verified staging | unresolved, operation BLOCKED |
+| Promotion: copy just written did not verify | operation claim | measurement taken while writing | (only this object is moved) |
+| Partial-copy quarantine and its recovery (`settle`) | ledger intent | intent hash with basis `OPERATION_COPY_VERIFIED` | not moved; fails visibly |
+| Commit (ownership transfer) | operation -> generation, one transaction | full re-hash equals the authoritative hash | not committed (BLOCKED) |
+| Integrity scans (missing, damaged, reappeared) | generation | authoritative hash only (restores ACTIVE); observations are diagnostic | findings only; nothing moved |
+| Repair supersession | generation | none needed: nothing is moved | MISSING if empty, UNRESOLVED if occupied |
+| Attested quarantine and its recovery | `unresolved_object` + ledger intent | Administrator's attestation of the observed hash (`ADMINISTRATOR_ATTESTED`) | not moved; record stays open |
+| Cancellation | operation claim | as promotion | object left, unresolved, operation CANCELLED |
+| Destruction | generation / ledger / claim / record | authoritative hash; trusted ledger hash; `OperationCopies`; attestation | left, unresolved, `CLEANUP_INCOMPLETE` |
+| Re-verification | generation | authoritative hash before protecting | nothing changed |
+
+Path occupancy, a claim, a ledger status, a hash observed by a scan and a hash taken at move time are never
+accepted as evidence; the V0016 single-owner/vacated rules, the V0017 claims table and move verification and
+the V0018 evidence-once trigger and claims audit are unchanged.
+
+**Tests changed because they asserted the audited behaviour (not weakened):**
+* Repairs of damaged content no longer quarantine the damaged copy by themselves. Tests that exercised that
+  move (`gasP2_006_*`, `gasP2_IV01_*` with a damaged generation, `v0016_anObjectSwapped…`,
+  `v0016_anInterruptedQuarantineMove…`, `v0017_anObjectWithTheSameSize…`, `v0017_anObjectSwappedInBetween…`,
+  `IntegrityRepairIT.iv003…`/`requirement4…`) now run the same crash points through the attested move, which
+  uses the same intent/settle machinery; their assertions on what is moved, refused and accounted are kept.
+* Tests whose subject was not the damaged copy (`gasP2_R01_*`, `gasP2_FV01_*`, three `gasP2_IV03_*`,
+  `RepairLockPoolIT`) use content whose original was lost instead of damaged, because a damaged copy now
+  (correctly) keeps destruction incomplete until resolved.
+* Tests that expected `BYTES_REMOVED` with an unidentified object at a *current* location (vacated or not) or
+  a superseded generation retired as MISSING while occupied now expect `CLEANUP_INCOMPLETE`/`UNRESOLVED`
+  until an Administrator releases the object (then completion, the object untouched).
+* `RecoveryIT.cancellingABlockedOperationQuarantinesItsUncommittedCopyInTheWorker` overwrote the copy and
+  expected it to be moved - finding 1 itself. It is split into a genuine-copy test (moved) and a
+  replaced-copy test (left, unresolved).
+* `v0017_aLegacyIntentWithoutContentEvidence…` builds its legacy state (QUARANTINE_PENDING generation) from
+  a V0019 repair, because current code never creates that state.
+
+**Remaining evidence and filesystem limitations.**
+* A replacement that is byte-identical to the archive's bytes (complete copy) or a true prefix of the staged
+  upload is indistinguishable from the operation's own copy; moving it loses nothing.
+* The P2-E residual race is unchanged: an object swapped in during the re-hash/move-back window after a rename,
+  or a directory-component swap by a local writer, needs native `openat`-style code.
+* The repair inspects the superseded location just before its commit; an object that appears between that
+  look and the commit is not recorded as unresolved but is reported by scans as an unexpected object at a
+  historical location (never touched).
+* Legacy (pre-V0019) quarantine moves are `UNTRUSTED`: their quarantined objects keep destruction incomplete
+  until an Administrator attests, releases or removes them; a legacy in-flight intent with its object still at
+  the source fails visibly until the object is resolved.
+* Verified absence closes a record automatically (a scan or destruction finds nothing there); an object
+  removed outside the application therefore needs no further action.
+* Damaged content can no longer be destroyed, nor its damaged copy quarantined, without an Administrator's
+  decision about the damaged object - by design, but it is new operational work.
+
+## V0019 audit corrections (audited revision `a6b45252777cb8d3384e98c5cf486629ac10749c`)
+
+Three MAJOR findings and one MINOR. Reproduced from the source before any change:
+
+1. **Attestation executed after release.** `release` changed only the record (no lock, no check of a started
+   move). `quarantineAttested` re-read the record only once it held the operation lock, but an intent recorded
+   before a crash was finished by `RecoveryService.reconcileAll` -> `QuarantineMoves.settle` with no check of
+   the authorization; and a release committed while the worker was between its check and the rename did not
+   stop the rename. The moved object then carried an `ADMINISTRATOR_ATTESTED` ledger hash, which destruction
+   trusted for deletion.
+2. **Repair inspection-to-commit race.** `inspectSuperseded` looked at the old location before the commit
+   transaction; an object appearing in between was retired as MISSING, and destruction treated every
+   historical location as "report only", recording BYTES_REMOVED.
+3. **Inaccessible paths read as absent.** `Files.exists` returns false when the path cannot be examined
+   (permission, unreadable parent, unmounted volume), and `ManagedVolume.locate` treated an unreadable parent
+   directory as missing. Scans recorded MISSING, `resolveAbsent` closed unresolved records, `settle` recorded
+   SOURCE_ABSENT, repair retired generations as MISSING and destruction counted the location as removed.
+4. **Attestation not atomic (MINOR).** The attestation, its operation event and the job were three separate
+   commits; a failure between them left an authorization without work, or a note without either.
+
+### Correction design (documented before coding)
+
+* **Authorization lifecycle** (no new tables; the states are already durable):
+  `OPEN` -> `ATTESTED` (attested_by/at, operation event and job committed in **one transaction**) ->
+  `EXECUTING` (the move intent, at the deterministic quarantine path `att-<record>` of the record's operation)
+  -> `RESOLVED QUARANTINED` (in the settle transaction) - or `RESOLVED NOT_ARCHIVAL` (release) from `OPEN` or
+  `ATTESTED` only. Worker, destruction and release all hold the record's operation lock (PostgreSQL advisory
+  lock, cross-process) while they act, and the worker re-reads the authorization under that lock immediately
+  before recording its intent. Release is refused while the lock is held or once a move was recorded (it then
+  names where the object is or is going); a released record can never gain an intent, so no worker, retry or
+  recovery can move it. Settling an attested move re-validates the authorization (record still open and
+  attested at that source) before any rename; destruction trusts an attested ledger hash only together with
+  the record that was resolved QUARANTINED by that move. Duplicate attestations are idempotent (the existing
+  attestation is returned; no second job).
+* **Three-valued presence.** One probe (`Presence`) answers PRESENT, VERIFIED_ABSENT or UNKNOWN by reading
+  attributes component by component without following links: only "no such file", on a volume whose marker is
+  still there, is absence. Permission errors, unreadable directories, links in the chain, a vanished marker or
+  any I/O error are UNKNOWN, which every caller treats as "cannot decide": no MISSING, no record closed, no
+  SOURCE_ABSENT, no BYTES_REMOVED; scans report UNREADABLE (paths only, to Administrators) and recovery
+  retries. The probe goes through the fault seam so tests inject access failures identically on Windows and
+  Linux.
+* **Former locations stay accountable.** The repair's look before the commit is no longer evidence after it:
+  destruction re-inspects *every* location the content was ever at (historical generation paths, operation
+  targets, ledger sources and quarantine paths) and records any unidentified object there as unresolved
+  (CLEANUP_INCOMPLETE until it is gone, released or verified), instead of reporting it and completing. Scans
+  keep reporting such objects as unexpected. Nothing unrelated is deleted or moved.
+
+### Migration
+
+No migration. The lifecycle uses the V0019 columns (attestation, status, resolution) plus the ledger intent at
+a deterministic path; synchronization uses the existing operation advisory locks; presence and former-location
+accounting are application rules over the existing `unresolved_object` table. V0001-V0019 are unchanged.
+
+### Implemented
+
+| Finding | Correction | Regression tests (`Phase2AuditCorrectionsIT`) |
+|---|---|---|
+| **1. Attestation executed after release** (MAJOR) | `UnresolvedObjects.release` takes the record's operation lock (refused while a worker or destruction holds it) and, under the record's row lock, is refused once an attested move was recorded (message names its state and destination); otherwise it resolves the record and writes an operation event in the same transaction. `quarantineAttested` holds that lock from re-reading the authorization through the intent, rename and settlement. `QuarantineMoves.settle` re-validates an attested move (record still open, attested, same hash) before any rename, so recovery never resurrects a released authorization. Destruction holds the locks of every open record of the content and deletes an attested object only for records whose locks it holds; it trusts an attested ledger hash only together with a record resolved QUARANTINED for that hash. | `v0020_aReleaseBeforeExecutionMeansNoWorkerRetryOrRecoveryMovesTheObject`, `v0020_aReleaseDuringExecutionIsRefusedAndCannotInvalidateTheMove` (release attempted at three points inside the execution), `v0020_afterAWorkerCrashTheRecordedMoveIsFinishedAndAReleaseIsRefusedWithItsDisposition` (crash, restarts, repeated recovery), `v0020_staleAuthorizationIsNeverResurrectedByRecoveryNorInheritedByDestruction` |
+| **2. Repair inspection-to-commit race** (MAJOR) | The inspection decides only the commit; destruction re-inspects every former location (historical generation paths, operation targets, ledger sources, removed quarantine paths). Empty or authoritative bytes: nothing of the content remains there. A released object: reported. Anything else: `unresolved_object` (OBJECT_AT_VACATED_LOCATION), untouched, `CLEANUP_INCOMPLETE`. Scans report objects at historical locations as unexpected. New fault point `AFTER_SUPERSEDED_INSPECTION`. | `v0020_anObjectAppearingBetweenTheRepairsInspectionAndCommitIsNeverExcludedFromCleanup` (barrier at the boundary), `v0020_theAuthoritativeBytesAtAFormerLocationAreRemovedWithTheContent`, `gasP2_IV01_anUnrelatedObjectAtAMissingGenerationsOldPathSurvivesDestruction` and `…aRepairStoppedAfterItsCommitLeaves…` (object after repair completion, before destruction) |
+| **3. Filesystem access failures** (MAJOR) | `Presence` probes PRESENT / VERIFIED_ABSENT / UNKNOWN component by component through `FaultPoints.stat`; absence only from "no such file" while the volume marker is still there. Used by integrity scans (UNKNOWN -> UNREADABLE, no MISSING), unresolved-record closing, repair inspection and promotion, quarantine move intent and settlement, cancellation, downloads and destruction. `ManagedVolume.locate`, `listOriginals` and `StagingArea` treat only "no such file" as missing. | `v0020_anInaccessibleOriginalIsNeverRecordedMissing` (permission, I/O error, parent directory, vanished mount), `v0020_anUnresolvedRecordIsNotClosedByAnInconclusiveInspection`, `v0020_aRepairDoesNotCommitWhileTheSupersededLocationCannotBeExamined`, `v0020_aQuarantineMoveIsNotSettledAsSourceAbsentWhileItsSourceCannotBeExamined`, `v0020_destructionNeverReportsBytesRemovedWhileACopyCannotBeExamined` |
+| **4. Attestation atomicity** (MINOR) | Attestation, operation event and job in one transaction under the record's row lock; a repeated attestation returns the existing one without a second job or event. | `v0020_attestationAuditEventAndJobAreOneTransactionAndRepeatsAreIdempotent` (job insert made to fail: nothing remains) |
+
+Access failures are injected through the fault seam (`ScriptedFaults.denyAccess`, `failIo`, `vanish`), so the
+tests behave identically on Windows and Linux and under any account's privileges.
+
+**Lifecycle verification (finding 5).**
+
+| Transition | Authoritative database state | Physical state | Authorization evidence | Audit event | Recovery |
+|---|---|---|---|---|---|
+| Attestation -> job -> execution -> quarantine | record ATTESTED; ledger INTENDED at `att-<record>`; then record RESOLVED QUARANTINED + generation QUARANTINED + ledger QUARANTINED in one transaction | object at its location; renamed into quarantine; verified after the rename | attestation of the observed SHA-256, re-read under the operation lock; settle re-validates | operation events: attested, moved | `reconcileAll` settles the intent only while the attestation is current; the job re-runs harmlessly |
+| Attestation -> release -> queued retry | record RESOLVED NOT_ARCHIVAL; generation MISSING; no ledger entry | object left where it is | none (released); release refused once an intent exists | operation event: released, attestation withdrawn | the job and recovery find the record resolved and do nothing |
+| Repair inspection -> retirement -> destruction | generation MISSING (absent) or UNRESOLVED + record (present) | whatever is there at destruction time | authoritative SHA-256 only | repair resolution; destruction message | destruction re-inspects every former location; unidentified objects become records; CLEANUP_INCOMPLETE until resolved |
+| Access failure -> recovery -> reinspection | unchanged (no MISSING, record open, intent INTENDED, CLEANUP_INCOMPLETE) | unchanged | none needed: nothing is decided | UNREADABLE finding / operation note | retried each pass; decides once the probe is conclusive |
+| Worker crash -> restart -> reconciliation | intent INTENDED (or nothing) | before or after the rename | the intent's recorded evidence plus current attestation | note of the interrupted attempt | settle finishes or refuses visibly; never moves under a released authorization |
+| Unresolved object -> Administrator resolution -> destruction | record RESOLVED (NOT_ARCHIVAL / QUARANTINED / ABSENT / DESTROYED) | released: untouched; attested: quarantined or removed | named Administrator, reason, time on the record | operation event | destruction completes only when no open record remains |
+
+**Remaining limitations (this round).**
+* An attested move whose source object changed after its intent was recorded cannot be released (a move was
+  recorded) and cannot be settled (the object differs): it stays visibly blocked until the object is removed or
+  restored, after which recovery settles it.
+* The probe examines attributes; between a conclusive probe and the following action a local writer can still
+  change the filesystem (the accepted P2-E residual race).
+* The access-failure tests inject failures at the probe; real permission behaviour is not exercised by tests,
+  because it differs between platforms and privileged accounts.
+
+## Second V0019 audit corrections (audited revision `cf6314ccc18d91533bd0c1f530fa8ae3174fef96`)
+
+Two MAJOR findings and one MINOR. Reproduced from the source before any change:
+
+1. **A released object deleted by hash.** `DestructionProcessor.classify` tested the location's object against
+   the trusted hashes (for former locations: the authoritative SHA-256) *before* looking for an Administrator's
+   release. An object an Administrator had released as not the archive's - at a quarantine path or any former
+   location - whose bytes happen to equal the content's authoritative bytes was classified "known" and deleted
+   by the next destruction pass or recovery. Byte identity was standing in for deletion authorization.
+2. **Any marker accepted as the volume.** `Presence` concluded VERIFIED_ABSENT after "no such file" if *a
+   regular file named like a marker* was at the volume root. A different volume (or a copy of another
+   volume's marker) mounted at the configured root therefore produced verified absence: records closed,
+   content recorded MISSING, BYTES_REMOVED. The volume was verified only when it was opened.
+3. **Scan closing a record mid-move (MINOR).** `IntegrityService.checkUnresolved` closed a record as ABSENT on
+   the probe alone, without the record operation's lock and without looking at the move ledger. Between an
+   attested move's rename and its settle transaction the source is absent: the scan closed the record ABSENT
+   and retired the generation MISSING, and the settle then recorded QUARANTINED for an object whose record says
+   ABSENT - contradictory final dispositions, and an attested hash no record honours.
+
+### Correction design (documented before coding)
+
+* **Authorization before identity, everywhere bytes are deleted.** For every location, destruction first
+  consults the disposition records: an Administrator's release of that location (NOT_ARCHIVAL) makes it
+  untouchable - the released object is reported and left even if its bytes equal the authoritative bytes; if
+  the object there is no longer the released one it is recorded unresolved, never deleted. Only a location
+  that is still this content's (current generation, owned operation copy, honoured trusted move, open record
+  or former location without a contrary decision) may then be removed, and only when its object is identified
+  (authoritative hash, trusted move hash, `OperationCopies`, attestation). Completion: BYTES_REMOVED only when
+  every location is absent, removed, or released; anything else keeps CLEANUP_INCOMPLETE.
+* **Configured volume identity at every decision.** `ManagedVolume` keeps the archive and volume identities it
+  was opened for; `Presence` re-reads and verifies the marker (format, archive id, volume id) through the fault
+  seam before examining a location and again before concluding absence. A missing, unreadable, malformed or
+  foreign marker is UNKNOWN - never VERIFIED_ABSENT. Every scan, recovery, repair and destruction decision about
+  presence goes through `Presence`, so identity is rechecked at each of them, not only when the volume opened.
+* **Closing on absence follows the lifecycle.** A record is closed as ABSENT only under its operation's lock
+  (a scan skips a record whose operation is busy; destruction already holds the locks), only when no move from
+  that location is recorded but unsettled (an INTENDED ledger entry), and only on a probe taken after the lock
+  was acquired, in a transaction holding the record's row lock. Absence caused by a move in progress is settled
+  by the move, which records the single final disposition.
+
+No migration: the corrections are application rules over the existing tables, locks and ledger.
+
+### Implemented
+
+| Finding | Correction | Regression tests (`Phase2AuditCorrectionsIT`) |
+|---|---|---|
+| **1. Released objects deleted by hash** (MAJOR) | `DestructionProcessor.classify` consults the disposition records first: any Administrator release (NOT_ARCHIVAL) at the location -> the released object is left and reported, anything else there is unresolved; only then is the object compared with trusted hashes. Uncommitted copies at a released location are not deleted on the claim either. A released quarantined object keeps its ledger entry QUARANTINED (only removed objects are recorded REMOVED). | `v0021_aReleasedObjectWithTheAuthoritativeBytesIsNeverDeleted` (former location; repeated recovery, destruction and scans), `v0021_aReleasedQuarantinedObjectIsNeverDeletedEvenWhenItsBytesAreAuthoritative`, `v0021_anObjectReplacingAReleasedOneIsUnresolvedNotDeleted` |
+| **2. Any marker accepted as the volume** (MAJOR) | `ManagedVolume` keeps the archive and volume ids it was opened for and re-reads the marker on request; `Presence` requires this archive's marker for this volume before examining a location and again before concluding absence. A missing, unreadable, malformed or foreign marker gives UNKNOWN. | `v0021_aSubstitutedVolumeNeverProducesVerifiedAbsence` (foreign marker, missing marker, restored volume), `v0021_destructionRechecksTheVolumeIdentityAtEachDecision`, `v0021_aRepairDoesNotCommitAgainstASubstitutedVolume`, `v0020_anInaccessibleOriginalIsNeverRecordedMissing` (marker vanished) |
+| **3. Scan closing a record mid-move** (MINOR) | `UnresolvedObjects.closeIfVerifiedAbsent` is the only way a record closes on absence: under the record operation's lock (scans skip it while busy), with no unsettled move from the location, on a probe taken under the lock, in a transaction holding the record's row lock. New fault point `BEFORE_ABSENCE_RECORDED`. | `v0021_aScanNeverClosesARecordWhileItsMoveIsPendingOrExecuting` (scans at the intent, rename and pre-commit barriers; crash after the rename), `v0021_closingOnAbsenceExcludesWorkersAndReleases` |
+
+The tests change the marker with real files (another volume's marker written in place, or none), so they run
+identically on Windows and Linux.
+
+**Unified authorization and disposition audit (finding 4).** No path deletes on a hash match alone, and no path
+concludes absence on a volume whose identity was not confirmed at that moment.
+
+| Deletion path | Required authorization | Trusted identity evidence | Physical disposition | Completion accounting |
+|---|---|---|---|---|
+| Current generation cleanup | Administrator's destruction request; no release of the location | authoritative SHA-256 | deleted; otherwise left, unresolved | removed or verified absent |
+| Former-location reconciliation | none - nothing claims a former location (corrected in the third round: the authoritative hash is not a claim) | only an Administrator's attestation | left, unresolved, unless attested (removed) or released (left, reported) | unresolved keeps CLEANUP_INCOMPLETE |
+| Operation-created copies | the operation's claim + destruction request; no release of the location | `OperationCopies` (received hash, or prefix of the re-verified staged upload) | deleted; otherwise the claim becomes an unresolved record | as above |
+| Quarantine destruction | destruction request; the move's trusted basis; for attested moves, the record that move resolved | the move's recorded SHA-256 | deleted; untrusted, released or mismatching objects left | as above; ledger REMOVED only for removed objects |
+| Attested objects (not moved) | attestation, with the record's lock held by the destruction | the attested SHA-256 | deleted; changed objects left, unresolved | record DESTROYED in the completion transaction |
+| Repair supersession | none - nothing is deleted | - | MISSING if verified absent; UNRESOLVED + record if present; no commit if undeterminable | - |
+| Cancellation | the operation's claim | `OperationCopies` | moved to quarantine (never deleted); otherwise left, unresolved | - |
+| Interrupted-move recovery | the recorded intent (and, for attested moves, a current attestation) | the intent's recorded SHA-256 | moved / confirmed / SOURCE_ABSENT only on verified absence; otherwise left | the single final disposition is recorded by the settle transaction |
+
+**Volume identity: residual check-to-use risk.** The marker is verified immediately before each examination
+and before absence is concluded, so a substituted, unmounted or foreign volume is never read as "absent"
+(the reported defect). Between that verification and the following filesystem call a privileged local actor
+could still swap what is mounted at the root; Java offers no portable way to pin a mount (no `openat` on a
+directory handle), so this is the same class of residual risk as P2-E and is accepted on the same terms: it
+requires local administrative access to the host and is not reachable through the application.
+
+**Remaining limitations (this round).** A released object stays where it is for good; removing it is a manual
+act outside the application (a later scan then reports nothing there). Released locations are excluded from
+automatic deletion even if the content's authoritative bytes are later put there; that needs a new decision.
+
+## Third V0019 audit corrections (audited revision `0d7342a810354db341dc6a27ce7916e54684e95c`)
+
+One MAJOR finding and one MINOR. Reproduced from the source before any change:
+
+1. **Former locations deleted on a hash match.** `DestructionProcessor.removeBytes` classified superseded
+   generations (QUARANTINE_PENDING, UNRESOLVED), every former location (historical generation paths, operation
+   targets, ledger sources, removed quarantine paths) and every remaining open record against
+   `Set.of(authoritative)`. An object there whose bytes equal the content's authoritative bytes was deleted although
+   nothing currently claims that location and no Administrator attested the object: the hash stood in for
+   ownership and authorization.
+2. **Enumeration on an unverified volume.** `IntegrityService.checkUnexpected` listed `originals` on the volume
+   opened at the start of the scan and recorded UNEXPECTED_OBJECT / LINK_OR_REPARSE findings without checking that
+   the configured volume was still the one mounted: a substituted volume's objects were attributed to the archive.
+
+### Correction design (documented before coding)
+
+* **Ownership, then evidence, never one for the other.** A location's object may be deleted only when (1) a
+  current record claims the location for this content - the CURRENT generation (vacated or not), an operation's
+  live claim, a QUARANTINED ledger entry with trusted move evidence, or an Administrator's attestation on an open
+  record whose operation lock the destruction holds; (2) evidence established before now identifies the object -
+  the authoritative hash for the current generation, `OperationCopies` for a claim, the move's trusted hash, the
+  attested hash; (3) no Administrator decision (release) applies to the location; (4) the configured volume's
+  identity was just verified (`Presence`). Superseded generations, former locations and open records are
+  classified with **no** trusted hash: their objects - matching or not - are recorded unresolved and left; only
+  an attestation (delete/quarantine) or a release (leave) disposes of them. BYTES_REMOVED therefore means every
+  claimed copy was removed or verified absent and every other occupied location was decided by an Administrator.
+* **Enumeration only on the verified volume.** `checkUnexpected` verifies the configured archive and volume
+  identity (through the same seam as `Presence`) before listing, and again after listing and before recording
+  anything derived from it; if either check fails nothing from the listing is recorded and the scan reports the
+  volume as unavailable (counted as a problem, retried by the next scan). Two fault points mark the boundaries.
+
+No migration: both are application rules.
+
+### Implemented (third round)
+
+| Finding | Correction | Regression tests (`Phase2AuditCorrectionsIT`) |
+|---|---|---|
+| **1. Former locations deleted on a hash match** (MAJOR) | Superseded generations (QUARANTINE_PENDING, UNRESOLVED), former locations and open records are classified with no trusted hash; only an attestation (whose record's lock destruction holds) removes their object, and a release leaves it. A record closed in the completion transaction says what happened: DESTROYED only when this pass deleted the object, ABSENT when it was already gone. | `v0022_anObjectAtAFormerLocationIsNeverDeletedOnAHashMatchWithoutACurrentClaim` (matching and non-matching bytes; repeated recovery and destruction; the owned current generation removed meanwhile; attestation -> removed, release -> left; then BYTES_REMOVED), `v0022_aSupersededGenerationWithTheAuthoritativeBytesIsNotDeletedWithoutAttestation`, `v0021_aReleasedObjectWithTheAuthoritativeBytesIsNeverDeleted` |
+| **2. Enumeration on an unverified volume** (MINOR) | `checkUnexpected` confirms this archive's marker for this volume before listing and again before recording anything derived from the listing; otherwise it records VOLUME_UNAVAILABLE ("nothing from that listing was recorded") and the next scan retries. Fault points `BEFORE_ENUMERATION`, `AFTER_ENUMERATION`. | `v0022_unexpectedObjectsAreEnumeratedOnlyOnTheConfiguredVolume` (substituted before and during enumeration; restored volume reports the stray object) |
+
+**Authorization matrix verification (finding 3).** For every deletion path the five conditions are checked
+independently (none stands in for another):
+
+| Path | 1. Ownership / authorization | 2. Identity evidence | 3. Disposition state | 4. Volume identity | 5. Accounting |
+|---|---|---|---|---|---|
+| Current generation | CURRENT generation of DESTROY_PENDING content (destruction request) | authoritative SHA-256 | no release of the location | `Presence` before examining and deleting | removed / verified absent -> counts; else unresolved |
+| Former generations and other former locations | none | (not consulted) | release -> left; attestation -> may be removed | as above | unresolved until attested or released |
+| Superseded generation (QP / UNRESOLVED) | generation record only (no current claim on the bytes) | attestation only | as above | as above | as above |
+| Operation-created copies | live operation claim + destruction request | `OperationCopies` | no release of the location | as above | removed; otherwise claim -> unresolved |
+| Quarantine objects | QUARANTINED ledger entry with trusted basis; attested moves also need the record they resolved | the move's recorded SHA-256 | no release of the location | as above | removed (ledger REMOVED); released -> ledger stays QUARANTINED |
+| Attested objects in place | attestation + the record's operation lock held by the destruction | attested SHA-256 | open, attested record | as above | record DESTROYED in the completion transaction |
+| Repair cleanup / supersession | nothing deleted | - | MISSING / UNRESOLVED by verified presence | as above; otherwise the repair waits | - |
+| Cancellation | live claim | `OperationCopies` | - | as above | moved to quarantine, never deleted |
+| Crash recovery (interrupted moves) | the recorded intent; attested moves need a current attestation | the intent's SHA-256 | no unsettled conflicting decision | as above | single final disposition in the settle transaction |
+
+## Fourth V0019 audit correction (audited revision `68cb078aeabcf65692bfe35a6c5fb774e2f4d888`)
+
+One MAJOR finding, reproduced from the source before any change:
+
+**A verified-absent location became a deletion instruction.** In `DestructionProcessor.classify`, a location
+verified absent was added to `Inventory.known` - the same set as objects identified for deletion - and the
+uncommitted copies found absent by `OperationCopies` were added there too. The deletion loop then called
+`delete(volume, location)` for every member, and `delete` re-probed and deleted *whatever was present*, with no
+ownership, authorization, release or identity check of its own. An unrelated object, or an Administrator-released
+object returning to its location, that appeared between inventory construction and deletion was deleted. The
+completion check then only asked whether the location was empty.
+
+### Correction design (documented before coding)
+
+* **Explicit inventory categories.** Each examined location ends in exactly one of: *verified absent* (never a
+  deletion instruction); *deletable* - a currently claimed object, carrying the specific authorization (current
+  generation, live operation claim, trusted quarantine move, or held attestation) and the size and SHA-256
+  identified at decision time; *released* (left and reported); *unresolved* (recorded, left); *undeterminable*
+  (the pass stops, retried).
+* **Authorization enforced inside the deletion helper.** `deleteAuthorized` re-establishes, for the one object it
+  is about to delete: the configured volume's identity (`Presence`); the claim named by the authorization still
+  holds (the generation is still CURRENT at that path for content being destroyed / the operation still claims
+  that path / the ledger entry is still QUARANTINED with trusted, honoured evidence for that hash / the record is
+  still open and attested, with its operation lock held); no release applies to the location; and the object
+  still has the size and SHA-256 identified when the decision was made. Otherwise it refuses: nothing is deleted
+  and the location is recorded unresolved. An absent location is never handed to it.
+* **Reconciliation after deletion.** Every verified-absent location is probed again after the deletions; an
+  object that has appeared is classified anew (released -> reported; anything else -> unresolved) and keeps the
+  removal CLEANUP_INCOMPLETE. Open records are closed DESTROYED only if this pass deleted their object, ABSENT
+  only if the location was verified absent at both looks.
+* **Residual race (unchanged, P2-E).** The helper's final identity check and the delete are separate filesystem
+  calls; Java offers no portable "delete only if still this object" primitive, so an object swapped in between
+  them by a local writer could still be deleted. Repeated checks narrow but do not close this window; it remains
+  the accepted P2-E limitation.
+
+No migration: application rules over the existing tables.
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| Inventory | `DestructionProcessor.Inventory` now holds `absent`, `deletable` (location -> `Authorization`), `released`, `unresolved` and `former`; an unknown location still stops the pass. An unresolved decision overrides any other category for the same location. |
+| Deletion boundary | `deleteAuthorized` (the only archival deletion helper) re-probes the configured volume, re-reads the claim (`claimBroken`: CURRENT generation of DESTROY_PENDING content / operation `target_created` at that path / QUARANTINED ledger entry with trusted, honoured evidence / open attested record under a held lock), refuses on any release or foreign open record, and re-measures size and SHA-256. A refusal is an operation event (`not deleted: ...`) and an unresolved record. |
+| Reconciliation | Every absent or deleted location is probed again; an appearing object is reported (released, same bytes, no open record) or recorded unresolved, keeping CLEANUP_INCOMPLETE. Completion detail counts objects deleted vs. locations already empty. |
+| Accounting | Records close DESTROYED only for objects this pass deleted, ABSENT only for locations verified empty at reconciliation; ledger entries say which. |
+| Test seam | Fault point `AFTER_INVENTORY`. |
+| Other callers | None: `Files.delete` elsewhere touches only the write-probe file, thumbnail temporaries and staging; no other path deletes archival bytes. |
+
+Regression tests (`Phase2AuditCorrectionsIT`, `v0023_*`): object appearing at a verified-empty former location (byte-identical and foreign) across repeated passes, then attested or released; returning released object with the archive's own bytes (reported, never deleted) and a replacement (new unresolved record); crashes at `AFTER_INVENTORY` and `DURING_PHYSICAL_DELETE` with recovery; current object swapped after identification (refused, CURRENT_COPY record) plus a legitimate owned deletion; attested object gone before deletion (ABSENT, not DESTROYED).
+
+Two earlier tests (`gasP2_FV01_cleanupInterruptedAfterEachRemovalNeverReportsCompletionEarly`,
+`gasP2_IV01_cleanupInterruptedAfterEachRemovalNeverTouchesHistoricalLocations`) crashed at the k-th
+`DURING_PHYSICAL_DELETE` of a pass, which counted verified-empty locations (including ones emptied by the previous
+crashed pass) as deletion steps - the behaviour this round removes. They now stop each pass after its first actual
+deletion, once per object to delete, so the removal is still interrupted after every object it deletes; their
+assertions are unchanged.
+
+## Fifth V0019 audit correction (audited revision `4cf50b52a44a9bce2f99ab45cf7c7dea93e6cf17`)
+
+One MAJOR finding, reproduced from the source before any change:
+
+**A replacement inherited a release.** In `DestructionProcessor.classify`, an object at a location an Administrator
+released went to `Inventory.released` when its SHA-256 was among the released records' observed hashes - a hash
+alone. Final reconciliation then only asked whether *something* was present at each released location and reported
+it as the released object; completion went on to BYTES_REMOVED. An object put in its place after classification -
+different bytes or byte-identical - was reported as released, no unresolved record was made, and destruction
+completed. `refuse` (used by reconciliation and by the deletion helper) had the same hash-only branch, so an object
+that appeared at a location found empty, or one refused for deletion, could also inherit a release.
+
+### What evidence binds a release to an object
+
+A release (`unresolved_object`, resolution NOT_ARCHIVAL) records what was observed when the object was found:
+`observed_size`, `observed_sha256` and `detected_at` (the database time of the observation). Nothing else about the
+physical object was stored, and Java exposes no portable physical identity (`fileKey()` is null on Windows/NTFS).
+The evidence available without a schema change is therefore: the size and SHA-256 observed, the time of that
+observation, and the object's own filesystem times (creation and last modification) and, where the platform gives
+one, its file key.
+
+### Correction design (documented before coding)
+
+* **At classification**, an object counts as the released object only if all hold: no open record at the location;
+  it is a plain file; a release record at the location has exactly its size and SHA-256; the object's creation and
+  last-modification times are no later than that record's observation (an object created or rewritten after the
+  release's observation is not the object observed); and the location was not found empty earlier in the same pass.
+  Otherwise it is unresolved (a record is made, with its size and SHA-256 so an Administrator can attest or release
+  it).
+* **The classification's evidence is kept** in the inventory: size, SHA-256, creation and modification times and
+  file key (when present).
+* **At reconciliation** every released location is examined again: verified empty -> the released object is gone
+  (empty location, nothing to account for; noted); present with *exactly* the evidence kept at classification ->
+  the release still holds and is reported; anything else (different bytes, or byte-identical bytes with different
+  times or file key) -> a replacement: recorded unresolved, removal CLEANUP_INCOMPLETE; undeterminable (access
+  failure, volume not confirmed) -> incomplete.
+* **No inheritance anywhere else**: `refuse` no longer reports anything as released. An object that appears at a
+  location found empty in this pass - including a released object that disappeared and came back - is unresolved,
+  because the observed disappearance means hash and size cannot show it is the same object. This makes the fourth
+  round's "returning released object" case stricter: it is now unresolved until an Administrator decides again.
+* **Fault point** `BEFORE_RECONCILIATION`, after the deletions and before final reconciliation.
+
+**Conservative limits (stated, not hidden).** A byte-identical object placed with times no later than the
+observation (moved in from elsewhere, or copied with its timestamps preserved), where the platform gives no file
+key that changed, cannot be told from the released object: it is reported as released. Filesystem times are compared
+with the database's clock, so skew between the two can make a genuine released object look replaced (it then stays
+unresolved - the safe direction) or, if the database clock is ahead, let a replacement written within the skew pass.
+Stronger cross-pass evidence would need the observed times (and file key where available) stored with the record -
+a schema change (V0020) that is **not** made here; it is an owner decision.
+
+No migration.
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| Classification | `notTheReleasedObject`: no open record, plain file, exact size and SHA-256 of a release at the location (`UnresolvedObjectRepository.releasedAt`), creation and modification times no later than that release's observation, location not seen empty this pass. Otherwise unresolved; the new record carries the object's size and SHA-256. |
+| Evidence kept | `Inventory.released` maps each location to `Evidence` (size, SHA-256, creation time, modification time, file key). |
+| Reconciliation | `stillTheReleasedObject`: verified empty -> noted, nothing to account for; identical evidence -> reported; otherwise a replacement -> `refuse` (unresolved record, `not deleted` event); undeterminable -> incomplete. |
+| No inheritance | `refuse` has no released branch: an object appearing at an empty location, or refused at deletion, is always unresolved. |
+| Test seam | Fault point `BEFORE_RECONCILIATION`. |
+
+### Cross-path review: does final reconciliation rely on an earlier classification?
+
+| Category | Final accounting rests on |
+|---|---|
+| Released locations | Re-identification by the evidence kept at classification (this round). |
+| Verified-absent locations | A new probe at reconciliation; anything present -> unresolved (fourth round; never released now). |
+| Deleted by this pass | A new probe; anything present -> unresolved. |
+| Superseded generations, former locations | Classified with no claim: unresolved, released (evidence-bound) or absent; reconciled as above. |
+| Quarantine objects, attested objects, operation copies | Deleted only through `deleteAuthorized`, which re-checks the claim and the identified size and SHA-256; a refusal is unresolved, never released. |
+| Unresolved | Never reclassified within a pass; always blocks completion. |
+| Completion transaction | Records close DESTROYED / ABSENT from this pass's reconciliation; the window between reconciliation and the commit is part of the P2-E check-then-act limitation. |
+
+Regression tests (`v0024_*`): replacement before reconciliation with different and byte-identical bytes (unresolved,
+repeated passes, then released by an Administrator); unchanged released object (reported, completes) and vanished
+released object (noted, completes); replacement between passes, different and byte-identical; replacement with an
+integrity scan and a crash before reconciliation, then restarts; access denied and substituted volume marker at
+reconciliation (incomplete, then completes once examinable). The fourth round's returning-released-object test now
+expects the returning object to be unresolved until released again.
+
+Note: when a destruction is already CLEANUP_INCOMPLETE, a later incomplete pass records its reason as an operation
+event; the operation's `message` keeps the first reason. The tests read the events for later passes.
+
+## Phase 2 finalization: V0020 object-identity evidence and P2-I (baseline `54f3095eef2947c1f5de440c493a857f51f6ee2e`)
+
+Owner decisions: (1) V0020 - persist stronger object-identity evidence; (2) P2-I - keep Administrator attestation
+before a damaged copy is quarantined.
+
+### Design (documented before coding)
+
+**V0020 (`gas.unresolved_object`, existing rows preserved).** Reusing `observed_size`, `observed_sha256` and
+`detected_at` (the observation time), it adds:
+
+| Column | Meaning |
+|---|---|
+| `observed_created_at`, `observed_modified_at` | The object's filesystem creation and last-modification times at the observation (microsecond precision). |
+| `observed_file_key` | The platform file key at the observation (e.g. device and inode on Linux); NULL where the platform gives none (Windows/NTFS through Java). |
+| `identity_evidence` | `RECORDED` (a plain file measured with its times), `NONE` (not a plain file - nothing to identify), `LEGACY` (recorded before V0020; the default for every existing row). |
+| `decision_evidence`, `decision_checked_at` | At an Administrator's attestation or release: whether the object then at the location was re-examined and had exactly the recorded evidence (`CONFIRMED`) or not (`UNCONFIRMED` - absent, different, unexaminable, or no recorded evidence), and when. |
+
+Constraints: `RECORDED` requires size, SHA-256 and both times; a `CONFIRMED` decision requires `RECORDED` evidence
+and a check time; an open attested record made under V0020 must be `CONFIRMED`. The observation columns join the
+immutable-identity trigger; decision columns change only with an attestation or a resolution.
+
+**Evidence is persisted where it arises.** Every record is created with the evidence of the observation that made
+it (destruction, repair retirement of a superseded generation, an operation copy found unverified). An attestation
+re-examines the object under the record's operation lock and is refused unless the object is exactly the recorded
+one; a release re-examines it too and records whether its decision is `CONFIRMED` (a release is never refused for
+that - leaving an object alone is never destructive).
+
+**Use.** Exact equality of size, SHA-256, both times (to the microsecond) and file key (both absent counts as equal)
+- the "no later than the observation" rule and its dependence on the database clock are gone.
+* Released location: an object counts as the released object only under a `CONFIRMED` release whose recorded
+  evidence it matches exactly, with no open record and no disappearance seen in the pass; reconciliation compares
+  again. `LEGACY` or `UNCONFIRMED` releases identify nothing: the object is unresolved and needs a new decision.
+* Attestation: deletion by attestation (destruction) and the attested quarantine move both require a `CONFIRMED`
+  attestation and the object to match its recorded evidence; a `LEGACY` attestation authorises nothing (the record
+  stays unresolved; the Administrator can release it, or remove the object by hand).
+* All earlier protections are unchanged.
+
+**Limits (documented, not hidden).** Times and file keys are evidence, not proof: an object given exactly the same
+size, bytes, creation and modification times - and, where there is one, the same file key - cannot be told apart.
+On Windows there is no file key, and creation and modification times can be set by ordinary tools. The check and the
+filesystem use are still separate calls (P2-E).
+
+**P2-I.** No new behaviour: damaged copies are quarantined only through an Administrator's attestation, now
+evidence-bound. Review: repair retirement records the superseded copy `UNRESOLVED` (never moves it); recovery only
+settles a recorded move while its attestation is current; destruction removes an attested object only as above; the
+other quarantine moves are an operation's own verified copies. ADR-0009 and PHASE-2-DECISIONS record the owner's
+decision.
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| V0020 | `V0020__object_identity_evidence.sql`: the columns above; existing rows LEGACY; constraints (complete RECORDED evidence, NONE carries none, LEGACY carries no new evidence or decision, CONFIRMED needs RECORDED, open V0020 attestations CONFIRMED); the observation columns join the immutability trigger; decision evidence changes only with an attestation or resolution. |
+| Repository | `UnresolvedObjectRepository.Identity` (exact equality, times truncated to microseconds); `NewEntry` takes the observed identity; `release(..., DecisionEvidence)`; `attest` records CONFIRMED and accepts only RECORDED records. |
+| Observation | `ObjectIdentity.observe/of/difference`; every record creation (destruction, repair retirement and commit, unverified operation copy) persists the identity it observed. |
+| Decisions | `UnresolvedObjects.attest` examines the object under the record's operation lock and refuses LEGACY or changed objects (nothing recorded, no job); `release` examines it and records CONFIRMED/UNCONFIRMED (a LEGACY record's release stays without decision evidence). |
+| Use | `DestructionProcessor`: released objects by exact match with a CONFIRMED release; attestation-based deletion only with a CONFIRMED attestation and an exact match; every deletion compares the full identity seen at classification. `quarantineAttested`: no move unless CONFIRMED and exact. |
+| UI | The preservation page says which records predate identity evidence and offers attestation only for RECORDED ones. |
+
+Tests: `Phase2SchemaIT.anExistingV0019InstallationUpgradesAndItsRecordsAreLegacy` (upgrade keeps open, attested and
+released rows as LEGACY; completeness, immutability and decision-binding constraints); `ObjectIdentityTest` (exact
+equality, microsecond precision, a missing file key is not a wildcard); `Phase2AuditCorrectionsIT.v0025_*`: evidence
+persisted and the unchanged released object recognised; byte-identical replacement keeping the modification time,
+through a crash before reconciliation and restarts, then a new release; attestation refused for a changed object and
+an UNCONFIRMED release identifying nothing; legacy release and legacy attestation (content's own bytes) never treated
+as verified. The fifth round's tests were kept; one expected reason now reads "not its filesystem identity".
+
+## V0020 integration correction (audited revision `9b84ecf4a7284eb76b619e3bda25f66f15deabfd`)
+
+One MAJOR finding, reproduced from the source before any change.
+
+**Two attestation-dependent paths still authorised on a hash.**
+
+1. *Quarantine settlement.* `QuarantineMoves.settle` completes an INTENDED attested move (`ATTESTED_OBJECT`) when
+   `attestationCurrent` holds - the record is open, attested and has the same SHA-256 - and `isRecordedObject`
+   matches size and SHA-256. Neither looks at `identity_evidence`, `decision_evidence` or the recorded times and file
+   key. Recovery (`reconcileAll`), destruction's settle loop, repair retirement and the operations page call `settle`
+   directly, so the worker's V0020 pre-check in `quarantineAttested` is bypassed: a pending move under a LEGACY
+   attestation, or one whose source was replaced by a same-byte object with other times or file key, is renamed into
+   quarantine.
+2. *Attested-ledger destruction.* `DestructionProcessor.trustedMoveHashes` trusts a QUARANTINED ledger entry's
+   SHA-256 when `attestationHonoured` finds a record at the source resolved QUARANTINED with that hash - including a
+   LEGACY record, and without checking anything but the hash of the object now at the quarantine path. A LEGACY
+   attestation therefore authorises deleting the quarantine copy, and a same-byte object put at the quarantine path
+   is deleted.
+
+### Correction (no migration)
+
+* **Move evidence.** A ledger entry already records the source object's size, SHA-256 and last-modification time
+  (microseconds) at the intent. A rename - and Java's copy-and-delete move - keeps the modification time; the
+  creation time and file key may not survive a relocation, so a quarantine copy is identified by size, SHA-256 and
+  modification time, never by source-path metadata.
+* **Binding to the decision.** An attested move is bound only if the record is RECORDED with a CONFIRMED decision and
+  its persisted size, SHA-256 and modification time equal the ledger entry's.
+* **Settlement, before a rename (source present):** for `ATTESTED_OBJECT`, the record at the source must be open,
+  attested, bound as above, and the object at the source must equal the record's full persisted identity (size,
+  SHA-256, both times, file key). LEGACY, UNCONFIRMED, released or changed -> nothing is moved, the intent stays as it
+  is and the record stays open (durable accounting); the same rename-and-verify step checks the arrived object's
+  move evidence.
+* **Settlement after an interrupted rename (source absent, destination present):** confirming records what already
+  happened and moves nothing. For `ATTESTED_OBJECT` the destination must match the move evidence (size, SHA-256 and the
+  recorded modification time); a copy moved under a LEGACY attestation is still confirmed (not stranded) but, being
+  unbound, never authorises its deletion.
+* **Destruction:** a quarantine copy is deletable by a trusted move only if it matches that move's evidence including
+  the modification time (where the entry recorded one), and - for an attested move - only if the move is bound to a
+  CONFIRMED record. The deletion helper checks the same again. Otherwise the copy is recorded unresolved
+  (`QUARANTINED_COPY`, with its identity) and the removal stays CLEANUP_INCOMPLETE until an Administrator attests the
+  quarantine object (a new, bound decision) or releases it.
+* **Legacy.** Nothing is upgraded or invented: LEGACY attestations authorise no move or deletion; completed legacy
+  moves stay recorded as they are; every such object remains available for an Administrator's decision. A pending
+  attested move that can no longer be completed stays INTENDED and keeps its content's destruction incomplete; if the
+  object at its source is removed by hand, the move settles as SOURCE_ABSENT.
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| `ObjectIdentity` | `matchesMove` (size, SHA-256, recorded modification time) and `bindsMove` (attested, RECORDED + CONFIRMED, record evidence equal to the move's). |
+| `QuarantineMoves.settle` | For `ATTESTED_OBJECT`: before a rename, `attestedSourceUnbound` requires an open attested record bound to the move and an exact full-identity match at the source; the arrived object and an interrupted rename's destination must match the move evidence. Applies to every caller (worker, retry, recovery, repair retirement, destruction, operations page). |
+| `DestructionProcessor` | `trustedMoveMatches` replaces `trustedMoveHashes`: a QUARANTINED, trusted ledger entry at that location whose attestation (if any) is bound (`attestationHonoured` via `UnresolvedObjectRepository.resolvedAt` + `bindsMove`) and whose move evidence the object matches; the deletion helper re-checks it. |
+| Other attestation-dependent paths | Reviewed: `quarantineAttested` (pre-check, then `settle`), destruction's ATTESTATION basis (V0020) and release are already bound; no other path moves or deletes on an attestation. |
+
+Tests (`Phase2AuditCorrectionsIT.v0026_*`): same-byte replacement of an attested source after the intent (recovery,
+worker retry and destruction move nothing; release refused while the move is recorded; removal by hand settles
+SOURCE_ABSENT and completes); bound attested moves interrupted after the intent and after the rename are recovered,
+and destruction - interrupted after a deletion - removes the quarantine copies (ledger REMOVED, BYTES_REMOVED); an
+attestation not bound to the recorded move moves nothing; a LEGACY attestation never completes a pending move; a
+LEGACY attested quarantine copy is not destroyed on its hash until the copy itself is attested; a same-byte
+replacement of a bound quarantine copy is not destroyed and, once released, stays with its ledger entry.
+
+## Remaining limitations (unchanged scope decisions)
+
+Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback
+documented only (B4); JDK-only thumbnails; no resumable uploads; no scheduled scans; ingestion volume not
+yet in the configuration export (Phase 8). Change History redaction covers structured references (File
+UUIDs, friendly IDs, content IDs); free-text reasons that describe a restricted File in other words cannot
+be recognised and are shown.

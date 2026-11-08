@@ -50,12 +50,14 @@ class Phase1SchemaIT {
         assertThat(current.status().state()).as("a Phase 0 database is behind this build").isEqualTo(SchemaStatus.State.BEHIND);
         assertThat(current.status().currentVersion()).isEqualTo("0001");
 
-        SchemaMigrator.MigrationReport report = current.migrate();
+        // Pinned to the accepted Phase 1 schema (V0008); later phases are checked in their own schema ITs.
+        SchemaMigrator phase1 = SchemaMigrator.upTo(ds, "0008");
+        SchemaMigrator.MigrationReport report = phase1.migrate();
 
         assertThat(report.fromVersion()).isEqualTo("0001");
         assertThat(report.migrationsApplied()).as("V0002-V0008").isEqualTo(7);
-        assertThat(current.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
-        assertThat(new PostMigrationValidator(ds, current).validate()).isEmpty();
+        assertThat(phase1.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
+        assertThat(new PostMigrationValidator(ds, phase1).validate()).isEmpty();
         assertThat(ArchiveFixtures.services(ds).archives().current())
                 .as("upgrading never invents an Archive ID; init-archive is explicit").isEmpty();
     }
@@ -91,7 +93,8 @@ class Phase1SchemaIT {
 
     @Test
     void phase1AddsOnlyCoreInfrastructureTablesAndNoHistoricalDomainTables() {
-        new SchemaMigrator(ds).migrate();
+        // Pinned to the accepted Phase 1 schema (V0008); Phase 2 tables are checked in Phase2SchemaIT.
+        SchemaMigrator.upTo(ds, "0008").migrate();
         assertThat(tables()).containsExactlyInAnyOrder(
                 "relation flyway_schema_history kind=r",
                 "relation schema_identity kind=r",

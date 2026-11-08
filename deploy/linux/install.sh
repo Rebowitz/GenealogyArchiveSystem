@@ -4,8 +4,9 @@
 #   sudo deploy/linux/install.sh target/genealogy-archive.jar [/path/to/java]
 #
 # Creates the 'genealogy-archive' system account, /opt/genealogy-archive (application),
-# /etc/genealogy-archive (installation configuration, root:genealogy-archive 0750) and
-# /var/log/genealogy-archive. It never overwrites an existing installation.yml and never stores a
+# /etc/genealogy-archive (installation configuration, root:genealogy-archive 0750),
+# /var/log/genealogy-archive, and the installation-local upload staging area
+# (/var/lib/genealogy-archive/staging, 0700) and thumbnail cache (/var/lib/genealogy-archive/cache). It never overwrites an existing installation.yml and never stores a
 # password. Services are installed but not enabled or started: configure, migrate, then enable.
 set -euo pipefail
 
@@ -16,6 +17,7 @@ APP_USER=genealogy-archive
 APP_DIR=/opt/genealogy-archive
 ETC_DIR=/etc/genealogy-archive
 LOG_DIR=/var/log/genealogy-archive
+LIB_DIR=/var/lib/genealogy-archive
 
 [ "$(id -u)" = 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }
 [ -f "$JAR" ] || { echo "Jar not found: $JAR" >&2; exit 1; }
@@ -29,6 +31,9 @@ install -d -m 0755 "$APP_DIR"
 install -m 0644 "$JAR" "$APP_DIR/genealogy-archive.jar"
 install -d -m 0750 -o root -g "$APP_USER" "$ETC_DIR"
 install -d -m 0750 -o "$APP_USER" -g "$APP_USER" "$LOG_DIR"
+install -d -m 0750 -o "$APP_USER" -g "$APP_USER" "$LIB_DIR"
+install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$LIB_DIR/staging"
+install -d -m 0750 -o "$APP_USER" -g "$APP_USER" "$LIB_DIR/cache"
 
 if [ ! -f "$ETC_DIR/installation.yml" ]; then
   install -m 0640 -o root -g "$APP_USER" "$HERE/../../config/installation.example.yml" "$ETC_DIR/installation.yml"
@@ -46,7 +51,9 @@ systemd-analyze verify /etc/systemd/system/genealogy-archive-web.service /etc/sy
 cat <<EOF
 
 Installed. Next steps:
-  1. Edit $ETC_DIR/installation.yml (database, storageRoots, logging.directory: $LOG_DIR).
+  1. Edit $ETC_DIR/installation.yml (database, storageRoots, logging.directory: $LOG_DIR,
+     files.stagingDirectory: $LIB_DIR/staging, files.cacheDirectory: $LIB_DIR/cache).
+     Storage Volume roots: owned by $APP_USER, mode 0750, outside /home, /usr, /boot and /etc.
   2. Put the database password in $ETC_DIR/db-password (one line) and protect it:
        chown root:$APP_USER $ETC_DIR/db-password && chmod 0640 $ETC_DIR/db-password
      and set database.passwordFile: $ETC_DIR/db-password

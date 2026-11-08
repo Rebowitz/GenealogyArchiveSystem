@@ -29,6 +29,21 @@
             Installation configuration maps volume IDs that this archive has not registered:
             <code th:each="id : ${ops.unregisteredConfiguredVolumes()}" th:text="${id} + ' '">id</code></p>
     </section>
+    <section th:class="${#lists.isEmpty(webWriteProblems)} ? 'status ok' : 'status problem'">
+        <h2 th:text="${#lists.isEmpty(webWriteProblems)} ? 'Web service write access to archival originals: denied' : 'Web service write access to archival originals: not confirmed as denied'">Write access</h2>
+        <p th:if="${#lists.isEmpty(webWriteProblems)}" class="muted">Checked just now from the web service itself: it cannot
+            create files among the preservation originals of any usable volume, as intended.</p>
+        <ul th:unless="${#lists.isEmpty(webWriteProblems)}"><li th:each="p : ${webWriteProblems}" th:text="${p}">p</li></ul>
+    </section>
+    <section th:class="${preservation.attentionNeeded() > 0 or preservation.openFindings() > 0} ? 'status problem' : 'status ok'">
+        <h2>File preservation</h2>
+        <p>New Files go <span th:text="${preservation.ingestion()}">to volume</span>.</p>
+        <p><span th:text="${preservation.blocked()}">0</span> blocked,
+            <span th:text="${preservation.waiting()}">0</span> waiting for a volume,
+            <span th:text="${preservation.cleanupIncomplete()}">0</span> with incomplete clean-up;
+            <span th:text="${preservation.openFindings()}">0</span> open integrity finding(s).
+            <a th:href="@{/preservation}">Preservation details</a></p>
+    </section>
     <section>
         <h2>Recent background jobs</h2>
         <p class="muted" th:if="${#lists.isEmpty(jobs)}">No background jobs.</p>

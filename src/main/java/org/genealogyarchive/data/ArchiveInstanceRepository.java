@@ -48,4 +48,20 @@ public final class ArchiveInstanceRepository {
                  WHERE row_version = :expected
                 """).param("name", newName).param("expected", expectedVersion).update() == 1;
     }
+
+    /** The archive's ingestion destination (P2-C), if set. */
+    public Optional<UUID> ingestionVolume() {
+        return jdbc.sql("SELECT ingestion_volume_id FROM gas.archive_instance")
+                .query((rs, n) -> Optional.ofNullable(Rows.uuid(rs, "ingestion_volume_id"))).list().stream()
+                .flatMap(Optional::stream).findFirst();
+    }
+
+    /** @return true if the row had {@code expectedVersion} and was updated */
+    public boolean setIngestionVolume(long expectedVersion, UUID volumeId) {
+        return jdbc.sql("""
+                UPDATE gas.archive_instance
+                   SET ingestion_volume_id = :vol, row_version = row_version + 1
+                 WHERE row_version = :expected
+                """).param("vol", volumeId).param("expected", expectedVersion).update() == 1;
+    }
 }

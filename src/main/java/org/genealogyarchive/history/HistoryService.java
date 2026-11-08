@@ -12,18 +12,28 @@ import java.util.UUID;
 public final class HistoryService {
 
     private final ChangeHistoryRepository repository;
+    private final HistoryVisibility visibility;
 
     public HistoryService(ChangeHistoryRepository repository) {
+        this(repository, HistoryVisibility.ALL);
+    }
+
+    public HistoryService(ChangeHistoryRepository repository, HistoryVisibility visibility) {
         this.repository = repository;
+        this.visibility = visibility;
     }
 
     public List<ChangeRecord> forObject(Actor actor, String objectType, UUID objectId) {
         AccessPolicy.require(actor, Permission.VIEW_ARCHIVE);
-        return repository.forObject(objectType, objectId);
+        return visibility.visibleTo(actor, repository.forObject(objectType, objectId));
     }
 
     public List<ChangeRecord> recent(Actor actor, int limit) {
         AccessPolicy.require(actor, Permission.VIEW_ARCHIVE);
-        return repository.recent(Math.max(1, Math.min(limit, 500)));
+        int n = Math.max(1, Math.min(limit, 500));
+        if (visibility.seesEverything(actor)) {
+            return repository.recent(n);
+        }
+        return visibility.visibleTo(actor, repository.recent(n, true));
     }
 }

@@ -18,6 +18,8 @@ TimeoutStopSec=45
 UMask=0027
 NoNewPrivileges=yes
 PrivateTmp=yes
+# The worker is the only process that writes archival Storage Volumes (Phase 2). Volume roots must
+# not be under /home, /usr, /boot or /etc, which stay read-only to it.
 ProtectSystem=full
 ProtectHome=read-only
 
