@@ -32,9 +32,11 @@ ALTER TABLE unresolved_object
     -- Only an object re-examined against RECORDED evidence can be CONFIRMED.
     ADD CONSTRAINT unresolved_object_confirmed_needs_evidence CHECK (
         decision_evidence IS DISTINCT FROM 'CONFIRMED' OR identity_evidence = 'RECORDED'),
-    -- An open attestation made under V0020 is bound to the object it was made about.
+    -- An open attestation made under V0020 is bound to the object it was made about. (IS NOT DISTINCT FROM: a NULL
+    -- decision must fail the check, not pass it as unknown.)
     ADD CONSTRAINT unresolved_object_attestation_confirmed CHECK (
-        status <> 'OPEN' OR attested_at IS NULL OR identity_evidence = 'LEGACY' OR decision_evidence = 'CONFIRMED');
+        status <> 'OPEN' OR attested_at IS NULL OR identity_evidence = 'LEGACY'
+        OR decision_evidence IS NOT DISTINCT FROM 'CONFIRMED');
 
 -- The observation is immutable, like the rest of the record's identity.
 DROP TRIGGER unresolved_object_identity_immutable ON unresolved_object;
