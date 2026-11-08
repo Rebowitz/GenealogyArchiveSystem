@@ -548,7 +548,7 @@ public final class OperationProcessor {
     }
 
     /** What occupies the location of the generation a repair supersedes, looked at just before the commit. */
-    private record Superseded(int generation, boolean present, ContentIo.Measurement observed) {
+    private record Superseded(int generation, boolean present, UnresolvedObjectRepository.Identity observed) {
     }
 
     private Superseded inspectSuperseded(FileOperation op, ManagedVolume volume) throws IOException {
@@ -566,7 +566,8 @@ public final class OperationProcessor {
         if (SafeFiles.isLinkOrReparsePoint(at) || !Files.isRegularFile(at, LinkOption.NOFOLLOW_LINKS)) {
             return new Superseded(content.currentGeneration(), true, null);
         }
-        return new Superseded(content.currentGeneration(), true, ContentIo.measure(at));
+        // V0020: the observation's identity evidence (attributes read before the bytes) is persisted with the record.
+        return new Superseded(content.currentGeneration(), true, ObjectIdentity.of(probe.attributes(), ContentIo.measure(at)));
     }
 
     private boolean commitNewContent(FileOperation op, String mediaType) {
@@ -653,8 +654,7 @@ public final class OperationProcessor {
                         content.contentId(), old, op.operationId(),
                         vacated ? UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION
                                 : UnresolvedObjectRepository.Kind.DAMAGED_COPY,
-                        inspected.observed() == null ? null : inspected.observed().size(),
-                        inspected.observed() == null ? null : inspected.observed().sha256(),
+                        inspected.observed(),
                         "Repair " + op.operationId() + " superseded generation " + old + " (content " + content.state()
                                 + "). An object is at " + g.storagePath() + " that the archive cannot identify as its copy"
                                 + (vacated ? " (the archive recorded the bytes leaving this location)" : "")
@@ -743,13 +743,14 @@ public final class OperationProcessor {
                     throw new Presence.InconclusiveException(g.storagePath(), probe.problem());
                 }
                 boolean present = probe.present();
-                ContentIo.Measurement observed = present && probe.attributes().isRegularFile()
-                        && !SafeFiles.isLinkOrReparsePoint(probe.path()) ? ContentIo.measure(probe.path()) : null;
+                UnresolvedObjectRepository.Identity observed = present && probe.attributes().isRegularFile()
+                        && !SafeFiles.isLinkOrReparsePoint(probe.path())
+                        ? ObjectIdentity.of(probe.attributes(), ContentIo.measure(probe.path())) : null;
                 ctx.tx().executeWithoutResult(status -> {
                     if (present) {
                         ctx.unresolved().recordIfAbsent(new UnresolvedObjectRepository.NewEntry(g.volumeId(), g.storagePath(),
                                 g.contentId(), g.generation(), op.operationId(), UnresolvedObjectRepository.Kind.DAMAGED_COPY,
-                                observed == null ? null : observed.size(), observed == null ? null : observed.sha256(),
+                                observed,
                                 "Generation " + g.generation() + " was superseded by repair " + op.operationId() + " and was "
                                         + "awaiting quarantine. The object at " + g.storagePath() + " cannot be identified as the "
                                         + "archive's damaged copy (only an observation was recorded), so it was left untouched."));

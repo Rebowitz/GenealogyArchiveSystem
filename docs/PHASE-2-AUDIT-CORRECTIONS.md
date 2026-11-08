@@ -231,8 +231,8 @@ What this changes:
   confirmed". With an untrusted observation the archive cannot confirm which object is the damaged copy;
   the audit itself allows "remain recoverable or explicitly unresolved". The damaged copy is therefore kept
   accountable as `UNRESOLVED` in place (still recoverable), and quarantine happens on an Administrator's
-  attestation. This is a narrowing of P2-I recorded here for owner review; the governing documents are not
-  rewritten.
+  attestation. This narrowing of P2-I was recorded here for owner review; the owner has since confirmed it (Phase 2
+  finalization), and PHASE-2-DECISIONS and ADR-0009 record the decision.
 
 ### Why a schema migration (V0019) is necessary
 
@@ -671,6 +671,73 @@ expects the returning object to be unresolved until released again.
 
 Note: when a destruction is already CLEANUP_INCOMPLETE, a later incomplete pass records its reason as an operation
 event; the operation's `message` keeps the first reason. The tests read the events for later passes.
+
+## Phase 2 finalization: V0020 object-identity evidence and P2-I (baseline `54f3095eef2947c1f5de440c493a857f51f6ee2e`)
+
+Owner decisions: (1) V0020 - persist stronger object-identity evidence; (2) P2-I - keep Administrator attestation
+before a damaged copy is quarantined.
+
+### Design (documented before coding)
+
+**V0020 (`gas.unresolved_object`, existing rows preserved).** Reusing `observed_size`, `observed_sha256` and
+`detected_at` (the observation time), it adds:
+
+| Column | Meaning |
+|---|---|
+| `observed_created_at`, `observed_modified_at` | The object's filesystem creation and last-modification times at the observation (microsecond precision). |
+| `observed_file_key` | The platform file key at the observation (e.g. device and inode on Linux); NULL where the platform gives none (Windows/NTFS through Java). |
+| `identity_evidence` | `RECORDED` (a plain file measured with its times), `NONE` (not a plain file - nothing to identify), `LEGACY` (recorded before V0020; the default for every existing row). |
+| `decision_evidence`, `decision_checked_at` | At an Administrator's attestation or release: whether the object then at the location was re-examined and had exactly the recorded evidence (`CONFIRMED`) or not (`UNCONFIRMED` - absent, different, unexaminable, or no recorded evidence), and when. |
+
+Constraints: `RECORDED` requires size, SHA-256 and both times; a `CONFIRMED` decision requires `RECORDED` evidence
+and a check time; an open attested record made under V0020 must be `CONFIRMED`. The observation columns join the
+immutable-identity trigger; decision columns change only with an attestation or a resolution.
+
+**Evidence is persisted where it arises.** Every record is created with the evidence of the observation that made
+it (destruction, repair retirement of a superseded generation, an operation copy found unverified). An attestation
+re-examines the object under the record's operation lock and is refused unless the object is exactly the recorded
+one; a release re-examines it too and records whether its decision is `CONFIRMED` (a release is never refused for
+that - leaving an object alone is never destructive).
+
+**Use.** Exact equality of size, SHA-256, both times (to the microsecond) and file key (both absent counts as equal)
+- the "no later than the observation" rule and its dependence on the database clock are gone.
+* Released location: an object counts as the released object only under a `CONFIRMED` release whose recorded
+  evidence it matches exactly, with no open record and no disappearance seen in the pass; reconciliation compares
+  again. `LEGACY` or `UNCONFIRMED` releases identify nothing: the object is unresolved and needs a new decision.
+* Attestation: deletion by attestation (destruction) and the attested quarantine move both require a `CONFIRMED`
+  attestation and the object to match its recorded evidence; a `LEGACY` attestation authorises nothing (the record
+  stays unresolved; the Administrator can release it, or remove the object by hand).
+* All earlier protections are unchanged.
+
+**Limits (documented, not hidden).** Times and file keys are evidence, not proof: an object given exactly the same
+size, bytes, creation and modification times - and, where there is one, the same file key - cannot be told apart.
+On Windows there is no file key, and creation and modification times can be set by ordinary tools. The check and the
+filesystem use are still separate calls (P2-E).
+
+**P2-I.** No new behaviour: damaged copies are quarantined only through an Administrator's attestation, now
+evidence-bound. Review: repair retirement records the superseded copy `UNRESOLVED` (never moves it); recovery only
+settles a recorded move while its attestation is current; destruction removes an attested object only as above; the
+other quarantine moves are an operation's own verified copies. ADR-0009 and PHASE-2-DECISIONS record the owner's
+decision.
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| V0020 | `V0020__object_identity_evidence.sql`: the columns above; existing rows LEGACY; constraints (complete RECORDED evidence, NONE carries none, LEGACY carries no new evidence or decision, CONFIRMED needs RECORDED, open V0020 attestations CONFIRMED); the observation columns join the immutability trigger; decision evidence changes only with an attestation or resolution. |
+| Repository | `UnresolvedObjectRepository.Identity` (exact equality, times truncated to microseconds); `NewEntry` takes the observed identity; `release(..., DecisionEvidence)`; `attest` records CONFIRMED and accepts only RECORDED records. |
+| Observation | `ObjectIdentity.observe/of/difference`; every record creation (destruction, repair retirement and commit, unverified operation copy) persists the identity it observed. |
+| Decisions | `UnresolvedObjects.attest` examines the object under the record's operation lock and refuses LEGACY or changed objects (nothing recorded, no job); `release` examines it and records CONFIRMED/UNCONFIRMED (a LEGACY record's release stays without decision evidence). |
+| Use | `DestructionProcessor`: released objects by exact match with a CONFIRMED release; attestation-based deletion only with a CONFIRMED attestation and an exact match; every deletion compares the full identity seen at classification. `quarantineAttested`: no move unless CONFIRMED and exact. |
+| UI | The preservation page says which records predate identity evidence and offers attestation only for RECORDED ones. |
+
+Tests: `Phase2SchemaIT.anExistingV0019InstallationUpgradesAndItsRecordsAreLegacy` (upgrade keeps open, attested and
+released rows as LEGACY; completeness, immutability and decision-binding constraints); `ObjectIdentityTest` (exact
+equality, microsecond precision, a missing file key is not a wildcard); `Phase2AuditCorrectionsIT.v0025_*`: evidence
+persisted and the unchanged released object recognised; byte-identical replacement keeping the modification time,
+through a crash before reconciliation and restarts, then a new release; attestation refused for a changed object and
+an UNCONFIRMED release identifying nothing; legacy release and legacy attestation (content's own bytes) never treated
+as verified. The fifth round's tests were kept; one expected reason now reads "not its filesystem identity".
 
 ## Remaining limitations (unchanged scope decisions)
 

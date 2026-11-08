@@ -71,6 +71,12 @@ public final class UnresolvedObjects {
                     + "destruction is using it). Nothing was changed; try again in a moment.");
         }
         try (var lock = held.get()) {
+            // V0020: the decision is bound to the object examined for it, under the lock - CONFIRMED only if it is
+            // exactly the recorded object. A release is never refused for that (leaving an object is never destructive),
+            // but only a CONFIRMED release identifies an object later.
+            String examined = examine(u);
+            UnresolvedObjectRepository.DecisionEvidence evidence = examined == null
+                    ? UnresolvedObjectRepository.DecisionEvidence.CONFIRMED : UnresolvedObjectRepository.DecisionEvidence.UNCONFIRMED;
             ctx.tx().executeWithoutResult(status -> {
                 UnresolvedObjectRepository.Entry current = ctx.unresolved().lockForUpdate(unresolvedId).orElseThrow();
                 if (!current.open()) {
@@ -83,14 +89,16 @@ public final class UnresolvedObjects {
                             + "). It is finished by the worker or by recovery; the object is then in quarantine and its "
                             + "record shows the outcome. Nothing was changed.");
                 }
-                if (!ctx.unresolved().resolve(current.unresolvedId(), UnresolvedObjectRepository.Resolution.NOT_ARCHIVAL,
-                        "released by " + actor.label() + ": " + why, actor.isSystem() ? null : actor.userId())) {
+                if (!ctx.unresolved().release(current.unresolvedId(), "released by " + actor.label() + ": " + why,
+                        actor.isSystem() ? null : actor.userId(), evidence)) {
                     throw new RuleViolationException("This object was already resolved.");
                 }
                 retireGeneration(current, GenerationState.MISSING);
                 ctx.operations().note(current.operationId(), "unresolved object at " + current.path() + " released by "
                         + actor.label() + " as not the archive's copy" + (current.attested()
-                        ? " (its earlier attestation is withdrawn; no move of it had been recorded)" : "") + ": " + why);
+                        ? " (its earlier attestation is withdrawn; no move of it had been recorded)" : "") + ": " + why
+                        + (examined == null ? "; the object examined was exactly the one recorded"
+                        : "; the release identifies no object later, because " + examined));
             });
         }
         return ctx.unresolved().find(unresolvedId).orElseThrow();
@@ -110,6 +118,34 @@ public final class UnresolvedObjects {
         if (actor.isSystem() || actor.userId() == null) {
             throw new RuleViolationException("An attestation is made by a named Administrator.");
         }
+        if (u.attested() || !u.open()) {
+            return attestUnderLock(actor, u, why);
+        }
+        // V0020: an attestation is bound to the object examined for it. It is made only if the object at the location
+        // is exactly the one recorded - examined under the lock every move, release or destruction of it needs.
+        var held = ctx.locks().tryLock("file-operation", u.operationId());
+        if (held.isEmpty()) {
+            throw new RuleViolationException("This object is being worked on right now (a move to quarantine or a "
+                    + "destruction is using it). Nothing was changed; try again in a moment.");
+        }
+        try (var lock = held.get()) {
+            if (u.identityEvidence() == UnresolvedObjectRepository.IdentityEvidence.LEGACY) {
+                throw new RuleViolationException("This object was recorded before the archive kept identity evidence "
+                        + "(times and file key), so an attestation could not be bound to it. Release it, or remove it on "
+                        + "the volume; a later check records whatever is there afresh. Nothing was changed.");
+            }
+            String examined = examine(u);
+            if (examined != null) {
+                throw new RuleViolationException("The object at " + u.path() + " is not the one recorded (" + examined
+                        + "), so it cannot be attested. Nothing was changed. Release this record; whatever is there now is "
+                        + "recorded afresh by the next check.");
+            }
+            return attestUnderLock(actor, u, why);
+        }
+    }
+
+    private UnresolvedObjectRepository.Entry attestUnderLock(Actor actor, UnresolvedObjectRepository.Entry u, String why) {
+        UUID unresolvedId = u.unresolvedId();
         ctx.tx().executeWithoutResult(status -> {
             UnresolvedObjectRepository.Entry current = ctx.unresolved().lockForUpdate(unresolvedId).orElseThrow();
             if (!current.open()) {
@@ -126,10 +162,37 @@ public final class UnresolvedObjects {
                 throw new RuleViolationException("This object was already resolved or attested.");
             }
             ctx.operations().note(current.operationId(), "unresolved object at " + current.path() + " attested by "
-                    + actor.label() + " as the archive's object (SHA-256 " + current.observedSha256() + "): " + why);
+                    + actor.label() + " as the archive's object (SHA-256 " + current.observedSha256() + "; the object "
+                    + "examined was exactly the one recorded): " + why);
             ctx.enqueue(PreservationContext.JOB_QUARANTINE_ATTESTED, current.unresolvedId());
         });
         return ctx.unresolved().find(unresolvedId).orElseThrow();
+    }
+
+    /**
+     * Re-examines the object at a record's location against the identity recorded for it (V0020).
+     *
+     * @return null if it is exactly the recorded object; otherwise why it is not shown to be
+     */
+    private String examine(UnresolvedObjectRepository.Entry u) {
+        Optional<UnresolvedObjectRepository.Identity> recorded = u.recordedIdentity();
+        if (recorded.isEmpty()) {
+            return u.identityEvidence() == UnresolvedObjectRepository.IdentityEvidence.LEGACY
+                    ? "it was recorded before identity evidence was kept" : "no plain file was recorded there";
+        }
+        try {
+            ManagedVolume volume = ctx.openVolume(u.volumeId());
+            ObjectIdentity.Observation now = ObjectIdentity.observe(ctx, volume, u.path());
+            if (now.absent()) {
+                return "nothing is at " + u.path() + " now";
+            }
+            return ObjectIdentity.difference(recorded.get(), now.identity());
+        } catch (ManagedVolume.VolumeUnavailableException e) {
+            return "the volume could not be examined (" + e.getMessage() + ")";
+        } catch (IOException e) {
+            return "the location could not be examined (" + e.getClass().getSimpleName()
+                    + (e.getMessage() == null ? "" : ": " + e.getMessage()) + ")";
+        }
     }
 
     private static String requireReason(String reason) {
@@ -193,6 +256,20 @@ public final class UnresolvedObjects {
                 return false;
             }
             ManagedVolume volume = ctx.openVolume(u.volumeId());
+            // V0020: only an attestation bound to the object (CONFIRMED) moves anything, and only that object.
+            if (!u.decisionConfirmed()) {
+                ctx.operations().note(u.operationId(), "attested object at " + u.path() + " was not moved: the attestation "
+                        + "was made before identity evidence was kept, so it is not bound to an object. Release the record, "
+                        + "or remove the object on the volume.");
+                return false;
+            }
+            ObjectIdentity.Observation now = ObjectIdentity.observe(ctx, volume, u.path());
+            String changed = now.absent() ? null : ObjectIdentity.difference(u.recordedIdentity().orElseThrow(), now.identity());
+            if (changed != null) {
+                ctx.operations().note(u.operationId(), "attested object at " + u.path() + " was not moved: the object there "
+                        + "is not the one attested (" + changed + "). It is left untouched; the record stays open.");
+                return false;
+            }
             ctx.faults().reach(FaultPoints.Point.BEFORE_QUARANTINE_MOVE, u.operationId());
             QuarantineRepository.Entry moved = new QuarantineMoves(ctx).move(volume, u.operationId(), u.contentId(),
                     PortableRelativePath.of(u.path()), attestedSuffix(u),

@@ -73,8 +73,9 @@
         <h2>Unresolved objects</h2>
         <p class="muted">Objects at archive locations that the archive cannot identify as its own copy. They are never
             moved or deleted automatically. Inspect each on its volume, then attest that it is the archive's copy (it is
-            moved to quarantine, or removed by a pending destruction, only while it still has the SHA-256 shown) or
-            release it as not the archive's (it stays where it is).</p>
+            moved to quarantine, or removed by a pending destruction, only while it is still exactly the object recorded:
+            same size, SHA-256, file times and file key where the system has one) or release it as not the archive's (it
+            stays where it is). Objects recorded before identity evidence was kept cannot be attested; release them.</p>
         <p class="muted" th:if="${#lists.isEmpty(unresolved)}">None.</p>
         <table class="list" th:unless="${#lists.isEmpty(unresolved)}">
             <thead><tr><th>Found</th><th>Kind</th><th>Location</th><th>Observed</th><th>Detail</th><th></th></tr></thead>
@@ -83,11 +84,12 @@
                 <td th:text="${u.detectedAt()}">when</td><td th:text="${u.kind()}">kind</td>
                 <td><code th:text="${u.path()}">path</code></td>
                 <td><span th:if="${u.observedSha256() != null}" th:text="${u.observedSize()} + ' bytes, SHA-256 ' + ${u.observedSha256()}">-</span>
+                    <span th:if="${u.identityEvidence().name() == 'LEGACY'}" class="muted">(recorded before identity evidence was kept)</span>
                     <strong th:if="${u.attested()}">Attested</strong></td>
                 <td th:text="${u.detail()}">detail</td>
                 <td>
                     <form th:action="@{/preservation/unresolved/{id}/attest(id=${u.unresolvedId()})}" method="post" class="inline"
-                          th:if="${u.observedSha256() != null and !u.attested()}">
+                          th:if="${u.identityEvidence().name() == 'RECORDED' and !u.attested()}">
                         <input type="text" name="reason" maxlength="2000" required placeholder="Reason">
                         <button type="submit">Attest: archive's copy</button></form>
                     <form th:action="@{/preservation/unresolved/{id}/release(id=${u.unresolvedId()})}" method="post" class="inline">

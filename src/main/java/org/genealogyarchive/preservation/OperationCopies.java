@@ -37,7 +37,8 @@ final class OperationCopies {
      *                 with a COMPLETE or PARTIAL verdict
      * @param reason   why the object is unverified (UNVERIFIED only)
      */
-    record Check(Verdict verdict, ContentIo.Measurement observed, String reason) {
+    record Check(Verdict verdict, ContentIo.Measurement observed, String reason,
+                 org.genealogyarchive.data.UnresolvedObjectRepository.Identity identity) {
         boolean verified() {
             return verdict == Verdict.COMPLETE || verdict == Verdict.PARTIAL;
         }
@@ -57,35 +58,37 @@ final class OperationCopies {
             throws IOException {
         Presence.Probe probe = Presence.probe(ctx, volume, op.targetPath());
         if (probe.verifiedAbsent()) {
-            return new Check(Verdict.ABSENT, null, null);
+            return new Check(Verdict.ABSENT, null, null, null);
         }
         if (!probe.present()) {
             throw new Presence.InconclusiveException(op.targetPath(), probe.problem());
         }
         Path target = probe.path();
         if (SafeFiles.isLinkOrReparsePoint(target) || !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
-            return new Check(Verdict.UNVERIFIED, null, "it is not a plain file");
+            return new Check(Verdict.UNVERIFIED, null, "it is not a plain file", null);
         }
         ContentIo.Measurement m = ContentIo.measure(target);
+        // V0020: the object's identity as observed now (attributes read before the bytes).
+        var id = ObjectIdentity.of(probe.attributes(), m);
         if (op.expectedSize() == null || op.expectedSha256() == null) {
-            return new Check(Verdict.UNVERIFIED, m, "the operation recorded no size and SHA-256 for its upload");
+            return new Check(Verdict.UNVERIFIED, m, "the operation recorded no size and SHA-256 for its upload", id);
         }
         if (m.size() == op.expectedSize() && m.sha256().equals(op.expectedSha256())) {
-            return new Check(Verdict.COMPLETE, m, null);
+            return new Check(Verdict.COMPLETE, m, null, id);
         }
         if (staged.isEmpty()) {
             return new Check(Verdict.UNVERIFIED, m, "the staged upload it was copied from is gone, so nothing shows "
-                    + "that this object is the operation's partial copy");
+                    + "that this object is the operation's partial copy", id);
         }
         ContentIo.Measurement source = ContentIo.measure(staged.get());
         if (source.size() != op.expectedSize() || !source.sha256().equals(op.expectedSha256())) {
             return new Check(Verdict.UNVERIFIED, m, "the staged upload no longer has the size and SHA-256 measured "
-                    + "when it was received");
+                    + "when it was received", id);
         }
         if (m.size() < source.size() && ContentIo.isPrefixOf(target, staged.get())) {
-            return new Check(Verdict.PARTIAL, m, null);
+            return new Check(Verdict.PARTIAL, m, null, id);
         }
-        return new Check(Verdict.UNVERIFIED, m, "its bytes are not the bytes this operation was copying");
+        return new Check(Verdict.UNVERIFIED, m, "its bytes are not the bytes this operation was copying", id);
     }
 
     /**
@@ -96,9 +99,7 @@ final class OperationCopies {
         ctx.operations().releaseTarget(op.operationId(), op.targetPath());
         ctx.unresolved().recordIfAbsent(new UnresolvedObjectRepository.NewEntry(op.volumeId(), op.targetPath(),
                 ctx.contents().find(op.contentId()).isPresent() ? op.contentId() : null, null, op.operationId(),
-                UnresolvedObjectRepository.Kind.OPERATION_COPY,
-                check.observed() == null ? null : check.observed().size(),
-                check.observed() == null ? null : check.observed().sha256(),
+                UnresolvedObjectRepository.Kind.OPERATION_COPY, check.identity(),
                 "Operation " + op.operationId() + " created a copy at " + op.targetPath() + ", but the object there now "
                         + "is not shown to be that copy: " + check.reason() + ". It was left untouched."));
     }

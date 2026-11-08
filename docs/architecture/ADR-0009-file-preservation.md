@@ -200,11 +200,16 @@ workers from driving the same operation.
 - Repair accepts Administrator-supplied bytes only if size and SHA-256 equal the authoritative values
   recorded at ingestion (which never change), writes a new generation through the same protocol, and
   keeps the damaged copy in quarantine.
-  *Amended by V0019 (V0018 audit; recorded for owner review in PHASE-2-AUDIT-CORRECTIONS.md):* a scan's
+  *Amended by V0019 (V0018 audit) and confirmed by the owner's Phase 2 finalization decision on P2-I:* a scan's
   observation of a mismatch cannot identify which object is the damaged copy, so the repair keeps the
   superseded copy accountable where it is - generation `UNRESOLVED`, durable `unresolved_object` record,
   untouched and recoverable - and moves it to quarantine only after an Administrator attests the recorded
   object (the move verifies it still has the attested SHA-256). An empty former location is retired MISSING.
+  Since V0020 the attestation is bound to the object examined for it (identity evidence below) and the move
+  requires the object to be exactly that one. This is the only path by which a damaged copy enters quarantine:
+  repair records the superseded copy `UNRESOLVED`, recovery only settles a recorded move while its attestation is
+  current, destruction removes an attested object only under the same binding, and the other quarantine moves are
+  an operation's own verified copies.
 
 ### Restriction (P2-H, B2)
 Restricted Files are visible only to Administrators. For everyone else every path (page, friendly-ID
@@ -260,6 +265,17 @@ window remains the accepted P2-E limitation.
 A release applies to the object it was made about, never to its path. An object is taken for a released object only
 with no open record at the location, exactly the released size and SHA-256, filesystem times no later than the
 release's observation, and no disappearance seen in the same pass; reconciliation reports it only if it still has
-exactly the evidence seen at classification. Anything else is unresolved. Without stored physical identity (no
-portable file key on Windows), a byte-identical object carrying old timestamps cannot be told from the released one;
-storing the observed times with the record would need a migration and is left to the owner.
+exactly the evidence seen at classification. Anything else is unresolved. Superseded by V0020 below.
+
+### Object-identity evidence (V0020, owner decision)
+
+Every unresolved-object record persists, at the observation that makes it, the object's size, SHA-256, creation and
+modification times (microseconds) and the platform file key (NULL where there is none, as on Windows/NTFS through
+Java); `identity_evidence` says RECORDED, NONE (not a plain file) or LEGACY (made before V0020). An Administrator's
+attestation re-examines the object under the record's operation lock and is refused unless it is exactly the recorded
+object; a release re-examines it and records `decision_evidence` CONFIRMED or UNCONFIRMED. Only a CONFIRMED decision
+identifies an object later: a released object is recognised only by exact equality with a CONFIRMED release's
+evidence; deletion or a quarantine move by attestation needs a CONFIRMED attestation and an exact match. LEGACY and
+UNCONFIRMED decisions authorise and identify nothing; the object stays unresolved until a decision bound to it. Times
+and file keys are evidence, not proof: an object given the same bytes, times and (where there is one) file key cannot
+be told apart, and Windows provides no file key; with P2-E this is an accepted limitation.

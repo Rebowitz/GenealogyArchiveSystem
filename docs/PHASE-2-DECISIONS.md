@@ -14,7 +14,8 @@ ADR-0010 (service identities).
 | P2-F | Derivative identity, external derivative ingestion and display-rotation metadata; advanced editing deferred. |
 | P2-G | Relationship-aware consolidation deferred to Phase 3. |
 | P2-H | Restriction status stays in the File model with enforceable protection for restricted downloads; comprehensive restriction management deferred to Phase 9. |
-| P2-I | Administrator-supplied verified repair; original hashes immutable; repair history retained. |
+| P2-I | Administrator-supplied verified repair; original hashes immutable; repair history retained. *Finalization decision:* a damaged copy is moved to quarantine only after an Administrator attests it (bound to the object examined, V0020); until then it stays accountable in place as `UNRESOLVED`. |
+| V0020 | *Finalization decision:* persist object-identity evidence (size, SHA-256, creation and modification times, file key where available) at each observation and bind Administrator attestations and releases to it; legacy records are never treated as verified. |
 | P2-J | Archival file-operation history separate from background jobs and Change History. |
 | P2-K | Prefer Windows virtual service accounts; document a dedicated low-privilege account alternative for workgroup NAS access. |
 | B1 | A single Linux service user. |

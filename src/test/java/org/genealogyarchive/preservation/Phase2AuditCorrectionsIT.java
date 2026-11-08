@@ -3898,7 +3898,7 @@ class Phase2AuditCorrectionsIT {
             assertIncompleteAndUntouched(r.op().operationId(), r.s().file(), r.s().former(), replacement);
             // A repeat of CLEANUP_INCOMPLETE is recorded as an operation event (the message keeps the first reason).
             assertThat(eventDetails(r.op().operationId())).anyMatch(e -> e.contains(r.s().formerPath())
-                    && e.contains(identical ? "created or modified after the released object was observed"
+                    && e.contains(identical ? "has the released object's bytes but not its filesystem identity"
                             : "does not have the size and SHA-256 of the released object"));
             UnresolvedObjectRepository.Entry v = openRecordAt(r.s().formerPath());
             assertThat(v.unresolvedId()).isNotEqualTo(r.release().unresolvedId());
@@ -3968,6 +3968,196 @@ class Phase2AuditCorrectionsIT {
             assertThat(r.s().former()).hasBinaryContent(r.object());
             fx.preservation().destruction().process(r.op().operationId());
             assertCompletedLeaving(r.op().operationId(), r.s().file(), r.s().former(), r.object());
+        }
+    }
+    // ---- Phase 2 finalization: V0020 persisted object-identity evidence --------------------------------------
+
+    private static java.time.Instant micros(java.nio.file.attribute.FileTime t) {
+        return t.toInstant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+    }
+
+    /**
+     * The evidence is persisted at the observation and bound to the Administrator's decision: size, SHA-256, both
+     * times and the file key (NULL where the platform has none, as on Windows); the release is CONFIRMED. The
+     * unchanged released object is then recognised from the persisted evidence and the removal completes.
+     */
+    @Test
+    void v0025_identityEvidenceIsPersistedAtObservationAndBoundToTheRelease() throws Exception {
+        ReleasedAtFormer r = releasedAtFormer("evidence.tif");
+        java.nio.file.attribute.BasicFileAttributes a = Files.readAttributes(r.s().former(),
+                java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        UnresolvedObjectRepository.Entry u = record(r.release().unresolvedId());
+        assertThat(u.identityEvidence()).isEqualTo(UnresolvedObjectRepository.IdentityEvidence.RECORDED);
+        assertThat(u.observedSize()).isEqualTo((long) r.object().length);
+        assertThat(u.observedSha256()).isEqualTo(sha256(r.object()));
+        assertThat(u.observedCreatedAt()).isEqualTo(micros(a.creationTime()));
+        assertThat(u.observedModifiedAt()).isEqualTo(micros(a.lastModifiedTime()));
+        if (a.fileKey() == null) {
+            // Windows/NTFS: Java gives no file key. Identity rests on size, SHA-256 and both times.
+            assertThat(u.observedFileKey()).isNull();
+        } else {
+            assertThat(u.observedFileKey()).isEqualTo(String.valueOf(a.fileKey()));
+        }
+        assertThat(u.decisionEvidence()).isEqualTo(UnresolvedObjectRepository.DecisionEvidence.CONFIRMED);
+        assertThat(u.decisionCheckedAt()).isNotNull();
+        assertThat(u.decisionConfirmed()).isTrue();
+        assertThat(eventDetails(u.operationId())).anyMatch(e -> e.contains("released by")
+                && e.contains("the object examined was exactly the one recorded"));
+        fx.preservation().destruction().process(r.op().operationId());
+        assertCompletedLeaving(r.op().operationId(), r.s().file(), r.s().former(), r.object());
+    }
+
+    /**
+     * A byte-identical replacement that even keeps the released object's modification time differs in identity
+     * evidence (a new file: another file key, or on Windows another creation time). It is unresolved - through a crash
+     * before reconciliation, restarts and repeated passes - never reported as released, never deleted, and BYTES_REMOVED
+     * waits for an Administrator's new decision about it.
+     */
+    @Test
+    void v0025_aByteIdenticalReplacementWithTheSameModificationTimeIsUnresolved() throws Exception {
+        ReleasedAtFormer r = releasedAtFormer("same-mtime.tif");
+        java.nio.file.attribute.FileTime mtime = Files.getLastModifiedTime(r.s().former());
+        Path staged = r.s().former().resolveSibling(r.s().former().getFileName() + ".new");
+        Files.write(staged, r.object());
+        Files.move(staged, r.s().former(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        Files.setLastModifiedTime(r.s().former(), mtime);
+        // NTFS "tunnelling" can hand a file renamed into a just-replaced name the old creation time; with no file key on
+        // Windows such a replacement would be indistinguishable (the documented limit). The creation time is set
+        // explicitly so the evidence differs on every platform (on Linux it is ignored; the file key differs there).
+        java.nio.file.attribute.FileTime created = Files.readAttributes(r.s().former(),
+                java.nio.file.attribute.BasicFileAttributes.class).creationTime();
+        Files.setAttribute(r.s().former(), "basic:creationTime",
+                java.nio.file.attribute.FileTime.from(created.toInstant().minusSeconds(3600)));
+        assertThat(Files.getLastModifiedTime(r.s().former())).isEqualTo(mtime);
+
+        fx.faults.crashAt(FaultPoints.Point.BEFORE_RECONCILIATION);
+        assertThatThrownBy(() -> fx.preservation().destruction().process(r.op().operationId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        UnresolvedObjectRepository.Entry v = openRecordAt(r.s().formerPath());
+        assertThat(v.unresolvedId()).isNotEqualTo(r.release().unresolvedId());
+        assertThat(v.observedSha256()).isEqualTo(sha256(r.object()));
+        assertThat(v.recordedIdentity()).isNotEqualTo(record(r.release().unresolvedId()).recordedIdentity());
+        for (int i = 0; i < 3; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(r.op().operationId());
+            assertIncompleteAndUntouched(r.op().operationId(), r.s().file(), r.s().former(), r.object());
+            assertThat(openRecordAt(r.s().formerPath()).unresolvedId()).isEqualTo(v.unresolvedId());
+        }
+        assertThat(eventDetails(r.op().operationId())).noneMatch(e -> e.contains("released as not this archive's"));
+        fx.preservation().unresolved().release(fx.admin, v.unresolvedId(), "inspected: a copy of the transcription");
+        assertThat(record(v.unresolvedId()).decisionEvidence()).isEqualTo(UnresolvedObjectRepository.DecisionEvidence.CONFIRMED);
+        fx.preservation().destruction().process(r.op().operationId());
+        assertCompletedLeaving(r.op().operationId(), r.s().file(), r.s().former(), r.object());
+    }
+
+    /**
+     * An attestation is bound to the object examined for it: if the object changed after it was recorded, the
+     * attestation is refused (nothing recorded, no job). A release is still possible but UNCONFIRMED, so it identifies
+     * nothing: the object there is recorded afresh, and the removal waits for a decision bound to that object.
+     */
+    @Test
+    void v0025_decisionsAreBoundToTheObjectExaminedForThem() throws Exception {
+        byte[] bytes = b("rate book, decisions bound to objects");
+        FormerAndCurrent s = formerAndCurrent("bound.tif", bytes);
+        byte[] object = b("an object recorded at the former location");
+        Files.write(s.former(), object);
+        FileOperation op = destroy(s.file());
+        fx.preservation().destruction().process(op.operationId());
+        UnresolvedObjectRepository.Entry u = openRecordAt(s.formerPath());
+        byte[] changed = b("the object was changed after it was recorded");
+        Files.write(s.former(), changed);
+        int events = eventDetails(u.operationId()).size();
+        assertThatThrownBy(() -> fx.preservation().unresolved().attest(fx.admin, u.unresolvedId(), "looks like ours"))
+                .isInstanceOf(RuleViolationException.class).hasMessageContaining("is not the one recorded");
+        assertThat(record(u.unresolvedId()).attested()).isFalse();
+        assertThat(attestationJobs(u.unresolvedId())).isZero();
+        assertThat(eventDetails(u.operationId())).hasSize(events);
+
+        fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "not ours, whatever it is");
+        UnresolvedObjectRepository.Entry released = record(u.unresolvedId());
+        assertThat(released.decisionEvidence()).isEqualTo(UnresolvedObjectRepository.DecisionEvidence.UNCONFIRMED);
+        assertThat(eventDetails(u.operationId())).anyMatch(e -> e.contains("the release identifies no object later"));
+        fx.preservation().destruction().process(op.operationId());
+        assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), changed);
+        UnresolvedObjectRepository.Entry v = openRecordAt(s.formerPath());
+        assertThat(v.observedSha256()).isEqualTo(sha256(changed));
+        assertThat(eventDetails(op.operationId())).anyMatch(e -> e.contains("no release here is bound to an object"));
+        fx.preservation().unresolved().release(fx.admin, v.unresolvedId(), "inspected the object now there: not ours");
+        fx.preservation().destruction().process(op.operationId());
+        assertCompletedLeaving(op.operationId(), s.file(), s.former(), changed);
+    }
+
+    /** Inserts a record as it existed before V0020 (LEGACY: no identity evidence). */
+    private UUID legacyRecord(String path, UUID contentId, UUID operationId, byte[] observed, boolean attested,
+                              boolean released) {
+        UUID id = UUID.randomUUID();
+        sql().sql("""
+                INSERT INTO gas.unresolved_object (unresolved_id, volume_id, path, content_id, operation_id, kind, observed_size,
+                                                   observed_sha256, detail, attested_by, attested_at, status, resolution,
+                                                   resolution_detail, resolved_at)
+                VALUES (:id, :vol, :path, :content, :op, 'OBJECT_AT_VACATED_LOCATION', :size, :sha, 'recorded before V0020',
+                        :by, CASE WHEN :attested THEN clock_timestamp() END, CASE WHEN :released THEN 'RESOLVED' ELSE 'OPEN' END,
+                        CASE WHEN :released THEN 'NOT_ARCHIVAL' END, CASE WHEN :released THEN 'released before V0020' END,
+                        CASE WHEN :released THEN clock_timestamp() END)
+                """).param("id", id).param("vol", fx.volumeId).param("path", path).param("content", contentId)
+                .param("op", operationId).param("size", (long) observed.length).param("sha", sha256(observed))
+                .param("by", attested ? fx.admin.userId() : null).param("attested", attested).param("released", released)
+                .update();
+        UnresolvedObjectRepository.Entry e = record(id);
+        assertThat(e.identityEvidence()).isEqualTo(UnresolvedObjectRepository.IdentityEvidence.LEGACY);
+        return id;
+    }
+
+    /**
+     * Legacy records (made before V0020) are never treated as verified. A legacy release of exactly these bytes
+     * identifies nothing: the object is unresolved until a release bound to it. A legacy attestation - even of the
+     * content's own bytes - neither moves nor deletes anything, and cannot be repeated; a release resolves it.
+     */
+    @Test
+    void v0025_legacyReleasesAndAttestationsAreNeverTreatedAsVerified() throws Exception {
+        for (boolean attestedLegacy : List.of(false, true)) {
+            byte[] bytes = b("tax list, legacy records, attested=" + attestedLegacy);
+            FormerAndCurrent s = formerAndCurrent("legacy-" + attestedLegacy + ".tif", bytes);
+            byte[] object = attestedLegacy ? bytes : b("an object released before V0020");
+            Files.write(s.former(), object);
+            UUID repair = generation(s.file().contentId(), 2).operationId();
+            UUID legacy = legacyRecord(s.formerPath(), s.file().contentId(), repair, object, attestedLegacy, !attestedLegacy);
+            if (attestedLegacy) {
+                assertThat(fx.preservation().unresolved().quarantineAttested(legacy)).isFalse();
+                assertThat(s.former()).hasBinaryContent(object);
+                assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+                assertThat(eventDetails(repair)).anyMatch(e -> e.contains("was not moved")
+                        && e.contains("before identity evidence was kept"));
+            }
+            FileOperation op = destroy(s.file());
+            for (int i = 0; i < 2; i++) {
+                fx.preservation().recovery().runOnce();
+                fx.preservation().destruction().process(op.operationId());
+                assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), object);
+            }
+            assertThat(s.current()).as("the owned current generation is still removed").doesNotExist();
+            UnresolvedObjectRepository.Entry open = openRecordAt(s.formerPath());
+            if (attestedLegacy) {
+                assertThat(open.unresolvedId()).isEqualTo(legacy);
+                assertThat(fx.operation(op.operationId()).message()).contains("before identity evidence was kept");
+            } else {
+                assertThat(open.unresolvedId()).isNotEqualTo(legacy);
+                assertThat(open.identityEvidence()).isEqualTo(UnresolvedObjectRepository.IdentityEvidence.RECORDED);
+                assertThat(fx.operation(op.operationId()).message()).contains("no release here is bound to an object");
+            }
+            fx.preservation().unresolved().release(fx.admin, open.unresolvedId(), "inspected: leave it");
+            assertThat(record(open.unresolvedId()).decisionEvidence())
+                    .isEqualTo(attestedLegacy ? null : UnresolvedObjectRepository.DecisionEvidence.CONFIRMED);
+            fx.preservation().destruction().process(op.operationId());
+            if (attestedLegacy) {
+                // The legacy release identifies nothing either: the object is recorded afresh and released, bound.
+                assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), object);
+                UnresolvedObjectRepository.Entry fresh = openRecordAt(s.formerPath());
+                fx.preservation().unresolved().release(fx.admin, fresh.unresolvedId(), "inspected again: leave it");
+                fx.preservation().destruction().process(op.operationId());
+            }
+            assertCompletedLeaving(op.operationId(), s.file(), s.former(), object);
         }
     }
 }

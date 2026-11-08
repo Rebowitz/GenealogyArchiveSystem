@@ -33,6 +33,32 @@ public final class UnresolvedObjectRepository {
 
     public enum Resolution { ABSENT, NOT_ARCHIVAL, QUARANTINED, DESTROYED }
 
+    /** V0020: how much was recorded about the object observed. */
+    public enum IdentityEvidence {
+        /** A plain file measured with its times (and file key where the platform gives one). */
+        RECORDED,
+        /** Not a plain file: nothing to identify. */
+        NONE,
+        /** Recorded before V0020: never identifies an object for an attestation or a release. */
+        LEGACY
+    }
+
+    /** V0020: whether the object examined at an Administrator's decision was exactly the one recorded. */
+    public enum DecisionEvidence { CONFIRMED, UNCONFIRMED }
+
+    /**
+     * What identifies one physical object as far as the platform allows (V0020): size, SHA-256, creation and
+     * last-modification times (to the microsecond, as PostgreSQL keeps them) and the file key where there is one
+     * (null on Windows/NTFS). Compared only for exact equality. Evidence, not proof: an object given the same bytes,
+     * times and file key cannot be told apart.
+     */
+    public record Identity(long size, String sha256, Instant created, Instant modified, String fileKey) {
+        public Identity {
+            created = created.truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            modified = modified.truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        }
+    }
+
     /**
      * @param observedSize   size seen when the record was made - diagnostic only
      * @param observedSha256 SHA-256 seen then - diagnostic only; an Administrator may attest that it is the
@@ -41,21 +67,41 @@ public final class UnresolvedObjectRepository {
     public record Entry(UUID unresolvedId, UUID volumeId, String path, UUID contentId, Integer generation,
                         UUID operationId, Kind kind, Long observedSize, String observedSha256, String detail,
                         Instant detectedAt, UUID attestedBy, Instant attestedAt, boolean open, Resolution resolution,
-                        String resolutionDetail, UUID resolvedBy, Instant resolvedAt) {
+                        String resolutionDetail, UUID resolvedBy, Instant resolvedAt, Instant observedCreatedAt,
+                        Instant observedModifiedAt, String observedFileKey, IdentityEvidence identityEvidence,
+                        DecisionEvidence decisionEvidence, Instant decisionCheckedAt) {
 
         public boolean attested() {
             return attestedAt != null;
         }
+
+        /** The identity recorded at the observation, if one was (V0020); empty for NONE and LEGACY records. */
+        public Optional<Identity> recordedIdentity() {
+            return identityEvidence == IdentityEvidence.RECORDED
+                    ? Optional.of(new Identity(observedSize, observedSha256, observedCreatedAt, observedModifiedAt, observedFileKey))
+                    : Optional.empty();
+        }
+
+        /** Whether the Administrator's decision was made about exactly the recorded object (V0020). */
+        public boolean decisionConfirmed() {
+            return decisionEvidence == DecisionEvidence.CONFIRMED && recordedIdentity().isPresent();
+        }
     }
 
-    /** A record to make. */
+    /**
+     * A record to make.
+     *
+     * @param observed the object's identity as observed now; null if there was no plain file to identify
+     */
     public record NewEntry(UUID volumeId, String path, UUID contentId, Integer generation, UUID operationId, Kind kind,
-                           Long observedSize, String observedSha256, String detail) {
+                           Identity observed, String detail) {
     }
 
     private static final String COLUMNS = """
             unresolved_id, volume_id, path, content_id, generation, operation_id, kind, observed_size, observed_sha256,
-            detail, detected_at, attested_by, attested_at, status, resolution, resolution_detail, resolved_by, resolved_at""";
+            detail, detected_at, attested_by, attested_at, status, resolution, resolution_detail, resolved_by, resolved_at,
+            observed_created_at, observed_modified_at, observed_file_key, identity_evidence, decision_evidence,
+            decision_checked_at""";
 
     private static final RowMapper<Entry> ENTRY = (rs, n) -> {
         String resolution = rs.getString("resolution");
@@ -65,7 +111,11 @@ public final class UnresolvedObjectRepository {
                 rs.getString("detail"), Rows.instant(rs, "detected_at"), Rows.uuid(rs, "attested_by"),
                 Rows.instant(rs, "attested_at"), "OPEN".equals(rs.getString("status")),
                 resolution == null ? null : Resolution.valueOf(resolution), rs.getString("resolution_detail"),
-                Rows.uuid(rs, "resolved_by"), Rows.instant(rs, "resolved_at"));
+                Rows.uuid(rs, "resolved_by"), Rows.instant(rs, "resolved_at"), Rows.instant(rs, "observed_created_at"),
+                Rows.instant(rs, "observed_modified_at"), rs.getString("observed_file_key"),
+                IdentityEvidence.valueOf(rs.getString("identity_evidence")),
+                rs.getString("decision_evidence") == null ? null : DecisionEvidence.valueOf(rs.getString("decision_evidence")),
+                Rows.instant(rs, "decision_checked_at"));
     };
 
     private final JdbcClient jdbc;
@@ -80,16 +130,22 @@ public final class UnresolvedObjectRepository {
      * @return the open record for the location
      */
     public Entry recordIfAbsent(NewEntry e) {
+        Identity o = e.observed();
         jdbc.sql("""
                 INSERT INTO gas.unresolved_object (unresolved_id, volume_id, path, content_id, generation, operation_id, kind,
-                                                   observed_size, observed_sha256, detail)
-                VALUES (:id, :vol, :path, :content, :gen, :op, :kind, :size, :sha, :detail)
+                                                   observed_size, observed_sha256, detail, observed_created_at,
+                                                   observed_modified_at, observed_file_key, identity_evidence)
+                VALUES (:id, :vol, :path, :content, :gen, :op, :kind, :size, :sha, :detail, :created, :modified, :key, :evidence)
                 ON CONFLICT (volume_id, path) WHERE status = 'OPEN' DO NOTHING
                 """).param("id", org.genealogyarchive.identity.GlobalIds.newId()).param("vol", e.volumeId())
                 .param("path", e.path()).param("content", e.contentId()).param("gen", e.generation())
-                .param("op", e.operationId()).param("kind", e.kind().name()).param("size", e.observedSize())
-                .param("sha", e.observedSha256()).param("detail", e.detail().length() > 4000 ? e.detail().substring(0, 4000)
-                        : e.detail()).update();
+                .param("op", e.operationId()).param("kind", e.kind().name()).param("size", o == null ? null : o.size())
+                .param("sha", o == null ? null : o.sha256()).param("detail", e.detail().length() > 4000
+                        ? e.detail().substring(0, 4000) : e.detail())
+                .param("created", o == null ? null : java.time.OffsetDateTime.ofInstant(o.created(), java.time.ZoneOffset.UTC))
+                .param("modified", o == null ? null : java.time.OffsetDateTime.ofInstant(o.modified(), java.time.ZoneOffset.UTC))
+                .param("key", o == null ? null : o.fileKey())
+                .param("evidence", (o == null ? IdentityEvidence.NONE : IdentityEvidence.RECORDED).name()).update();
         return openAt(e.volumeId(), e.path()).orElseThrow();
     }
 
@@ -184,11 +240,33 @@ public final class UnresolvedObjectRepository {
                 .param("by", resolvedBy).param("id", unresolvedId).update() == 1;
     }
 
-    /** Records an Administrator's attestation (once) that the observed object is the archive's. */
+    /**
+     * An Administrator's release (NOT_ARCHIVAL), with whether the object examined for it was exactly the recorded one
+     * (V0020). Only a CONFIRMED release identifies an object later.
+     *
+     * @return true if the record was open and is now resolved
+     */
+    public boolean release(UUID unresolvedId, String detail, UUID resolvedBy, DecisionEvidence evidence) {
+        return jdbc.sql("""
+                UPDATE gas.unresolved_object
+                   SET status = 'RESOLVED', resolution = 'NOT_ARCHIVAL', resolution_detail = :d, resolved_by = :by,
+                       resolved_at = clock_timestamp(),
+                       decision_evidence = CASE WHEN identity_evidence = 'LEGACY' THEN NULL ELSE :e END,
+                       decision_checked_at = CASE WHEN identity_evidence = 'LEGACY' THEN NULL ELSE clock_timestamp() END
+                 WHERE unresolved_id = :id AND status = 'OPEN'
+                """).param("d", detail.length() > 4000 ? detail.substring(0, 4000) : detail).param("by", resolvedBy)
+                .param("e", evidence.name()).param("id", unresolvedId).update() == 1;
+    }
+
+    /**
+     * Records an Administrator's attestation (once) that the observed object is the archive's. The caller has just
+     * confirmed that the object at the location is exactly the recorded one (V0020); only RECORDED records qualify.
+     */
     public boolean attest(UUID unresolvedId, UUID attestedBy) {
         return jdbc.sql("""
-                UPDATE gas.unresolved_object SET attested_by = :by, attested_at = clock_timestamp()
-                 WHERE unresolved_id = :id AND status = 'OPEN' AND attested_at IS NULL AND observed_sha256 IS NOT NULL
+                UPDATE gas.unresolved_object SET attested_by = :by, attested_at = clock_timestamp(),
+                       decision_evidence = 'CONFIRMED', decision_checked_at = clock_timestamp()
+                 WHERE unresolved_id = :id AND status = 'OPEN' AND attested_at IS NULL AND identity_evidence = 'RECORDED'
                 """).param("by", attestedBy).param("id", unresolvedId).update() == 1;
     }
 }

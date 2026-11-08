@@ -50,7 +50,7 @@ class Phase2SchemaIT {
         SchemaMigrator.MigrationReport report = current.migrate();
 
         assertThat(report.fromVersion()).isEqualTo("0008");
-        assertThat(report.migrationsApplied()).as("V0009-V0019").isEqualTo(11);
+        assertThat(report.migrationsApplied()).as("V0009-V0020").isEqualTo(12);
         assertThat(current.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
         assertThat(new PostMigrationValidator(ds, current).validate()).isEmpty();
     }
@@ -93,7 +93,7 @@ class Phase2SchemaIT {
         execute("INSERT INTO storage_volume (volume_id, name, purpose, required) VALUES ('" + VOLUME + "', 'v', 'originals', true)");
         operationClaiming("22222222-2222-4222-8222-222222222222", "originals/aa/bb/one.g2");
         new SchemaMigrator(ds).migrate();
-        assertThat(version()).isEqualTo("0019");
+        assertThat(version()).isEqualTo("0020");
         try (Connection c = ds.getConnection(); Statement st = c.createStatement();
              ResultSet rs = st.executeQuery("SELECT owner_kind, operation_id FROM gas.physical_location_owner")) {
             assertThat(rs.next()).isTrue();
@@ -138,7 +138,7 @@ class Phase2SchemaIT {
         }
         execute("UPDATE file_operation SET target_created = false WHERE operation_id = '" + unrecorded + "'");
         new SchemaMigrator(ds).migrate();
-        assertThat(version()).isEqualTo("0019");
+        assertThat(version()).isEqualTo("0020");
     }
 
     /**
@@ -165,7 +165,7 @@ class Phase2SchemaIT {
                 + content + "', 'originals/44/44/c.g1', 'quarantine/x/damaged-g1', 'DAMAGED_GENERATION', 'INTENDED', 3, repeat('cd', 32))");
 
         new SchemaMigrator(ds).migrate();
-        assertThat(version()).isEqualTo("0019");
+        assertThat(version()).isEqualTo("0020");
         try (Connection c = ds.getConnection(); Statement st = c.createStatement()) {
             try (ResultSet rs = st.executeQuery("SELECT evidence_basis FROM gas.quarantine_object")) {
                 assertThat(rs.next()).isTrue();
@@ -183,6 +183,83 @@ class Phase2SchemaIT {
         Throwable rewritten = org.assertj.core.api.Assertions.catchThrowable(() -> execute(
                 "UPDATE quarantine_object SET evidence_basis = 'ADMINISTRATOR_ATTESTED'"));
         assertThat(rewritten).as("the basis recorded with a move is never rewritten").isNotNull();
+    }
+
+    /**
+     * V0020 (owner decision): an existing V0019 installation upgrades. Every existing unresolved-object record - open,
+     * attested or released - is kept and marked LEGACY (no identity evidence), so it never identifies an object for
+     * an attestation or a release. The database keeps new evidence complete, immutable, and bound to its decision.
+     */
+    @Test
+    void anExistingV0019InstallationUpgradesAndItsRecordsAreLegacy() throws Exception {
+        SchemaMigrator.upTo(ds, "0019").migrate();
+        String operation = "22222222-2222-4222-8222-222222222222";
+        String user = "55555555-5555-4555-8555-555555555555";
+        execute("INSERT INTO storage_volume (volume_id, name, purpose, required) VALUES ('" + VOLUME + "', 'v', 'originals', true)");
+        execute("INSERT INTO file_operation (operation_id, kind, state, actor_kind, actor_label, volume_id) VALUES ('"
+                + operation + "', 'REPAIR', 'COMMITTED', 'SYSTEM', 'legacy', '" + VOLUME + "')");
+        execute("INSERT INTO app_user (user_id, username, display_name, role, password_hash) VALUES ('" + user
+                + "', 'legacyadmin', 'Legacy Admin', 'ADMINISTRATOR', '" + "x".repeat(20) + "')");
+        String sha = "'" + "ab".repeat(32) + "'";
+        execute("INSERT INTO unresolved_object (unresolved_id, volume_id, path, operation_id, kind, observed_size, observed_sha256, "
+                + "detail) VALUES ('60000000-0000-4000-8000-000000000001', '" + VOLUME + "', 'originals/aa/aa/open', '"
+                + operation + "', 'OBJECT_AT_VACATED_LOCATION', 3, " + sha + ", 'legacy open')");
+        execute("INSERT INTO unresolved_object (unresolved_id, volume_id, path, operation_id, kind, observed_size, observed_sha256, "
+                + "detail, attested_by, attested_at) VALUES ('60000000-0000-4000-8000-000000000002', '" + VOLUME
+                + "', 'originals/aa/aa/attested', '" + operation + "', 'OBJECT_AT_VACATED_LOCATION', 3, " + sha
+                + ", 'legacy attested', '" + user + "', clock_timestamp())");
+        execute("INSERT INTO unresolved_object (unresolved_id, volume_id, path, operation_id, kind, observed_size, observed_sha256, "
+                + "detail, status, resolution, resolution_detail, resolved_at) VALUES ('60000000-0000-4000-8000-000000000003', '"
+                + VOLUME + "', 'originals/aa/aa/released', '" + operation + "', 'OBJECT_AT_VACATED_LOCATION', 3, " + sha
+                + ", 'legacy released', 'RESOLVED', 'NOT_ARCHIVAL', 'released', clock_timestamp())");
+
+        new SchemaMigrator(ds).migrate();
+        assertThat(version()).isEqualTo("0020");
+        try (Connection c = ds.getConnection(); Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT identity_evidence, decision_evidence, observed_created_at, observed_sha256, "
+                     + "status, attested_at IS NOT NULL FROM gas.unresolved_object ORDER BY unresolved_id")) {
+            int rows = 0;
+            while (rs.next()) {
+                rows++;
+                assertThat(rs.getString(1)).as("existing records carry no identity evidence").isEqualTo("LEGACY");
+                assertThat(rs.getString(2)).as("and no decision bound to an object").isNull();
+                assertThat(rs.getObject(3)).isNull();
+                assertThat(rs.getString(4)).as("existing observations are kept").isEqualTo("ab".repeat(32));
+            }
+            assertThat(rows).isEqualTo(3);
+        }
+        // New evidence must be complete.
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> execute(
+                "INSERT INTO unresolved_object (unresolved_id, volume_id, path, operation_id, kind, observed_size, observed_sha256, "
+                        + "detail, identity_evidence) VALUES (gen_random_uuid(), '" + VOLUME + "', 'originals/aa/aa/new', '"
+                        + operation + "', 'CURRENT_COPY', 3, " + sha + ", 'no times', 'RECORDED')")))
+                .as("RECORDED evidence needs both times").isNotNull();
+        execute("INSERT INTO unresolved_object (unresolved_id, volume_id, path, operation_id, kind, observed_size, observed_sha256, "
+                + "detail, identity_evidence, observed_created_at, observed_modified_at, observed_file_key) VALUES "
+                + "('60000000-0000-4000-8000-000000000004', '" + VOLUME + "', 'originals/aa/aa/new', '" + operation
+                + "', 'CURRENT_COPY', 3, " + sha + ", 'recorded', 'RECORDED', clock_timestamp(), clock_timestamp(), '(dev=1,ino=2)')");
+        // The observation is immutable.
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> execute(
+                "UPDATE unresolved_object SET observed_modified_at = clock_timestamp() "
+                        + "WHERE unresolved_id = '60000000-0000-4000-8000-000000000004'"))).isNotNull();
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> execute(
+                "UPDATE unresolved_object SET identity_evidence = 'RECORDED' "
+                        + "WHERE unresolved_id = '60000000-0000-4000-8000-000000000001'"))).as("a legacy record stays legacy").isNotNull();
+        // Decision evidence changes only with its decision; a CONFIRMED decision needs RECORDED evidence.
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> execute(
+                "UPDATE unresolved_object SET decision_evidence = 'CONFIRMED', decision_checked_at = clock_timestamp() "
+                        + "WHERE unresolved_id = '60000000-0000-4000-8000-000000000004'"))).isNotNull();
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> execute(
+                "UPDATE unresolved_object SET status = 'RESOLVED', resolution = 'NOT_ARCHIVAL', resolution_detail = 'x', "
+                        + "resolved_at = clock_timestamp(), decision_evidence = 'CONFIRMED', decision_checked_at = clock_timestamp() "
+                        + "WHERE unresolved_id = '60000000-0000-4000-8000-000000000001'"))).as("legacy cannot be CONFIRMED").isNotNull();
+        // An open V0020 attestation is bound to its object.
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> execute(
+                "UPDATE unresolved_object SET attested_by = '" + user + "', attested_at = clock_timestamp() "
+                        + "WHERE unresolved_id = '60000000-0000-4000-8000-000000000004'"))).isNotNull();
+        execute("UPDATE unresolved_object SET attested_by = '" + user + "', attested_at = clock_timestamp(), "
+                + "decision_evidence = 'CONFIRMED', decision_checked_at = clock_timestamp() "
+                + "WHERE unresolved_id = '60000000-0000-4000-8000-000000000004'");
     }
 
     @Test
