@@ -178,25 +178,71 @@ public final class DestructionProcessor {
     private record Owned(UUID operationId, String path) {
     }
 
-    /** Where each location stands in one removal pass. */
+    /** What, besides a hash, claims a location for deletion (fourth V0019 audit). */
+    private enum Basis {
+        /** The content's CURRENT generation at its storage location, while the content is DESTROY_PENDING. */
+        CURRENT_GENERATION,
+        /** An operation's live claim ({@code target_created}) on a copy {@link OperationCopies} verified. */
+        OPERATION_COPY,
+        /** A QUARANTINED ledger entry with trusted (and, if attested, honoured) evidence of what it moved. */
+        QUARANTINE_MOVE,
+        /** An open record an Administrator attested, whose operation's lock this removal holds. */
+        ATTESTATION
+    }
+
+    /**
+     * Why one object may be deleted: the claim, and the size and SHA-256 identified when the decision was made.
+     * The deletion helper re-establishes every part of it immediately before deleting (fourth V0019 audit).
+     *
+     * @param claimant the claiming operation (OPERATION_COPY) or record (ATTESTATION); otherwise null
+     */
+    private record Authorization(Basis basis, UUID claimant, Integer generation, UnresolvedObjectRepository.Kind kind,
+                                 long size, String sha256) {
+    }
+
+    /** A location verified absent when examined: what it was examined as, for reconciliation if it is occupied later. */
+    private record Absent(UnresolvedObjectRepository.Kind kind, Integer generation) {
+    }
+
+    /**
+     * Where each location stands in one removal pass (fourth V0019 audit). Every examined location is in exactly
+     * one category; only {@code deletable} is ever handed to the deletion helper, and membership there is not
+     * itself authority - the helper re-establishes it.
+     */
     private static final class Inventory {
-        final Set<String> known = new LinkedHashSet<>();
-        final Set<String> historical = new LinkedHashSet<>();
+        /** Verified absent when examined. Never a deletion instruction; probed again after the deletions. */
+        final Map<String, Absent> absent = new java.util.LinkedHashMap<>();
+        /** Currently claimed objects identified for deletion, each with its authorization. */
+        final Map<String, Authorization> deletable = new java.util.LinkedHashMap<>();
+        /** Objects an Administrator released: left untouched and reported. */
+        final Set<String> released = new LinkedHashSet<>();
+        /** Unresolved or unclaimed objects: recorded, left untouched; they keep the removal incomplete. */
         final Map<String, String> unresolved = new java.util.LinkedHashMap<>();
-        /** Locations whose object this pass deleted (the others in {@code known} were verified empty). */
+        /** Former locations still to be examined (they claim nothing). */
+        final Set<String> former = new LinkedHashSet<>();
+        /** Locations whose object this pass deleted. */
         final Set<String> deleted = new java.util.HashSet<>();
+        /** Locations that could not be checked again at reconciliation. */
+        final List<String> uncheckable = new ArrayList<>();
         /** Operations whose locks this removal holds: only their records' attestations may authorise deletion. */
         final Set<UUID> locked = new java.util.HashSet<>();
+
+        boolean examined(String location) {
+            return absent.containsKey(location) || deletable.containsKey(location) || released.contains(location)
+                    || unresolved.containsKey(location);
+        }
     }
 
     /**
      * Removes every copy of the content's bytes the archive can identify (GAS-P2-006; V0018 audit). The bytes at
-     * a location are deleted only if nothing is there or the object is identified by evidence established
-     * before now: the authoritative SHA-256; for a quarantined object, the move's hash when its basis was
-     * trusted; for an operation's uncommitted copy, {@link OperationCopies}; for an unresolved object, an
-     * Administrator's attestation. A location a current record claims whose object is not identified is
-     * recorded as unresolved, left untouched, and keeps the removal incomplete (never BYTES_REMOVED) until it
-     * is verifiably gone or resolved. Locations the bytes left before (historical) are never touched.
+     * a location are deleted only if the object is identified by evidence established before now: the
+     * authoritative SHA-256 at the current generation's location; for a quarantined object, the move's hash when
+     * its basis was trusted; for an operation's uncommitted copy, {@link OperationCopies}; for an unresolved
+     * object, an Administrator's attestation. A location a current record claims whose object is not identified
+     * is recorded as unresolved, left untouched, and keeps the removal incomplete (never BYTES_REMOVED) until it
+     * is verifiably gone or resolved. Locations the bytes left before (historical) are never deleted, and a
+     * location verified absent is never a deletion instruction (fourth V0019 audit): whatever appears there later
+     * is reconciled as unresolved (or, if released, reported).
      */
     private void removeBytes(FileOperation op, ManagedVolume volume, Set<UUID> locked) {
         QuarantineMoves moves = new QuarantineMoves(ctx);
@@ -233,11 +279,11 @@ public final class DestructionProcessor {
                             + op.operationId() + " checked", inv.locked.contains(u.operationId()));
                 }
             }
-            // Uncommitted copies: removed only if they are verifiably the operation's copy (V0018 audit).
+            // Uncommitted copies: deletable only if they are verifiably the operation's copy (V0018 audit).
             for (FileOperation w : ctx.operations().writersOfContent(op.contentId())) {
                 if (!w.targetCreated() || w.targetPath() == null) {
                     if (w.targetPath() != null) {
-                        inv.historical.add(w.targetPath());
+                        inv.former.add(w.targetPath());
                     }
                     continue;
                 }
@@ -246,16 +292,24 @@ public final class DestructionProcessor {
                 }
                 if (!ctx.unresolved().releasedHashesAt(volume.volumeId(), w.targetPath()).isEmpty()) {
                     // An Administrator decided about this location before: decided by classify (never by the claim).
-                    inv.historical.add(w.targetPath());
+                    inv.former.add(w.targetPath());
                     continue;
                 }
                 OperationCopies.Check own = OperationCopies.check(ctx, w, volume);
-                if (own.verdict() == OperationCopies.Verdict.UNVERIFIED) {
-                    ctx.tx().executeWithoutResult(status -> OperationCopies.claimBecomesUnresolved(ctx, w, own));
-                    continue;
+                switch (own.verdict()) {
+                    case UNVERIFIED -> ctx.tx().executeWithoutResult(status -> OperationCopies.claimBecomesUnresolved(ctx, w, own));
+                    case ABSENT -> {
+                        // Nothing to delete. The claim is released at completion; an object appearing here meanwhile is
+                        // reconciled as unresolved, never deleted on the strength of this look.
+                        owned.add(new Owned(w.operationId(), w.targetPath()));
+                        inv.absent.putIfAbsent(w.targetPath(), new Absent(UnresolvedObjectRepository.Kind.OPERATION_COPY, null));
+                    }
+                    case COMPLETE, PARTIAL -> {
+                        owned.add(new Owned(w.operationId(), w.targetPath()));
+                        inv.deletable.putIfAbsent(w.targetPath(), new Authorization(Basis.OPERATION_COPY, w.operationId(), null,
+                                UnresolvedObjectRepository.Kind.OPERATION_COPY, own.observed().size(), own.observed().sha256()));
+                    }
                 }
-                owned.add(new Owned(w.operationId(), w.targetPath()));
-                inv.known.add(w.targetPath());
             }
             String authoritative = content.sha256();
             // Third V0019 audit: a hash identifies an object only where a current record claims the location for this
@@ -266,55 +320,54 @@ public final class DestructionProcessor {
             List<QuarantineRepository.Entry> ledger = ctx.quarantine().forContent(op.contentId());
             for (FileContentRepository.Generation g : generations) {
                 switch (g.state()) {
-                    case CURRENT -> classify(volume, op, g.storagePath(), Set.of(authoritative), inv, g.vacated()
-                            ? UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION : UnresolvedObjectRepository.Kind.CURRENT_COPY,
-                            g.generation());
+                    case CURRENT -> classify(volume, op, g.storagePath(), Set.of(authoritative), Basis.CURRENT_GENERATION, inv,
+                            g.vacated() ? UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION
+                                    : UnresolvedObjectRepository.Kind.CURRENT_COPY, g.generation());
                     // Written before V0019: the superseded copy's identity was only observed.
-                    case QUARANTINE_PENDING -> classify(volume, op, g.storagePath(), noClaim, inv,
-                            UnresolvedObjectRepository.Kind.DAMAGED_COPY, g.generation());
-                    case UNRESOLVED -> classify(volume, op, g.storagePath(), noClaim, inv,
+                    case QUARANTINE_PENDING, UNRESOLVED -> classify(volume, op, g.storagePath(), noClaim, null, inv,
                             UnresolvedObjectRepository.Kind.DAMAGED_COPY, g.generation());
                     case QUARANTINED -> {
-                        classify(volume, op, g.quarantinePath(), trustedMoveHashes(g.quarantinePath(), ledger), inv,
-                                UnresolvedObjectRepository.Kind.QUARANTINED_COPY, null);
-                        inv.historical.add(g.storagePath());
+                        classify(volume, op, g.quarantinePath(), trustedMoveHashes(g.quarantinePath(), ledger),
+                                Basis.QUARANTINE_MOVE, inv, UnresolvedObjectRepository.Kind.QUARANTINED_COPY, null);
+                        inv.former.add(g.storagePath());
                     }
-                    case MISSING, DESTROYED -> inv.historical.add(g.storagePath());
+                    case MISSING, DESTROYED -> inv.former.add(g.storagePath());
                 }
             }
             for (QuarantineRepository.Entry entry : ledger) {
-                inv.historical.add(entry.sourcePath());
+                inv.former.add(entry.sourcePath());
                 if (entry.state() == QuarantineRepository.State.QUARANTINED) {
-                    classify(volume, op, entry.quarantinePath(), trustedMoveHashes(entry.quarantinePath(), ledger), inv,
-                            UnresolvedObjectRepository.Kind.QUARANTINED_COPY, null);
+                    classify(volume, op, entry.quarantinePath(), trustedMoveHashes(entry.quarantinePath(), ledger),
+                            Basis.QUARANTINE_MOVE, inv, UnresolvedObjectRepository.Kind.QUARANTINED_COPY, null);
                 } else if (entry.state() == QuarantineRepository.State.REMOVED) {
-                    inv.historical.add(entry.quarantinePath());
+                    inv.former.add(entry.quarantinePath());
                 }
             }
             // Every other open record of this content or its operations (an unverified uncommitted copy, for one).
             for (UnresolvedObjectRepository.Entry u : openRecords(op)) {
-                if (!inv.known.contains(u.path()) && !inv.unresolved.containsKey(u.path())) {
-                    classify(volume, op, u.path(), noClaim, inv, u.kind(), u.generation());
+                if (!inv.deletable.containsKey(u.path()) && !inv.unresolved.containsKey(u.path())) {
+                    classify(volume, op, u.path(), noClaim, null, inv, u.kind(), u.generation());
                 }
             }
-            inv.historical.removeAll(inv.known);
-            inv.historical.removeAll(inv.unresolved.keySet());
             // A location the content's bytes left (or were planned for) is owned by nothing now. Each is re-inspected:
             // verified empty -> nothing there; an object an Administrator released -> reported only; any other object,
             // even with the authoritative bytes -> unresolved, untouched, removal incomplete until an Administrator
             // attests or releases it. An earlier look (a repair's inspection, a settled move) never substitutes.
-            List<String> former = new ArrayList<>(inv.historical);
-            inv.historical.clear();
-            for (String location : former) {
-                classify(volume, op, location, noClaim, inv,
-                        UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION, null);
-            }
-            inv.historical.removeAll(inv.known);
-            inv.known.removeAll(inv.unresolved.keySet());
-            for (String location : inv.known) {
-                if (delete(volume, location)) {
-                    inv.deleted.add(location);
+            for (String location : List.copyOf(inv.former)) {
+                if (!inv.examined(location)) {
+                    classify(volume, op, location, noClaim, null, inv,
+                            UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION, null);
                 }
+            }
+            // An unresolved decision about a location wins over any other (the most conservative category).
+            inv.deletable.keySet().removeAll(inv.unresolved.keySet());
+            inv.absent.keySet().removeAll(inv.unresolved.keySet());
+            inv.absent.keySet().removeAll(inv.deletable.keySet());
+            inv.absent.keySet().removeAll(inv.released);
+            // The inventory is complete; nothing below relies on it alone (fourth V0019 audit).
+            ctx.faults().reach(FaultPoints.Point.AFTER_INVENTORY, op.operationId());
+            for (Map.Entry<String, Authorization> d : inv.deletable.entrySet()) {
+                deleteAuthorized(volume, op, d.getKey(), d.getValue(), inv);
                 ctx.faults().reach(FaultPoints.Point.DURING_PHYSICAL_DELETE, op.operationId());
             }
         } catch (IOException e) {
@@ -323,34 +376,41 @@ public final class DestructionProcessor {
                     + "). The File is retired; its bytes may still be on the volume. Retry from Operations.");
             return;
         }
-        List<String> remaining = new ArrayList<>();
-        for (String location : inv.known) {
+        // Reconciliation: every location found empty - before the deletions or by them - is checked again. Whatever
+        // has appeared is never deleted: released -> reported; anything else -> unresolved, removal incomplete.
+        Map<String, Absent> toCheck = new java.util.LinkedHashMap<>(inv.absent);
+        for (String location : inv.deleted) {
+            Authorization a = inv.deletable.get(location);
+            toCheck.putIfAbsent(location, new Absent(a.kind(), a.generation()));
+        }
+        Set<String> empty = new LinkedHashSet<>();
+        for (Map.Entry<String, Absent> c : toCheck.entrySet()) {
             try {
-                if (present(volume, location)) {
-                    remaining.add(location);
+                if (reconcile(volume, op, c.getKey(), c.getValue(), inv)) {
+                    empty.add(c.getKey());
                 }
             } catch (IOException e) {
-                remaining.add(location + " (could not be checked)");
+                inv.uncheckable.add(c.getKey() + " (could not be checked)");
             }
         }
-        // Released objects at former locations are only reported - but only once they were seen again now.
+        // Released objects are only reported - but only once they were seen again now.
         List<String> unexplained = new ArrayList<>();
-        for (String location : inv.historical) {
+        for (String location : inv.released) {
             try {
                 if (present(volume, location)) {
                     unexplained.add(location);
                 }
             } catch (IOException e) {
-                remaining.add(location + " (could not be checked)");
+                inv.uncheckable.add(location + " (could not be checked)");
             }
         }
-        if (!remaining.isEmpty() || !inv.unresolved.isEmpty()) {
+        if (!inv.uncheckable.isEmpty() || !inv.unresolved.isEmpty()) {
             // Never BYTES_REMOVED while an object a current record claims is still on the volume unidentified.
             StringBuilder why = new StringBuilder("Physical removal is incomplete. The File is retired.");
-            if (!remaining.isEmpty()) {
-                why.append(" Bytes remain at ").append(String.join(", ", remaining)).append('.');
+            if (!inv.uncheckable.isEmpty()) {
+                why.append(" Locations not verified empty: ").append(String.join(", ", inv.uncheckable)).append('.');
             }
-            inv.unresolved.forEach((location, reason) -> why.append(" The archival copy recorded at ").append(location)
+            inv.unresolved.forEach((location, reason) -> why.append(" The object at ").append(location)
                     .append(" was left untouched: ").append(reason).append('.'));
             if (!inv.unresolved.isEmpty()) {
                 why.append(" An Administrator must inspect it and resolve it (attest or release it under Preservation, "
@@ -362,9 +422,10 @@ public final class DestructionProcessor {
             return;
         }
         List<Owned> release = owned;
-        Set<String> removed = inv.known;
         Set<String> deletedNow = inv.deleted;
-        String detail = "every known copy removed (" + removed.size() + " location(s) checked)"
+        Set<String> gone = empty;
+        String detail = "every known copy removed (" + deletedNow.size() + " object(s) deleted, "
+                + (gone.size() - deletedNow.size()) + " location(s) verified already empty)"
                 + (unexplained.isEmpty() ? "" : "; objects an Administrator released as not this archive's were left "
                 + "untouched at " + String.join(", ", unexplained));
         Boolean completed = ctx.tx().execute(status -> {
@@ -373,14 +434,14 @@ public final class DestructionProcessor {
             if (!unexplained.isEmpty()) {
                 set.put("message", detail);
             }
-            // V0019: every open record is at a location just removed with trusted evidence; otherwise not complete.
+            // V0019: every open record is at a location this pass emptied or verified empty; otherwise not complete.
             for (UnresolvedObjectRepository.Entry u : openRecords(op)) {
-                if (!removed.contains(u.path())) {
+                if (!gone.contains(u.path())) {
                     status.setRollbackOnly();
                     return false;
                 }
-                // The record states what physically happened: deleted (by attestation or its location's current owner)
-                // or found already gone.
+                // The record states what physically happened: deleted by this pass (by attestation or its location's
+                // current owner) or verified absent - never DESTROYED for an object this pass did not delete.
                 boolean wasDeleted = deletedNow.contains(u.path());
                 ctx.unresolved().resolve(u.unresolvedId(), wasDeleted ? UnresolvedObjectRepository.Resolution.DESTROYED
                                 : UnresolvedObjectRepository.Resolution.ABSENT,
@@ -399,9 +460,10 @@ public final class DestructionProcessor {
             }
             for (QuarantineRepository.Entry entry : ctx.quarantine().forContent(op.contentId())) {
                 // An object an Administrator released stays in quarantine, and its ledger entry says so.
-                if (entry.state() == QuarantineRepository.State.QUARANTINED && removed.contains(entry.quarantinePath())) {
+                if (entry.state() == QuarantineRepository.State.QUARANTINED && gone.contains(entry.quarantinePath())) {
                     ctx.quarantine().setState(entry.quarantineId(), QuarantineRepository.State.QUARANTINED,
-                            QuarantineRepository.State.REMOVED, "removed by destruction " + op.operationId());
+                            QuarantineRepository.State.REMOVED, (deletedNow.contains(entry.quarantinePath())
+                                    ? "removed by destruction " : "verified absent by destruction ") + op.operationId());
                 }
             }
             ctx.contents().setState(op.contentId(), ContentState.DESTROY_PENDING, ContentState.DESTROYED);
@@ -440,16 +502,17 @@ public final class DestructionProcessor {
     }
 
     /**
-     * Decides one current location: absent or identified by {@code trusted} -> removed; an open record that an
-     * Administrator attested and that still matches -> removed; released by an Administrator (same object) ->
-     * historical; anything else -> recorded as unresolved (once) and left untouched.
+     * Decides one location: verified absent -> {@code absent} (never a deletion instruction); identified by
+     * {@code trusted} under the location's current claim ({@code basis}) -> {@code deletable}; an open record that
+     * an Administrator attested, whose lock is held, and that still matches -> {@code deletable}; released by an
+     * Administrator (same object) -> {@code released}; anything else -> recorded as unresolved (once) and left.
      */
-    private void classify(ManagedVolume volume, FileOperation op, String location, Set<String> trusted, Inventory inv,
-                          UnresolvedObjectRepository.Kind kind, Integer generation) throws IOException {
+    private void classify(ManagedVolume volume, FileOperation op, String location, Set<String> trusted, Basis basis,
+                          Inventory inv, UnresolvedObjectRepository.Kind kind, Integer generation) throws IOException {
         // Only verified absence counts as "nothing there"; an inaccessible location stops the pass (retried).
         Presence.Probe probe = Presence.probe(ctx, volume, location);
         if (probe.verifiedAbsent()) {
-            inv.known.add(location);
+            inv.absent.putIfAbsent(location, new Absent(kind, generation));
             return;
         }
         if (!probe.present()) {
@@ -467,7 +530,7 @@ public final class DestructionProcessor {
         List<String> released = ctx.unresolved().releasedHashesAt(volume.volumeId(), location);
         if (!released.isEmpty()) {
             if (open.isEmpty() && m != null && released.contains(m.sha256())) {
-                inv.historical.add(location);
+                inv.released.add(location);
                 return;
             }
             UnresolvedObjectRepository.Entry u = open.orElseGet(() -> newRecord(volume, op, location, kind, generation, null));
@@ -476,15 +539,16 @@ public final class DestructionProcessor {
             return;
         }
         // Identity second: a location still this content's (no contrary decision) whose object is identified.
-        if (m != null && trusted.contains(m.sha256())) {
-            inv.known.add(location);
+        if (m != null && basis != null && open.isEmpty() && trusted.contains(m.sha256())) {
+            inv.deletable.putIfAbsent(location, new Authorization(basis, null, generation, kind, m.size(), m.sha256()));
             return;
         }
         if (open.isPresent()) {
             UnresolvedObjectRepository.Entry u = open.get();
             if (m != null && u.attested() && inv.locked.contains(u.operationId())
-                    && m.sha256().equals(u.observedSha256()) && m.size() == u.observedSize()) {
-                inv.known.add(location);
+                    && m.sha256().equals(u.observedSha256()) && u.observedSize() != null && m.size() == u.observedSize()) {
+                inv.deletable.putIfAbsent(location, new Authorization(Basis.ATTESTATION, u.unresolvedId(), u.generation(),
+                        u.kind(), m.size(), m.sha256()));
             } else {
                 inv.unresolved.put(location, unresolvedReason(u, m));
             }
@@ -492,6 +556,50 @@ public final class DestructionProcessor {
         }
         UnresolvedObjectRepository.Entry u = newRecord(volume, op, location, kind, generation, m);
         inv.unresolved.put(location, unresolvedReason(u, m));
+    }
+
+    /**
+     * Reconciliation (fourth V0019 audit): a location found empty is checked again. An object that has appeared is
+     * never deleted or adopted: one an Administrator released (same bytes, no open record) is reported; anything
+     * else - even with the authoritative bytes - is recorded as unresolved and keeps the removal incomplete.
+     *
+     * @return true if the location is verified empty now
+     * @throws Presence.InconclusiveException if it cannot be determined
+     */
+    private boolean reconcile(ManagedVolume volume, FileOperation op, String location, Absent was, Inventory inv)
+            throws IOException {
+        Presence.Probe probe = Presence.probe(ctx, volume, location);
+        if (probe.verifiedAbsent()) {
+            return true;
+        }
+        if (!probe.present()) {
+            throw new Presence.InconclusiveException(location, probe.problem());
+        }
+        ContentIo.Measurement m = !SafeFiles.isLinkOrReparsePoint(probe.path()) && probe.attributes().isRegularFile()
+                ? ContentIo.measure(probe.path()) : null;
+        refuse(volume, op, location, was.kind(), was.generation(), m, "an object appeared at " + location
+                + " after destruction found it empty; it is not shown to be this content's copy", inv);
+        return false;
+    }
+
+    /**
+     * Leaves the object at {@code location} untouched and accounts for it: an object an Administrator released
+     * (no open record, same bytes) is reported; anything else is recorded as unresolved (an existing open record is
+     * kept) and keeps the removal incomplete. The refusal is an operation event.
+     */
+    private void refuse(ManagedVolume volume, FileOperation op, String location, UnresolvedObjectRepository.Kind kind,
+                        Integer generation, ContentIo.Measurement m, String why, Inventory inv) {
+        Optional<UnresolvedObjectRepository.Entry> open = ctx.unresolved().openAt(volume.volumeId(), location);
+        List<String> released = ctx.unresolved().releasedHashesAt(volume.volumeId(), location);
+        if (open.isEmpty() && m != null && released.contains(m.sha256())) {
+            inv.released.add(location);
+            ctx.operations().note(op.operationId(), "not deleted: " + location + " holds the object an Administrator "
+                    + "released as not this archive's");
+            return;
+        }
+        UnresolvedObjectRepository.Entry u = open.orElseGet(() -> newRecord(volume, op, location, kind, generation, m));
+        inv.unresolved.put(location, why + " (unresolved object " + u.unresolvedId() + ")");
+        ctx.operations().note(op.operationId(), "not deleted: " + why + "; recorded as unresolved object " + u.unresolvedId());
     }
 
     private UnresolvedObjectRepository.Entry newRecord(ManagedVolume volume, FileOperation op, String location,
@@ -557,21 +665,87 @@ public final class DestructionProcessor {
         return Presence.exists(ctx, volume, location);
     }
 
-    /** @return true if an object was deleted, false if the location was verified empty */
-    private boolean delete(ManagedVolume volume, String location) throws IOException {
-        if (!Presence.exists(ctx, volume, location)) {
-            return false;
+    /**
+     * The one place archival bytes are deleted (fourth V0019 audit). Inventory membership is not authority: for the
+     * one object it is about to delete, this re-establishes the configured volume's identity ({@link Presence}),
+     * that the claim named by {@code auth} still holds in the database now, that no Administrator's release or
+     * other open record applies to the location, and that the object is a plain file with exactly the size and
+     * SHA-256 identified when the decision was made. Failing any of these it deletes nothing and records the
+     * object as unresolved (or, if released, reports it). An empty location is never "deleted".
+     * <p>
+     * Residual window (P2-E, accepted): the final identity check and {@link Files#delete} are separate calls; Java
+     * has no portable "delete only if still this object". An object swapped in between them by a local writer
+     * could still be deleted. These checks narrow that window; they do not close it.
+     */
+    private void deleteAuthorized(ManagedVolume volume, FileOperation op, String location, Authorization auth, Inventory inv)
+            throws IOException {
+        Presence.Probe probe = Presence.probe(ctx, volume, location);
+        if (probe.verifiedAbsent()) {
+            // Gone meanwhile: nothing deleted; reconciliation checks it again and it is accounted as absent.
+            inv.absent.putIfAbsent(location, new Absent(auth.kind(), auth.generation()));
+            return;
         }
-        Path p = volume.locate(PortableRelativePath.of(location)).orElseThrow(() ->
-                new Presence.InconclusiveException(location, "it vanished while being examined"));
-        SafeFiles.requirePlainFile(p);
+        if (!probe.present()) {
+            throw new Presence.InconclusiveException(location, probe.problem());
+        }
+        Path p = probe.path();
+        if (SafeFiles.isLinkOrReparsePoint(p) || !probe.attributes().isRegularFile()) {
+            refuse(volume, op, location, auth.kind(), auth.generation(), null, "the object at " + location
+                    + " is not a plain file", inv);
+            return;
+        }
+        String broken = claimBroken(op, volume, location, auth, inv);
+        ContentIo.Measurement m = ContentIo.measure(p);
+        if (broken == null && (m.size() != auth.size() || !m.sha256().equals(auth.sha256()))) {
+            broken = "the object at " + location + " is no longer the one identified for deletion";
+        }
+        if (broken != null) {
+            refuse(volume, op, location, auth.kind(), auth.generation(), m, broken, inv);
+            return;
+        }
         SafeFiles.clearReadOnly(p);
         SafeFiles.withSharingRetry(() -> {
             Files.delete(p);
             return null;
         });
         SafeFiles.flushDirectory(p.getParent());
-        return true;
+        inv.deleted.add(location);
+    }
+
+    /** @return why the claim no longer authorises deleting the object at {@code location}, or null if it does */
+    private String claimBroken(FileOperation op, ManagedVolume volume, String location, Authorization auth, Inventory inv) {
+        if (!ctx.unresolved().releasedHashesAt(volume.volumeId(), location).isEmpty()) {
+            return "an Administrator released the object recorded at " + location;
+        }
+        Optional<UnresolvedObjectRepository.Entry> open = ctx.unresolved().openAt(volume.volumeId(), location);
+        if (open.isPresent() && (auth.basis() != Basis.ATTESTATION || !open.get().unresolvedId().equals(auth.claimant()))) {
+            return "the object at " + location + " is recorded as unresolved";
+        }
+        FileContent content = ctx.contents().find(op.contentId()).orElse(null);
+        if (content == null || content.state() != ContentState.DESTROY_PENDING) {
+            return "content " + op.contentId() + " is no longer pending destruction";
+        }
+        return switch (auth.basis()) {
+            case CURRENT_GENERATION -> ctx.contents().generations(op.contentId()).stream()
+                    .anyMatch(g -> auth.generation() != null && g.generation() == auth.generation()
+                            && g.state() == GenerationState.CURRENT && location.equals(g.storagePath())
+                            && auth.sha256().equals(content.sha256()))
+                    ? null : "the current generation no longer claims " + location;
+            case OPERATION_COPY -> ctx.operations().find(auth.claimant())
+                    .filter(w -> w.targetCreated() && location.equals(w.targetPath()) && volume.volumeId().equals(w.volumeId()))
+                    .isPresent() ? null : "operation " + auth.claimant() + " no longer claims a copy at " + location;
+            case QUARANTINE_MOVE -> {
+                List<QuarantineRepository.Entry> ledger = ctx.quarantine().forContent(op.contentId());
+                boolean held = ledger.stream().anyMatch(e -> location.equals(e.quarantinePath())
+                        && e.state() == QuarantineRepository.State.QUARANTINED);
+                yield held && trustedMoveHashes(location, ledger).contains(auth.sha256()) ? null
+                        : "no quarantine move with trusted evidence claims " + location;
+            }
+            case ATTESTATION -> open.filter(u -> u.attested() && inv.locked.contains(u.operationId())
+                            && auth.sha256().equals(u.observedSha256()) && u.observedSize() != null
+                            && u.observedSize() == auth.size())
+                    .isPresent() ? null : "the Administrator's attestation no longer applies to " + location;
+        };
     }
 
     private void incomplete(FileOperation op, String message) {

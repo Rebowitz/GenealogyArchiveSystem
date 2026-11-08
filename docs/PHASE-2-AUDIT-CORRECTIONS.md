@@ -531,6 +531,56 @@ independently (none stands in for another):
 | Cancellation | live claim | `OperationCopies` | - | as above | moved to quarantine, never deleted |
 | Crash recovery (interrupted moves) | the recorded intent; attested moves need a current attestation | the intent's SHA-256 | no unsettled conflicting decision | as above | single final disposition in the settle transaction |
 
+## Fourth V0019 audit correction (audited revision `68cb078aeabcf65692bfe35a6c5fb774e2f4d888`)
+
+One MAJOR finding, reproduced from the source before any change:
+
+**A verified-absent location became a deletion instruction.** In `DestructionProcessor.classify`, a location
+verified absent was added to `Inventory.known` - the same set as objects identified for deletion - and the
+uncommitted copies found absent by `OperationCopies` were added there too. The deletion loop then called
+`delete(volume, location)` for every member, and `delete` re-probed and deleted *whatever was present*, with no
+ownership, authorization, release or identity check of its own. An unrelated object, or an Administrator-released
+object returning to its location, that appeared between inventory construction and deletion was deleted. The
+completion check then only asked whether the location was empty.
+
+### Correction design (documented before coding)
+
+* **Explicit inventory categories.** Each examined location ends in exactly one of: *verified absent* (never a
+  deletion instruction); *deletable* - a currently claimed object, carrying the specific authorization (current
+  generation, live operation claim, trusted quarantine move, or held attestation) and the size and SHA-256
+  identified at decision time; *released* (left and reported); *unresolved* (recorded, left); *undeterminable*
+  (the pass stops, retried).
+* **Authorization enforced inside the deletion helper.** `deleteAuthorized` re-establishes, for the one object it
+  is about to delete: the configured volume's identity (`Presence`); the claim named by the authorization still
+  holds (the generation is still CURRENT at that path for content being destroyed / the operation still claims
+  that path / the ledger entry is still QUARANTINED with trusted, honoured evidence for that hash / the record is
+  still open and attested, with its operation lock held); no release applies to the location; and the object
+  still has the size and SHA-256 identified when the decision was made. Otherwise it refuses: nothing is deleted
+  and the location is recorded unresolved. An absent location is never handed to it.
+* **Reconciliation after deletion.** Every verified-absent location is probed again after the deletions; an
+  object that has appeared is classified anew (released -> reported; anything else -> unresolved) and keeps the
+  removal CLEANUP_INCOMPLETE. Open records are closed DESTROYED only if this pass deleted their object, ABSENT
+  only if the location was verified absent at both looks.
+* **Residual race (unchanged, P2-E).** The helper's final identity check and the delete are separate filesystem
+  calls; Java offers no portable "delete only if still this object" primitive, so an object swapped in between
+  them by a local writer could still be deleted. Repeated checks narrow but do not close this window; it remains
+  the accepted P2-E limitation.
+
+No migration: application rules over the existing tables.
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| Inventory | `DestructionProcessor.Inventory` now holds `absent`, `deletable` (location -> `Authorization`), `released`, `unresolved` and `former`; an unknown location still stops the pass. An unresolved decision overrides any other category for the same location. |
+| Deletion boundary | `deleteAuthorized` (the only archival deletion helper) re-probes the configured volume, re-reads the claim (`claimBroken`: CURRENT generation of DESTROY_PENDING content / operation `target_created` at that path / QUARANTINED ledger entry with trusted, honoured evidence / open attested record under a held lock), refuses on any release or foreign open record, and re-measures size and SHA-256. A refusal is an operation event (`not deleted: ...`) and an unresolved record. |
+| Reconciliation | Every absent or deleted location is probed again; an appearing object is reported (released, same bytes, no open record) or recorded unresolved, keeping CLEANUP_INCOMPLETE. Completion detail counts objects deleted vs. locations already empty. |
+| Accounting | Records close DESTROYED only for objects this pass deleted, ABSENT only for locations verified empty at reconciliation; ledger entries say which. |
+| Test seam | Fault point `AFTER_INVENTORY`. |
+| Other callers | None: `Files.delete` elsewhere touches only the write-probe file, thumbnail temporaries and staging; no other path deletes archival bytes. |
+
+Regression tests (`Phase2AuditCorrectionsIT`, `v0023_*`): object appearing at a verified-empty former location (byte-identical and foreign) across repeated passes, then attested or released; returning released object with the archive's own bytes (reported, never deleted) and a replacement (new unresolved record); crashes at `AFTER_INVENTORY` and `DURING_PHYSICAL_DELETE` with recovery; current object swapped after identification (refused, CURRENT_COPY record) plus a legitimate owned deletion; attested object gone before deletion (ABSENT, not DESTROYED).
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

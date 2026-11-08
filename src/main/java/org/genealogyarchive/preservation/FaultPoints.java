@@ -32,6 +32,8 @@ public interface FaultPoints {
         AFTER_COMMIT_BEFORE_CLEANUP,
         /** Destruction: tombstone committed, before bytes are removed. */
         BEFORE_PHYSICAL_DELETE,
+        /** Destruction: every location is classified, before anything is deleted (fourth V0019 audit). */
+        AFTER_INVENTORY,
         /** Destruction: after each known copy is deleted, before the next (GAS-P2-R01). */
         DURING_PHYSICAL_DELETE,
         /** Repair: repaired generation committed, before the damaged copy is moved to quarantine. */

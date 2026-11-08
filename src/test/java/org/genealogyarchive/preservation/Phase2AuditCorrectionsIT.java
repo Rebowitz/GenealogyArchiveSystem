@@ -3571,4 +3571,212 @@ class Phase2AuditCorrectionsIT {
         assertThat(closed.resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.ABSENT);
         assertThat(generation(f.contentId(), 1).state()).isEqualTo(GenerationState.MISSING);
     }
+    // ---- Fourth V0019 audit: a stale inventory never authorises deletion ----------------------------------------
+
+    /** Content whose generation 1 is retired (MISSING) - its former location verified empty - and generation 2 current. */
+    private record FormerAndCurrent(ArchivalFile file, String formerPath, Path former, Path current) {
+    }
+
+    private FormerAndCurrent formerAndCurrent(String name, byte[] bytes) throws Exception {
+        ArchivalFile f = ingestedThenMissing(name, bytes);
+        assertThat(fx.process(repairOf(f, bytes).operationId()).state()).isEqualTo(OperationState.COMPLETED);
+        String formerPath = generation(f.contentId(), 1).storagePath();
+        Path former = onVolume(formerPath);
+        Path current = onVolume(generation(f.contentId(), 2).storagePath());
+        assertThat(former).doesNotExist();
+        assertThat(current).exists();
+        return new FormerAndCurrent(fx.file(f.fileId()), formerPath, former, current);
+    }
+
+    private List<String> eventDetails(UUID operationId) {
+        return fx.preservation().operations().events(fx.admin, operationId).stream()
+                .map(e -> e.detail() == null ? "" : e.detail()).toList();
+    }
+
+    private void assertIncompleteAndUntouched(UUID destruction, ArchivalFile f, Path object, byte[] bytes) throws IOException {
+        FileOperation d = fx.operation(destruction);
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+        assertThat(d.outcome()).as("never BYTES_REMOVED while an object is unresolved").isNotEqualTo("BYTES_REMOVED");
+        assertThat(object).as("never deleted on the strength of an earlier absence").hasBinaryContent(bytes);
+        assertThat(content(f).state()).isEqualTo(ContentState.DESTROY_PENDING);
+    }
+
+    /**
+     * Cases 1, 3, 4, 6, 7: a former location is verified empty while the inventory is built; an object - byte-identical
+     * to the archive's content, or foreign - appears there before deletion. It is never deleted or adopted: it is
+     * recorded unresolved, the removal stays CLEANUP_INCOMPLETE through repeated passes, and the owned, verified current
+     * generation is deleted meanwhile. An Administrator then resolves it: attested -> removed as attested; released -> left.
+     */
+    @Test
+    void v0023_anObjectAppearingAtAVerifiedEmptyFormerLocationIsNeverDeleted() throws Exception {
+        for (boolean matching : List.of(true, false)) {
+            byte[] bytes = b("tithe map, appears after inventory, matching=" + matching);
+            FormerAndCurrent s = formerAndCurrent("appears-" + matching + ".tif", bytes);
+            byte[] object = matching ? bytes : b("a scan someone else saved here");
+            FileOperation op = destroy(s.file());
+            fx.faults.arm(FaultPoints.Point.AFTER_INVENTORY, id -> Files.write(s.former(), object));
+            fx.preservation().destruction().process(op.operationId());
+            assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), object);
+            assertThat(s.current()).as("the owned, verified current generation is deleted").doesNotExist();
+            UnresolvedObjectRepository.Entry u = openRecordAt(s.formerPath());
+            assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION);
+            assertThat(u.observedSha256()).isEqualTo(sha256(object));
+            assertThat(u.attested()).as("never promoted into an owned copy").isFalse();
+            assertThat(eventDetails(op.operationId())).anyMatch(e -> e.contains("not deleted") && e.contains(s.formerPath())
+                    && e.contains(u.unresolvedId().toString()));
+            for (int i = 0; i < 3; i++) {
+                fx.rebuild();
+                fx.preservation().recovery().runOnce();
+                fx.preservation().destruction().process(op.operationId());
+                assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), object);
+                assertThat(openRecordAt(s.formerPath()).unresolvedId()).as("one durable record").isEqualTo(u.unresolvedId());
+            }
+            if (matching) {
+                fx.preservation().unresolved().attest(fx.admin, u.unresolvedId(), "inspected: the original, put back by hand");
+                fx.preservation().recovery().runOnce();
+                assertThat(s.former()).doesNotExist();
+                assertThat(record(u.unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.DESTROYED);
+            } else {
+                fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "inspected: not ours");
+                fx.preservation().recovery().runOnce();
+                assertThat(s.former()).as("released, never deleted").hasBinaryContent(object);
+            }
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+            assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+            assertThat(content(s.file()).state()).isEqualTo(ContentState.DESTROYED);
+        }
+    }
+
+    /**
+     * Case 2: an object an Administrator released - here with the archive's own bytes - disappears, is verified absent
+     * by the inventory, and returns before deletion. The release stays authoritative: it is reported and left, never
+     * adopted or deleted. A different object returning in its place is a replacement: unresolved, removal incomplete.
+     */
+    @Test
+    void v0023_aReturningReleasedObjectIsNeverDeletedAndAReplacementStaysUnresolved() throws Exception {
+        for (boolean replacement : List.of(false, true)) {
+            byte[] bytes = b("estate inventory, released then returning, replacement=" + replacement);
+            FormerAndCurrent s = formerAndCurrent("returns-" + replacement + ".tif", bytes);
+            Files.write(s.former(), bytes);
+            FileOperation op = destroy(s.file());
+            fx.preservation().destruction().process(op.operationId());
+            assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), bytes);
+            UnresolvedObjectRepository.Entry u = openRecordAt(s.formerPath());
+            fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "inspected: a researcher's own copy");
+            Path away = Files.createTempDirectory(temp, "away").resolve("held.tif");
+            Files.move(s.former(), away);
+            byte[] returning = replacement ? b("a different object put in its place") : bytes;
+            fx.faults.arm(FaultPoints.Point.AFTER_INVENTORY, id -> {
+                if (replacement) {
+                    Files.write(s.former(), returning);
+                } else {
+                    Files.move(away, s.former());
+                }
+            });
+            fx.preservation().destruction().process(op.operationId());
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(s.former()).as("never deleted").hasBinaryContent(returning);
+            if (replacement) {
+                assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), returning);
+                UnresolvedObjectRepository.Entry v = openRecordAt(s.formerPath());
+                assertThat(v.unresolvedId()).isNotEqualTo(u.unresolvedId());
+                assertThat(v.observedSha256()).isEqualTo(sha256(returning));
+            } else {
+                assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+                assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+                assertThat(d.message()).contains("released", s.formerPath());
+                assertThat(openRecordExistsAt(s.formerPath())).isFalse();
+                assertThat(record(u.unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.NOT_ARCHIVAL);
+            }
+            assertThat(s.current()).doesNotExist();
+        }
+    }
+
+    /**
+     * Case 5: crashes between inventory and deletion, and after the owned copy is deleted, with an object placed at the
+     * verified-empty former location. Recovery after each restart never deletes it; CLEANUP_INCOMPLETE is durable.
+     */
+    @Test
+    void v0023_crashRecoveryAfterAStaleInventoryNeverDeletesTheNewObject() throws Exception {
+        byte[] bytes = b("marriage bond, crash after inventory");
+        FormerAndCurrent s = formerAndCurrent("crash-inventory.tif", bytes);
+        byte[] object = b("object placed while destruction ran");
+        FileOperation op = destroy(s.file());
+        fx.faults.arm(FaultPoints.Point.AFTER_INVENTORY, id -> {
+            Files.write(s.former(), object);
+            throw new ScriptedFaults.SimulatedCrash(FaultPoints.Point.AFTER_INVENTORY);
+        });
+        assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(s.current()).as("nothing deleted before the crash").exists();
+        fx.faults.crashAt(FaultPoints.Point.DURING_PHYSICAL_DELETE);
+        fx.rebuild();
+        assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(s.current()).as("the owned copy was deleted before the second crash").doesNotExist();
+        assertThat(s.former()).hasBinaryContent(object);
+        for (int i = 0; i < 3; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(op.operationId());
+            assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), object);
+        }
+        assertThat(openRecordAt(s.formerPath()).observedSha256()).isEqualTo(sha256(object));
+    }
+
+    /**
+     * Case 6 at the deletion boundary: the current generation's claim is intact but its object is swapped between
+     * inventory and deletion. The helper re-measures, refuses, and records it unresolved (CURRENT_COPY).
+     */
+    @Test
+    void v0023_theDeletionHelperRefusesAnObjectSwappedAfterItWasIdentified() throws Exception {
+        byte[] bytes = b("plat book, swapped after identification");
+        ArchivalFile f = ingestAs(fx.editor, "swapped.tif", bytes, Restriction.NORMAL, null, null);
+        Path stored = fx.storedPath(f);
+        String storedPath = PortableRelativePath.fromNative(fx.volumeRoot, stored).value();
+        byte[] swapped = b("an object swapped in after identification");
+        FileOperation op = destroy(f);
+        fx.faults.arm(FaultPoints.Point.AFTER_INVENTORY, id -> {
+            SafeFiles.clearReadOnly(stored);
+            Files.write(stored, swapped);
+        });
+        fx.preservation().destruction().process(op.operationId());
+        assertIncompleteAndUntouched(op.operationId(), f, stored, swapped);
+        UnresolvedObjectRepository.Entry u = openRecordAt(storedPath);
+        assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.CURRENT_COPY);
+        assertThat(u.observedSha256()).isEqualTo(sha256(swapped));
+        assertThat(eventDetails(op.operationId())).anyMatch(e -> e.contains("not deleted")
+                && e.contains("no longer the one identified for deletion"));
+        // The legitimate case on its own: an owned, verified object is deleted and the removal completes.
+        ArchivalFile g = ingestAs(fx.editor, "owned.tif", b("plat book, owned and verified"), Restriction.NORMAL, null, null);
+        Path owned = fx.storedPath(g);
+        FileOperation op2 = destroy(g);
+        fx.preservation().destruction().process(op2.operationId());
+        FileOperation d = fx.operation(op2.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(eventDetails(op2.operationId())).anyMatch(e -> e.contains("1 object(s) deleted"));
+        assertThat(owned).doesNotExist();
+        assertThat(content(g).state()).isEqualTo(ContentState.DESTROYED);
+    }
+
+    /** An attested object that is gone before deletion was never deleted by destruction: ABSENT, never DESTROYED. */
+    @Test
+    void v0023_anAttestedObjectGoneBeforeDeletionIsRecordedAbsentNotDestroyed() throws Exception {
+        byte[] bytes = b("probate, attested then gone");
+        FormerAndCurrent s = formerAndCurrent("attested-gone.tif", bytes);
+        Files.write(s.former(), bytes);
+        FileOperation op = destroy(s.file());
+        fx.preservation().destruction().process(op.operationId());
+        UnresolvedObjectRepository.Entry u = openRecordAt(s.formerPath());
+        fx.preservation().unresolved().attest(fx.admin, u.unresolvedId(), "inspected: ours");
+        fx.faults.arm(FaultPoints.Point.AFTER_INVENTORY, id -> Files.delete(s.former()));
+        fx.preservation().destruction().process(op.operationId());
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(record(u.unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.ABSENT);
+        assertThat(record(u.unresolvedId()).resolutionDetail()).contains("verified absent");
+    }
 }

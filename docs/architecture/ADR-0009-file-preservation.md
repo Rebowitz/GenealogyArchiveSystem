@@ -245,3 +245,12 @@ not to add. The OS permissions of ADR-0010 keep the web service out entirely.
   allow at least the same body size and should not buffer whole uploads (README §7).
 - The ingestion volume setting is archive configuration but is not yet part of the archive configuration
   export (Phase 8).
+
+### Deletion boundary (fourth V0019 audit)
+
+Inventory membership never authorises deletion. The single archival deletion helper re-establishes, for the one
+object, the configured volume's identity, the current claim (generation, operation, trusted quarantine move or held
+attestation), the absence of any release or other open record, and the size and SHA-256 identified at decision time;
+otherwise it refuses and records the object as unresolved. A location verified empty is never a deletion instruction:
+anything that appears there is reconciled as unresolved (or reported, if it is a released object). The check-then-delete
+window remains the accepted P2-E limitation.
