@@ -78,7 +78,9 @@ class RecordsWebIT {
     private static void ok(WebSession s, String path, String... contains) {
         HttpResponse<String> r = s.get(path);
         assertThat(r.statusCode()).as(path + "\n" + r.body()).isEqualTo(200);
-        assertThat(r.body()).contains(contains);
+        if (contains.length > 0) {
+            assertThat(r.body()).contains(contains);
+        }
     }
 
     @Test
@@ -164,7 +166,9 @@ class RecordsWebIT {
             assertThat(hiddenPage.statusCode()).isEqualTo(404).isEqualTo(missingPage.statusCode());
             assertThat(hiddenPage.body()).doesNotContain("restricted summary");
             assertThat(s.get("/records/find?id=" + hidden.friendlyId()).statusCode()).isEqualTo(404);
-            assertThat(s.get("/records").body()).doesNotContain(hidden.friendlyId());
+            // The friendly ID text itself can appear as a form placeholder; the Record's link and UUID must not.
+            assertThat(s.get("/records").body()).doesNotContain(">" + hidden.friendlyId() + "</a>",
+                    hidden.recordId().toString());
             String page = s.get("/records/" + normal.recordId()).body();
             assertThat(page).contains(open.friendlyId()).doesNotContain(secret.friendlyId(), "SECRET-PAGE",
                     secret.fileId().toString());
