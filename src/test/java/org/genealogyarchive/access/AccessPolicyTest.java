@@ -65,7 +65,8 @@ class AccessPolicyTest {
                 Permission.DESTROY_FILES, Permission.MANAGE_PRESERVATION, Permission.VIEW_RESTRICTED_FILES);
         java.util.Set<Permission> all = java.util.EnumSet.allOf(Permission.class);
         all.removeAll(phase2);
-        assertThat(PHASE_1_PERMISSIONS).as("no permission escapes both the Phase 1 and Phase 2 checks")
+        all.removeAll(PHASE_3_PERMISSIONS);
+        assertThat(PHASE_1_PERMISSIONS).as("no permission escapes the Phase 1, Phase 2 and Phase 3 checks")
                 .containsExactlyInAnyOrderElementsOf(all);
     }
 
@@ -85,6 +86,24 @@ class AccessPolicyTest {
         for (Permission p : java.util.List.of(Permission.INGEST_FILES, Permission.EDIT_FILES, Permission.DESTROY_FILES,
                 Permission.MANAGE_PRESERVATION, Permission.VIEW_RESTRICTED_FILES)) {
             assertThat(AccessPolicy.allows(viewer, p)).as("SEC-003 " + p).isFalse();
+        }
+    }
+
+    private static final java.util.List<Permission> PHASE_3_PERMISSIONS = java.util.List.of(
+            Permission.EDIT_RECORDS, Permission.VIEW_RESTRICTED_RECORDS, Permission.MANAGE_VOCABULARIES);
+
+    /** SEC-001/002/003 for Phase 3: Editors enter records; restricted Records and vocabularies are Administrator-only. */
+    @Test
+    void phase3EditorsEnterRecordsButNeitherSeeRestrictedRecordsNorManageVocabularies() {
+        assertThat(AccessPolicy.allows(as(Role.ADMINISTRATOR), Permission.EDIT_RECORDS)).isTrue();
+        assertThat(AccessPolicy.allows(as(Role.ADMINISTRATOR), Permission.VIEW_RESTRICTED_RECORDS)).isTrue();
+        assertThat(AccessPolicy.allows(as(Role.ADMINISTRATOR), Permission.MANAGE_VOCABULARIES)).isTrue();
+        Actor editor = as(Role.EDITOR);
+        assertThat(AccessPolicy.allows(editor, Permission.EDIT_RECORDS)).as("SEC-002").isTrue();
+        assertThat(AccessPolicy.allows(editor, Permission.VIEW_RESTRICTED_RECORDS)).as("D3-04").isFalse();
+        assertThat(AccessPolicy.allows(editor, Permission.MANAGE_VOCABULARIES)).as("D3-08").isFalse();
+        for (Permission p : PHASE_3_PERMISSIONS) {
+            assertThat(AccessPolicy.allows(as(Role.VIEWER), p)).as("SEC-003 " + p).isFalse();
         }
     }
 }
