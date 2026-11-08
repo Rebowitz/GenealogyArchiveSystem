@@ -128,11 +128,39 @@ final class QuarantineMoves {
                 + "the archive's object; an Administrator must verify it";
     }
 
-    private boolean attestationCurrent(QuarantineRepository.Entry entry) {
-        return ctx.unresolved().openAt(entry.volumeId(), entry.sourcePath())
-                .filter(UnresolvedObjectRepository.Entry::attested)
-                .filter(u -> entry.sourceSha256() != null && entry.sourceSha256().equals(u.observedSha256()))
-                .isPresent();
+    /**
+     * Why an attested move may not move the object now at its source, or null if it may (V0020 integration). The
+     * record at the source must be open and attested, the attestation bound to this move (CONFIRMED, RECORDED evidence
+     * equal to the move's), and the object there exactly the attested one: size, SHA-256, both times and file key. A
+     * released, LEGACY or unconfirmed decision, or a same-byte replacement, authorises nothing.
+     */
+    private String attestedSourceUnbound(ManagedVolume volume, QuarantineRepository.Entry entry) throws IOException {
+        Optional<UnresolvedObjectRepository.Entry> open = ctx.unresolved().openAt(entry.volumeId(), entry.sourcePath())
+                .filter(UnresolvedObjectRepository.Entry::attested);
+        if (open.isEmpty()) {
+            return "the Administrator's attestation that authorised it is no longer current (it was released or resolved)";
+        }
+        UnresolvedObjectRepository.Entry u = open.get();
+        if (!ObjectIdentity.bindsMove(u, entry)) {
+            return u.identityEvidence() == UnresolvedObjectRepository.IdentityEvidence.LEGACY
+                    ? "the attestation was made before identity evidence was kept, so it is not bound to an object"
+                    : "the attestation is not bound to the object this move was recorded for";
+        }
+        ObjectIdentity.Observation now = ObjectIdentity.observe(ctx, volume, entry.sourcePath());
+        if (now.absent()) {
+            throw new Presence.InconclusiveException(entry.sourcePath(), "it vanished while being examined");
+        }
+        String changed = ObjectIdentity.difference(u.recordedIdentity().orElseThrow(), now.identity());
+        return changed == null ? null : "the object there is not the one the Administrator attested (" + changed + ")";
+    }
+
+    /** Whether the object at a move's destination is the one it moved: attested moves by the full move evidence. */
+    private boolean arrived(ManagedVolume volume, QuarantineRepository.Entry entry, Path destination) throws IOException {
+        if (entry.reason() != QuarantineRepository.Reason.ATTESTED_OBJECT) {
+            return isRecordedObject(entry, destination);
+        }
+        ObjectIdentity.Observation there = ObjectIdentity.observe(ctx, volume, entry.quarantinePath());
+        return !there.absent() && ObjectIdentity.matchesMove(there.identity(), entry);
     }
 
     /** Finishes an INTENDED entry from the state on disk; other states are returned unchanged. */
@@ -159,14 +187,18 @@ final class QuarantineMoves {
                     + "move to " + entry.quarantinePath() + " was recorded for (" + unverifiedReason(entry)
                     + "); it was not moved or adopted");
         }
-        // An attested move moves bytes only while the Administrator's authorization is still current: the record
-        // is open and attested for exactly this hash. A released or otherwise resolved record never authorises a
-        // rename, whether the move is driven by the worker, a retry or recovery (V0019 audit, finding 1).
-        if (sourcePresent && entry.reason() == QuarantineRepository.Reason.ATTESTED_OBJECT && !attestationCurrent(entry)) {
-            throw new UnexplainedObjectException("the Administrator's attestation that authorised moving " + entry.sourcePath()
-                    + " is no longer current (it was released or resolved); nothing was moved");
+        // An attested move moves bytes only while the Administrator's authorization is current and bound to the object
+        // there (V0019 audit, finding 1; V0020 integration): checked here, so every path that settles - the worker, a
+        // retry, recovery, repair retirement, destruction, the operations page - applies it. Nothing is moved otherwise;
+        // the intent stays as it is and the record stays open.
+        if (sourcePresent && entry.reason() == QuarantineRepository.Reason.ATTESTED_OBJECT) {
+            String unbound = attestedSourceUnbound(volume, entry);
+            if (unbound != null) {
+                throw new UnexplainedObjectException("the object at " + entry.sourcePath() + " was not moved to "
+                        + entry.quarantinePath() + ": " + unbound + "; it was left untouched");
+            }
         }
-        if (!sourcePresent && destinationPresent && !isRecordedObject(entry, destination)) {
+        if (!sourcePresent && destinationPresent && !arrived(volume, entry, destination)) {
             throw new UnexplainedObjectException("the object at " + entry.quarantinePath() + " is not shown to be the one moved "
                     + "from " + entry.sourcePath() + " (" + unverifiedReason(entry) + "); nothing was confirmed");
         }
@@ -181,7 +213,7 @@ final class QuarantineMoves {
             SafeFiles.flushDirectory(from.getParent());
             // The object could have been replaced between the check above and the rename (no portable API moves
             // "this open file"). Verify what arrived; if it is not the recorded object, put it back untouched.
-            if (!isRecordedObject(entry, destination)) {
+            if (!arrived(volume, entry, destination)) {
                 SafeFiles.withSharingRetry(() -> Files.move(destination, from, LinkOption.NOFOLLOW_LINKS));
                 SafeFiles.flushDirectory(from.getParent());
                 SafeFiles.flushDirectory(destination.getParent());

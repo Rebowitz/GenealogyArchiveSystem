@@ -325,19 +325,19 @@ public final class DestructionProcessor {
             // Third V0019 audit: a hash identifies an object only where a current record claims the location for this
             // content. Superseded generations, former locations and open records claim nothing now: no hash is
             // trusted there (an attestation still is, see classify), so their objects - matching or not - are left.
-            Set<String> noClaim = Set.of();
+            java.util.function.Predicate<UnresolvedObjectRepository.Identity> noClaim = id -> false;
             List<FileContentRepository.Generation> generations = ctx.contents().generations(op.contentId());
             List<QuarantineRepository.Entry> ledger = ctx.quarantine().forContent(op.contentId());
             for (FileContentRepository.Generation g : generations) {
                 switch (g.state()) {
-                    case CURRENT -> classify(volume, op, g.storagePath(), Set.of(authoritative), Basis.CURRENT_GENERATION, inv,
+                    case CURRENT -> classify(volume, op, g.storagePath(), id -> id.sha256().equals(authoritative), Basis.CURRENT_GENERATION, inv,
                             g.vacated() ? UnresolvedObjectRepository.Kind.OBJECT_AT_VACATED_LOCATION
                                     : UnresolvedObjectRepository.Kind.CURRENT_COPY, g.generation());
                     // Written before V0019: the superseded copy's identity was only observed.
                     case QUARANTINE_PENDING, UNRESOLVED -> classify(volume, op, g.storagePath(), noClaim, null, inv,
                             UnresolvedObjectRepository.Kind.DAMAGED_COPY, g.generation());
                     case QUARANTINED -> {
-                        classify(volume, op, g.quarantinePath(), trustedMoveHashes(g.quarantinePath(), ledger),
+                        classify(volume, op, g.quarantinePath(), id -> trustedMoveMatches(g.quarantinePath(), ledger, id),
                                 Basis.QUARANTINE_MOVE, inv, UnresolvedObjectRepository.Kind.QUARANTINED_COPY, null);
                         inv.former.add(g.storagePath());
                     }
@@ -347,7 +347,7 @@ public final class DestructionProcessor {
             for (QuarantineRepository.Entry entry : ledger) {
                 inv.former.add(entry.sourcePath());
                 if (entry.state() == QuarantineRepository.State.QUARANTINED) {
-                    classify(volume, op, entry.quarantinePath(), trustedMoveHashes(entry.quarantinePath(), ledger),
+                    classify(volume, op, entry.quarantinePath(), id -> trustedMoveMatches(entry.quarantinePath(), ledger, id),
                             Basis.QUARANTINE_MOVE, inv, UnresolvedObjectRepository.Kind.QUARANTINED_COPY, null);
                 } else if (entry.state() == QuarantineRepository.State.REMOVED) {
                     inv.former.add(entry.quarantinePath());
@@ -515,12 +515,12 @@ public final class DestructionProcessor {
 
     /**
      * Decides one location: verified absent -> {@code absent} (never a deletion instruction); identified by
-     * {@code trusted} under the location's current claim ({@code basis}) -> {@code deletable}; an open record that
+     * {@code identifies} under the location's current claim ({@code basis}) -> {@code deletable}; an open record that
      * an Administrator attested (bound to the object, V0020), whose lock is held, and whose object is still exactly the
      * one attested -> {@code deletable}; the object of a CONFIRMED release, exactly -> {@code released}; anything else
      * -> recorded as unresolved (once, with the identity observed now) and left.
      */
-    private void classify(ManagedVolume volume, FileOperation op, String location, Set<String> trusted, Basis basis,
+    private void classify(ManagedVolume volume, FileOperation op, String location, java.util.function.Predicate<UnresolvedObjectRepository.Identity> identifies, Basis basis,
                           Inventory inv, UnresolvedObjectRepository.Kind kind, Integer generation) throws IOException {
         // Only verified absence counts as "nothing there"; an inaccessible location stops the pass (retried).
         ObjectIdentity.Observation seen = ObjectIdentity.observe(ctx, volume, location);
@@ -547,7 +547,7 @@ public final class DestructionProcessor {
             return;
         }
         // Identity second: a location still this content's (no contrary decision) whose object is identified.
-        if (id != null && basis != null && open.isEmpty() && trusted.contains(id.sha256())) {
+        if (id != null && basis != null && open.isEmpty() && identifies.test(id)) {
             inv.deletable.putIfAbsent(location, new Authorization(basis, null, generation, kind, id));
             return;
         }
@@ -705,30 +705,37 @@ public final class DestructionProcessor {
     }
 
     /**
-     * Hashes that identify a quarantined object: the move's recorded SHA-256 when it was trusted when recorded
-     * (V0019). A settled ledger record, an untrusted (observed) hash or a damage observation never does.
+     * Whether the object identified as {@code id} at a quarantine location is the object a trusted move put there
+     * (V0019; V0020 integration): a QUARANTINED ledger entry for this content at that location whose evidence was
+     * trusted when recorded, whose attestation (for an attested move) is bound to a CONFIRMED decision, and whose move
+     * evidence - size, SHA-256 and recorded modification time - the object matches. Never the hash alone: a same-byte
+     * object with another modification time is not the moved object. A settled ledger record, an untrusted (observed)
+     * hash, a LEGACY attestation or a damage observation identifies nothing.
      */
-    private Set<String> trustedMoveHashes(String quarantinePath, List<QuarantineRepository.Entry> ledger) {
-        Set<String> trusted = new java.util.HashSet<>();
+    private boolean trustedMoveMatches(String quarantinePath, List<QuarantineRepository.Entry> ledger,
+                                       UnresolvedObjectRepository.Identity id) {
         for (QuarantineRepository.Entry e : ledger) {
-            if (quarantinePath.equals(e.quarantinePath()) && e.hasTrustedEvidence() && attestationHonoured(e)) {
-                trusted.add(e.sourceSha256());
+            if (quarantinePath.equals(e.quarantinePath()) && e.state() == QuarantineRepository.State.QUARANTINED
+                    && e.hasTrustedEvidence() && attestationHonoured(e) && ObjectIdentity.matchesMove(id, e)) {
+                return true;
             }
         }
-        return trusted;
+        return false;
     }
 
     /**
-     * An attested move's hash authorises deletion only together with the record that move resolved as
-     * QUARANTINED (V0019 audit): a move recorded after a release - which the lifecycle prevents - would have no
-     * such record and authorises nothing. Other trusted moves need no record.
+     * An attested move's evidence authorises deletion only together with the record that move resolved as QUARANTINED
+     * (V0019 audit), and only if that record's attestation was bound to the moved object (V0020 integration): RECORDED
+     * evidence, a CONFIRMED decision, and the same size, SHA-256 and modification time as the move. A move under a
+     * LEGACY or unconfirmed attestation authorises nothing; the copy then needs a new decision. Other trusted moves need
+     * no record.
      */
     private boolean attestationHonoured(QuarantineRepository.Entry e) {
         if (e.reason() != QuarantineRepository.Reason.ATTESTED_OBJECT) {
             return true;
         }
-        return ctx.unresolved().resolvedAs(e.volumeId(), e.sourcePath(), UnresolvedObjectRepository.Resolution.QUARANTINED,
-                e.sourceSha256());
+        return ctx.unresolved().resolvedAt(e.volumeId(), e.sourcePath(), UnresolvedObjectRepository.Resolution.QUARANTINED)
+                .stream().anyMatch(u -> ObjectIdentity.bindsMove(u, e));
     }
 
     /** @throws Presence.InconclusiveException unless presence or absence is verified */
@@ -806,7 +813,7 @@ public final class DestructionProcessor {
                 List<QuarantineRepository.Entry> ledger = ctx.quarantine().forContent(op.contentId());
                 boolean held = ledger.stream().anyMatch(e -> location.equals(e.quarantinePath())
                         && e.state() == QuarantineRepository.State.QUARANTINED);
-                yield held && trustedMoveHashes(location, ledger).contains(auth.identity().sha256()) ? null
+                yield held && trustedMoveMatches(location, ledger, auth.identity()) ? null
                         : "no quarantine move with trusted evidence claims " + location;
             }
             case ATTESTATION -> open.filter(u -> attestationBindsTo(u, auth.identity(), inv))

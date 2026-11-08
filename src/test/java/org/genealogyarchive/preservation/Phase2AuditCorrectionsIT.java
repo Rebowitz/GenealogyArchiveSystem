@@ -4160,4 +4160,286 @@ class Phase2AuditCorrectionsIT {
             assertCompletedLeaving(op.operationId(), s.file(), s.former(), object);
         }
     }
+    // ---- V0020 integration: attestation-dependent moves and deletions are bound to the evidence -----------------
+
+    /** A repair whose damaged generation 1 is attested (CONFIRMED) and whose move intent is recorded, nothing moved. */
+    private record AttestedIntent(Repaired repaired, UnresolvedObjectRepository.Entry record, Path source,
+                                  QuarantineRepository.Entry intent) {
+        Path destination(Path volumeRoot) {
+            return volumeRoot.resolve(intent.quarantinePath());
+        }
+    }
+
+    private AttestedIntent attestedIntent(String name, FaultPoints.Point stopAt) throws Exception {
+        Repaired f = corruptAndRepair(name, b("bounty land warrant, " + name));
+        assertThat(fx.process(f.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
+        assertThat(u.decisionConfirmed()).isTrue();
+        fx.faults.crashAt(stopAt);
+        assertThatThrownBy(() -> fx.preservation().unresolved().quarantineAttested(u.unresolvedId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        fx.faults.clear();
+        QuarantineRepository.Entry intent = fx.preservation().context().quarantine()
+                .find(fx.volumeId, UnresolvedObjects.attestedDestination(u).value()).orElseThrow();
+        assertThat(intent.state()).isEqualTo(QuarantineRepository.State.INTENDED);
+        return new AttestedIntent(f, u, onVolume(u.path()), intent);
+    }
+
+    private QuarantineRepository.Entry ledger(QuarantineRepository.Entry e) {
+        return fx.preservation().context().quarantine().find(e.volumeId(), e.quarantinePath()).orElseThrow();
+    }
+
+    /** A new file with the same bytes and another modification time in place of the object at {@code location}. */
+    private static void sameBytesOtherTimes(Path location) throws IOException {
+        byte[] bytes = Files.readAllBytes(location);
+        java.nio.file.attribute.FileTime was = Files.getLastModifiedTime(location);
+        SafeFiles.clearReadOnly(location);
+        Files.delete(location);
+        Files.write(location, bytes);
+        Files.setLastModifiedTime(location, java.nio.file.attribute.FileTime.from(was.toInstant().minusSeconds(7)));
+    }
+
+    /**
+     * Cases 3, 7, 8: after a CONFIRMED attestation's move intent is recorded, the object at the source is replaced by
+     * a same-byte file with another modification time. No path that settles the move - recovery, the worker's retry,
+     * destruction - moves it; the record stays open, the destruction CLEANUP_INCOMPLETE. Once the replacement is
+     * removed by hand, the move settles as SOURCE_ABSENT and the destruction completes.
+     */
+    @Test
+    void v0026_noSettlementMovesASameByteReplacementOfAnAttestedObject() throws Exception {
+        AttestedIntent a = attestedIntent("settle-replaced.tif", FaultPoints.Point.AFTER_QUARANTINE_INTENT);
+        byte[] bytes = Files.readAllBytes(a.source());
+        sameBytesOtherTimes(a.source());
+        for (int i = 0; i < 2; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            assertThat(a.source()).as("never moved").hasBinaryContent(bytes);
+            assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+            assertThat(ledger(a.intent()).state()).isEqualTo(QuarantineRepository.State.INTENDED);
+            assertThat(record(a.record().unresolvedId()).open()).isTrue();
+        }
+        assertThat(fx.preservation().unresolved().quarantineAttested(a.record().unresolvedId())).isFalse();
+        assertThat(eventDetails(a.record().operationId())).anyMatch(e -> e.contains("was not moved")
+                && e.contains("not the one attested"));
+        assertThat(a.source()).hasBinaryContent(bytes);
+        assertThatThrownBy(() -> fx.preservation().unresolved().release(fx.admin, a.record().unresolvedId(), "not ours"))
+                .isInstanceOf(RuleViolationException.class);
+
+        FileOperation op = destroy(a.repaired().file());
+        for (int i = 0; i < 2; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(op.operationId());
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+            assertThat(a.source()).hasBinaryContent(bytes);
+            assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        }
+        // Resolution: the replacement is removed by hand; the move settles as SOURCE_ABSENT and removal completes.
+        Files.delete(a.source());
+        fx.preservation().recovery().runOnce();
+        fx.preservation().destruction().process(op.operationId());
+        assertThat(ledger(a.intent()).state()).isEqualTo(QuarantineRepository.State.SOURCE_ABSENT);
+        assertThat(record(a.record().unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.ABSENT);
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+    }
+
+    /**
+     * Cases 4, 6, 7: a CONFIRMED attestation's move interrupted after the intent, and another interrupted after the
+     * rename, are completed by recovery; destruction - itself interrupted after a deletion - then removes the bound
+     * quarantine copies and completes.
+     */
+    @Test
+    void v0026_aBoundAttestedMoveIsRecoveredAndItsQuarantineCopyDestroyed() throws Exception {
+        for (FaultPoints.Point stop : List.of(FaultPoints.Point.AFTER_QUARANTINE_INTENT, FaultPoints.Point.AFTER_QUARANTINE_MOVE)) {
+            AttestedIntent a = attestedIntent("recovered-" + stop.name().toLowerCase(java.util.Locale.ROOT) + ".tif", stop);
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            QuarantineRepository.Entry moved = ledger(a.intent());
+            assertThat(moved.state()).isEqualTo(QuarantineRepository.State.QUARANTINED);
+            assertThat(record(a.record().unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.QUARANTINED);
+            assertThat(generation(a.repaired().contentId(), 1).state()).isEqualTo(GenerationState.QUARANTINED);
+            assertThat(a.source()).doesNotExist();
+            assertThat(a.destination(fx.volumeRoot)).exists();
+
+            FileOperation op = destroy(a.repaired().file());
+            fx.faults.crashAt(FaultPoints.Point.DURING_PHYSICAL_DELETE);
+            assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
+                    .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+            fx.faults.clear();
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(op.operationId());
+            FileOperation d = fx.operation(op.operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+            assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+            assertThat(a.destination(fx.volumeRoot)).as("the bound quarantine copy is removed").doesNotExist();
+            assertThat(ledger(a.intent()).state()).isEqualTo(QuarantineRepository.State.REMOVED);
+        }
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+    }
+
+    /**
+     * Case 2: an attestation that is CONFIRMED but not bound to the recorded move (the intent's evidence is another
+     * object's) authorises no move, whichever path settles it.
+     */
+    @Test
+    void v0026_anAttestationNotBoundToTheRecordedMoveMovesNothing() throws Exception {
+        Repaired f = corruptAndRepair("unbound.tif", b("plat, attestation not bound to the move"));
+        assertThat(fx.process(f.repairOperation()).state()).isEqualTo(OperationState.COMPLETED);
+        UnresolvedObjectRepository.Entry u = attestGeneration(f.contentId(), 1);
+        Path source = onVolume(u.path());
+        byte[] bytes = Files.readAllBytes(source);
+        UnresolvedObjectRepository.Identity id = u.recordedIdentity().orElseThrow();
+        QuarantineRepository.Entry intent = fx.preservation().context().quarantine().intend(fx.volumeId, u.operationId(),
+                u.contentId(), u.path(), UnresolvedObjects.attestedDestination(u).value(),
+                QuarantineRepository.Reason.ATTESTED_OBJECT, id.size(), ObjectIdentity.micros(id.modified()) + 1_000_000,
+                id.sha256(), QuarantineRepository.Basis.ADMINISTRATOR_ATTESTED);
+        assertThat(fx.preservation().unresolved().quarantineAttested(u.unresolvedId())).isFalse();
+        assertThat(eventDetails(u.operationId())).anyMatch(e -> e.contains("not bound to the object this move was recorded for"));
+        fx.preservation().recovery().runOnce();
+        assertThat(source).hasBinaryContent(bytes);
+        assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+        assertThat(ledger(intent).state()).isEqualTo(QuarantineRepository.State.INTENDED);
+        assertThat(record(u.unresolvedId()).open()).isTrue();
+    }
+
+    /** Inserts an attested record as it existed before V0020, open or resolved as given (LEGACY evidence). */
+    private UUID legacyAttestation(String path, UUID contentId, UUID operationId, byte[] observed, String resolution) {
+        UUID id = UUID.randomUUID();
+        sql().sql("""
+                INSERT INTO gas.unresolved_object (unresolved_id, volume_id, path, content_id, operation_id, kind, observed_size,
+                                                   observed_sha256, detail, attested_by, attested_at, status, resolution,
+                                                   resolution_detail, resolved_at)
+                VALUES (:id, :vol, :path, :content, :op, 'OBJECT_AT_VACATED_LOCATION', :size, :sha, 'attested before V0020',
+                        :by, clock_timestamp(), CASE WHEN CAST(:r AS text) IS NULL THEN 'OPEN' ELSE 'RESOLVED' END, CAST(:r AS text),
+                        CASE WHEN CAST(:r AS text) IS NULL THEN NULL ELSE 'resolved before V0020' END,
+                        CASE WHEN CAST(:r AS text) IS NULL THEN NULL ELSE clock_timestamp() END)
+                """).param("id", id).param("vol", fx.volumeId).param("path", path).param("content", contentId)
+                .param("op", operationId).param("size", (long) observed.length).param("sha", sha256(observed))
+                .param("by", fx.admin.userId()).param("r", resolution).update();
+        assertThat(record(id).identityEvidence()).isEqualTo(UnresolvedObjectRepository.IdentityEvidence.LEGACY);
+        return id;
+    }
+
+    /**
+     * Case 1: a move intent recorded under a LEGACY attestation - here for the content's own bytes - is never completed
+     * by recovery or destruction; the object stays where it is and the removal incomplete. Removed by hand, the move
+     * settles as SOURCE_ABSENT and the removal completes.
+     */
+    @Test
+    void v0026_aLegacyAttestationNeverCompletesAPendingMove() throws Exception {
+        byte[] bytes = b("land grant, legacy attested move pending");
+        FormerAndCurrent s = formerAndCurrent("legacy-move.tif", bytes);
+        Files.write(s.former(), bytes);
+        UUID repair = generation(s.file().contentId(), 2).operationId();
+        UUID legacy = legacyAttestation(s.formerPath(), s.file().contentId(), repair, bytes, null);
+        String destination = ManagedVolume.quarantinePath(repair, "att-" + legacy.toString().replace("-", "")).value();
+        QuarantineRepository.Entry intent = fx.preservation().context().quarantine().intend(fx.volumeId, repair,
+                s.file().contentId(), s.formerPath(), destination, QuarantineRepository.Reason.ATTESTED_OBJECT,
+                (long) bytes.length, Files.getLastModifiedTime(s.former()).to(java.util.concurrent.TimeUnit.MICROSECONDS),
+                sha256(bytes), QuarantineRepository.Basis.ADMINISTRATOR_ATTESTED);
+        for (int i = 0; i < 2; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            assertThat(s.former()).as("a LEGACY attestation moves nothing").hasBinaryContent(bytes);
+            assertThat(filesUnder(fx.volumeRoot.resolve("quarantine"))).isEmpty();
+            assertThat(ledger(intent).state()).isEqualTo(QuarantineRepository.State.INTENDED);
+        }
+        FileOperation op = destroy(s.file());
+        for (int i = 0; i < 2; i++) {
+            fx.preservation().destruction().process(op.operationId());
+            assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), bytes);
+        }
+        assertThat(record(legacy).open()).as("still available for an Administrator").isTrue();
+        Files.delete(s.former());
+        fx.preservation().recovery().runOnce();
+        fx.preservation().destruction().process(op.operationId());
+        assertThat(ledger(intent).state()).isEqualTo(QuarantineRepository.State.SOURCE_ABSENT);
+        assertThat(record(legacy).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.ABSENT);
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+    }
+
+    /**
+     * Cases 2 and 5: a quarantine copy whose move was attested before V0020 (LEGACY, no decision evidence) - even with
+     * the content's own bytes - is not deleted on the ledger's hash. It is recorded unresolved and the removal stays
+     * incomplete until an Administrator attests the quarantine copy itself (a new, bound decision); it is then removed.
+     */
+    @Test
+    void v0026_aQuarantineCopyFromALegacyAttestedMoveIsNotDestroyedOnItsHash() throws Exception {
+        byte[] bytes = b("ferry license, legacy attested quarantine copy");
+        FormerAndCurrent s = formerAndCurrent("legacy-copy.tif", bytes);
+        UUID repair = generation(s.file().contentId(), 2).operationId();
+        UUID legacy = legacyAttestation(s.formerPath(), s.file().contentId(), repair, bytes, "QUARANTINED");
+        String q = ManagedVolume.quarantinePath(repair, "att-" + legacy.toString().replace("-", "")).value();
+        Path copy = onVolume(q);
+        Files.createDirectories(copy.getParent());
+        Files.write(copy, bytes);
+        var quarantine = fx.preservation().context().quarantine();
+        QuarantineRepository.Entry entry = quarantine.intend(fx.volumeId, repair, s.file().contentId(), s.formerPath(), q,
+                QuarantineRepository.Reason.ATTESTED_OBJECT, (long) bytes.length,
+                Files.getLastModifiedTime(copy).to(java.util.concurrent.TimeUnit.MICROSECONDS), sha256(bytes),
+                QuarantineRepository.Basis.ADMINISTRATOR_ATTESTED);
+        assertThat(quarantine.setState(entry.quarantineId(), QuarantineRepository.State.INTENDED,
+                QuarantineRepository.State.QUARANTINED, "moved before V0020")).isTrue();
+
+        FileOperation op = destroy(s.file());
+        for (int i = 0; i < 2; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(op.operationId());
+            assertIncompleteAndUntouched(op.operationId(), s.file(), copy, bytes);
+        }
+        assertThat(s.current()).doesNotExist();
+        UnresolvedObjectRepository.Entry u = openRecordAt(q);
+        assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.QUARANTINED_COPY);
+        assertThat(u.identityEvidence()).isEqualTo(UnresolvedObjectRepository.IdentityEvidence.RECORDED);
+        assertThat(ledger(entry).state()).isEqualTo(QuarantineRepository.State.QUARANTINED);
+        fx.preservation().unresolved().attest(fx.admin, u.unresolvedId(), "inspected: the archive's copy, moved before V0020");
+        fx.preservation().destruction().process(op.operationId());
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(copy).doesNotExist();
+        assertThat(record(u.unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.DESTROYED);
+        assertThat(ledger(entry).state()).isEqualTo(QuarantineRepository.State.REMOVED);
+    }
+
+    /**
+     * Case 5: a bound attested quarantine copy replaced by a same-byte file with another modification time is not the
+     * moved object: never deleted, recorded unresolved (its own identity), removal incomplete until an Administrator
+     * releases it; it then stays, and so does its ledger entry.
+     */
+    @Test
+    void v0026_aSameByteReplacementOfABoundQuarantineCopyIsNotDestroyed() throws Exception {
+        ArchivalFile f = repairedCompletely("quarantine-replaced.tif", b("indenture, bound quarantine copy replaced"));
+        FileContentRepository.Generation g1 = generation(f.contentId(), 1);
+        Path copy = onVolume(g1.quarantinePath());
+        byte[] bytes = Files.readAllBytes(copy);
+        sameBytesOtherTimes(copy);
+        FileOperation op = destroy(f);
+        for (int i = 0; i < 2; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(op.operationId());
+            assertIncompleteAndUntouched(op.operationId(), f, copy, bytes);
+        }
+        assertThat(onVolume(generation(f.contentId(), 2).storagePath())).as("the owned current copy is removed").doesNotExist();
+        UnresolvedObjectRepository.Entry u = openRecordAt(g1.quarantinePath());
+        assertThat(u.kind()).isEqualTo(UnresolvedObjectRepository.Kind.QUARANTINED_COPY);
+        assertThat(u.observedModifiedAt()).isEqualTo(micros(Files.getLastModifiedTime(copy)));
+        fx.preservation().unresolved().release(fx.admin, u.unresolvedId(), "inspected: a stray copy, leave it");
+        fx.preservation().destruction().process(op.operationId());
+        FileOperation d = fx.operation(op.operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(copy).as("released, never deleted").hasBinaryContent(bytes);
+        assertThat(fx.preservation().context().quarantine().forContent(f.contentId()))
+                .anyMatch(e -> e.quarantinePath().equals(g1.quarantinePath()) && e.state() == QuarantineRepository.State.QUARANTINED);
+    }
 }

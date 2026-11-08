@@ -1,11 +1,14 @@
 package org.genealogyarchive.preservation;
 
+import org.genealogyarchive.data.QuarantineRepository;
 import org.genealogyarchive.data.UnresolvedObjectRepository;
 import org.genealogyarchive.files.ManagedVolume;
 import org.genealogyarchive.platform.SafeFiles;
 
 import java.io.IOException;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 /**
  * Object-identity evidence (V0020): what the platform lets the archive know about one physical object - size,
@@ -69,5 +72,34 @@ final class ObjectIdentity {
             return "its bytes are the same but its filesystem identity differs (creation, modification time or file key)";
         }
         return null;
+    }
+
+    /** An instant in microseconds since the epoch, as the quarantine ledger records modification times. */
+    static long micros(Instant t) {
+        return ChronoUnit.MICROS.between(Instant.EPOCH, t);
+    }
+
+    /**
+     * Whether an object matches a quarantine move's evidence (V0020 integration): the size, SHA-256 and - where the
+     * entry recorded it - last-modification time of the object the move was recorded for. A move keeps the
+     * modification time; creation time and file key need not survive a relocation, so they are not part of it.
+     */
+    static boolean matchesMove(UnresolvedObjectRepository.Identity id, QuarantineRepository.Entry e) {
+        return id != null && e.hasEvidence() && id.size() == e.sourceSize() && id.sha256().equals(e.sourceSha256())
+                && (e.sourceModifiedMicros() == null || micros(id.modified()) == e.sourceModifiedMicros());
+    }
+
+    /**
+     * Whether an Administrator's attestation is bound to a quarantine move (V0020 integration): the record was
+     * attested with a CONFIRMED decision about RECORDED evidence, and that evidence's size, SHA-256 and modification
+     * time are the move's. A LEGACY or unconfirmed attestation, or a move recorded for another object, is not bound.
+     */
+    static boolean bindsMove(UnresolvedObjectRepository.Entry u, QuarantineRepository.Entry e) {
+        if (!u.attested() || !u.decisionConfirmed() || !e.hasEvidence() || e.sourceModifiedMicros() == null) {
+            return false;
+        }
+        UnresolvedObjectRepository.Identity id = u.recordedIdentity().orElseThrow();
+        return id.size() == e.sourceSize() && id.sha256().equals(e.sourceSha256())
+                && micros(id.modified()) == e.sourceModifiedMicros();
     }
 }

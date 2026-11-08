@@ -739,6 +739,69 @@ through a crash before reconciliation and restarts, then a new release; attestat
 an UNCONFIRMED release identifying nothing; legacy release and legacy attestation (content's own bytes) never treated
 as verified. The fifth round's tests were kept; one expected reason now reads "not its filesystem identity".
 
+## V0020 integration correction (audited revision `9b84ecf4a7284eb76b619e3bda25f66f15deabfd`)
+
+One MAJOR finding, reproduced from the source before any change.
+
+**Two attestation-dependent paths still authorised on a hash.**
+
+1. *Quarantine settlement.* `QuarantineMoves.settle` completes an INTENDED attested move (`ATTESTED_OBJECT`) when
+   `attestationCurrent` holds - the record is open, attested and has the same SHA-256 - and `isRecordedObject`
+   matches size and SHA-256. Neither looks at `identity_evidence`, `decision_evidence` or the recorded times and file
+   key. Recovery (`reconcileAll`), destruction's settle loop, repair retirement and the operations page call `settle`
+   directly, so the worker's V0020 pre-check in `quarantineAttested` is bypassed: a pending move under a LEGACY
+   attestation, or one whose source was replaced by a same-byte object with other times or file key, is renamed into
+   quarantine.
+2. *Attested-ledger destruction.* `DestructionProcessor.trustedMoveHashes` trusts a QUARANTINED ledger entry's
+   SHA-256 when `attestationHonoured` finds a record at the source resolved QUARANTINED with that hash - including a
+   LEGACY record, and without checking anything but the hash of the object now at the quarantine path. A LEGACY
+   attestation therefore authorises deleting the quarantine copy, and a same-byte object put at the quarantine path
+   is deleted.
+
+### Correction (no migration)
+
+* **Move evidence.** A ledger entry already records the source object's size, SHA-256 and last-modification time
+  (microseconds) at the intent. A rename - and Java's copy-and-delete move - keeps the modification time; the
+  creation time and file key may not survive a relocation, so a quarantine copy is identified by size, SHA-256 and
+  modification time, never by source-path metadata.
+* **Binding to the decision.** An attested move is bound only if the record is RECORDED with a CONFIRMED decision and
+  its persisted size, SHA-256 and modification time equal the ledger entry's.
+* **Settlement, before a rename (source present):** for `ATTESTED_OBJECT`, the record at the source must be open,
+  attested, bound as above, and the object at the source must equal the record's full persisted identity (size,
+  SHA-256, both times, file key). LEGACY, UNCONFIRMED, released or changed -> nothing is moved, the intent stays as it
+  is and the record stays open (durable accounting); the same rename-and-verify step checks the arrived object's
+  move evidence.
+* **Settlement after an interrupted rename (source absent, destination present):** confirming records what already
+  happened and moves nothing. For `ATTESTED_OBJECT` the destination must match the move evidence (size, SHA-256 and the
+  recorded modification time); a copy moved under a LEGACY attestation is still confirmed (not stranded) but, being
+  unbound, never authorises its deletion.
+* **Destruction:** a quarantine copy is deletable by a trusted move only if it matches that move's evidence including
+  the modification time (where the entry recorded one), and - for an attested move - only if the move is bound to a
+  CONFIRMED record. The deletion helper checks the same again. Otherwise the copy is recorded unresolved
+  (`QUARANTINED_COPY`, with its identity) and the removal stays CLEANUP_INCOMPLETE until an Administrator attests the
+  quarantine object (a new, bound decision) or releases it.
+* **Legacy.** Nothing is upgraded or invented: LEGACY attestations authorise no move or deletion; completed legacy
+  moves stay recorded as they are; every such object remains available for an Administrator's decision. A pending
+  attested move that can no longer be completed stays INTENDED and keeps its content's destruction incomplete; if the
+  object at its source is removed by hand, the move settles as SOURCE_ABSENT.
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| `ObjectIdentity` | `matchesMove` (size, SHA-256, recorded modification time) and `bindsMove` (attested, RECORDED + CONFIRMED, record evidence equal to the move's). |
+| `QuarantineMoves.settle` | For `ATTESTED_OBJECT`: before a rename, `attestedSourceUnbound` requires an open attested record bound to the move and an exact full-identity match at the source; the arrived object and an interrupted rename's destination must match the move evidence. Applies to every caller (worker, retry, recovery, repair retirement, destruction, operations page). |
+| `DestructionProcessor` | `trustedMoveMatches` replaces `trustedMoveHashes`: a QUARANTINED, trusted ledger entry at that location whose attestation (if any) is bound (`attestationHonoured` via `UnresolvedObjectRepository.resolvedAt` + `bindsMove`) and whose move evidence the object matches; the deletion helper re-checks it. |
+| Other attestation-dependent paths | Reviewed: `quarantineAttested` (pre-check, then `settle`), destruction's ATTESTATION basis (V0020) and release are already bound; no other path moves or deletes on an attestation. |
+
+Tests (`Phase2AuditCorrectionsIT.v0026_*`): same-byte replacement of an attested source after the intent (recovery,
+worker retry and destruction move nothing; release refused while the move is recorded; removal by hand settles
+SOURCE_ABSENT and completes); bound attested moves interrupted after the intent and after the rename are recovered,
+and destruction - interrupted after a deletion - removes the quarantine copies (ledger REMOVED, BYTES_REMOVED); an
+attestation not bound to the recorded move moves nothing; a LEGACY attestation never completes a pending move; a
+LEGACY attested quarantine copy is not destroyed on its hash until the copy itself is attested; a same-byte
+replacement of a bound quarantine copy is not destroyed and, once released, stays with its ledger entry.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

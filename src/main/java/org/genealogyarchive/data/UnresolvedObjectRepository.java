@@ -167,6 +167,15 @@ public final class UnresolvedObjectRepository {
                 """).param("v", volumeId).param("p", path).query(ENTRY).optional();
     }
 
+    /** Every record at the location resolved this way (V0020 integration: their decision evidence is checked). */
+    public List<Entry> resolvedAt(UUID volumeId, String path, Resolution resolution) {
+        return jdbc.sql("SELECT " + COLUMNS + """
+                 FROM gas.unresolved_object
+                 WHERE volume_id = :v AND path = :p AND status = 'RESOLVED' AND resolution = :r
+                 ORDER BY detected_at, unresolved_id
+                """).param("v", volumeId).param("p", path).param("r", resolution.name()).query(ENTRY).list();
+    }
+
     /** Whether a record at the location was resolved this way for an object with this SHA-256. */
     public boolean resolvedAs(UUID volumeId, String path, Resolution resolution, String observedSha256) {
         return jdbc.sql("""
