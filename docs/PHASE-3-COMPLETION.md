@@ -10,7 +10,8 @@ draft and has not been merged; no Phase 3 tag exists.
 | Starting baseline | `main` at `9bb2952` (Phase 2 merge, PR #5); Phase 2 accepted at `464d2d0` |
 | Governing documents | [`PHASE-3-PLAN.md`](PHASE-3-PLAN.md) (owner-final `e9dad0d`), [`PHASE-3-DECISIONS.md`](PHASE-3-DECISIONS.md) and [ADR-0011](architecture/ADR-0011-records.md) (owner-approved `432af5b`, including the two mandatory safeguards) |
 | Branch / PR | `phase-3` / draft PR (not merged) |
-| Implementation head | see the PR description (the verified head and its CI run IDs) |
+| Verified implementation head | `6d7185684ed0121cf512df7813d310021494e494` — CI run 42519342916 (all four jobs green) |
+| Later commits | documentation only (this report); their CI runs are listed in the PR description |
 | Draft reuse | `phase-3-wip` (written before the §11 gate) was checked against the approved design and reused only where it conformed; see §8 |
 
 ## 1. What was implemented
@@ -114,9 +115,25 @@ reclassification (`GroupingIT`, `RecordsIT.r006…`, `ReferenceCourthouseIT`).
 | Browser | `RecordsWebIT` (courthouse workflow end to end; every page for each role) |
 
 ## 5. Test results
-The CI run IDs for the verified head are in the PR description. Every job of the Windows/Linux × PostgreSQL 16/18
-matrix runs the full suite (unit + PostgreSQL integration, including all Phase 0–2 tests), the packaged smoke test
-and the native service-manager test. No test is skipped on any platform.
+CI run **42519342916** on `6d71856`:
+
+| Job | Tests | Failures | Errors | Skipped | Smoke | Native service test |
+|---|---|---|---|---|---|---|
+| ubuntu-24.04 / PostgreSQL 16 (128849192926) | 677 | 0 | 0 | 0 | passed | systemd passed |
+| ubuntu-24.04 / PostgreSQL 18 (128849192751) | 677 | 0 | 0 | 0 | passed | systemd passed |
+| windows-2025 / PostgreSQL 16 (128849193081) | 677 | 0 | 0 | 0 | passed | Windows service passed |
+| windows-2025 / PostgreSQL 18 (128849193000) | 677 | 0 | 0 | 0 | passed | Windows service passed |
+
+677 tests per job, against 616 at the Phase 2 merge. Every Phase 0–2 test still runs unchanged; the only edit to an
+earlier test pins `Phase2SchemaIT` to its own schema version (V0020), as was done for Phase 1. All eight Phase 3
+test classes run on all four jobs.
+
+**Earlier runs on this branch.** Two failures before the verified head were corrected, and neither was an
+application defect:
+- `RecordsWebIT`: a test-helper error, and an absence check that matched the "Go to Record ID" placeholder
+  `R00001` instead of a disclosure.
+- The Linux PG18 smoke test (run 42515336523): a timing-dependent false failure in `scripts/smoke-test.sh`,
+  explained in §8.
 
 ## 6. Known limitations
 - **Reader-dependent grouping (safeguard 1, by design).** A non-Administrator's run leaves held groups unapplied
@@ -145,5 +162,10 @@ None blocking. The seven owner-approved choices and both safeguards are implemen
 - **R-005 "apply through File".** The plan does not name it. Without it, applying a half-marked worksheet would
   sweep the unmarked trailing rows into the last Record (R-004's continuation rule), which defeats R-005. It is
   optional, and the default applies everything.
+- **Smoke script (`scripts/smoke-test.sh`).** Its page checks used `producer | grep -q` under `pipefail`. If
+  `grep -q` exits at its first match while the producer is still writing, the pipeline fails; Phase 3's longer
+  navigation made that more likely, and it failed once on Linux PG18. The checks now capture the output and match
+  in the shell: the same assertions and the same strings. An EXIT trap now stops the background web and worker
+  processes, so a failed check ends the step instead of hanging the job.
 - **Scope control (plan §10.6).** Not implemented, and not claimed by this report: F-006/F-007 (consolidation,
   P2-G) and BI-007 (bulk reclassification) remain outstanding requirements.
