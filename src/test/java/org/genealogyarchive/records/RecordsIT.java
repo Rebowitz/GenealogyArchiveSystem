@@ -122,7 +122,10 @@ class RecordsIT {
     @Test
     void r006_classificationCorrection() throws IOException {
         List<ArchivalFile> f = rx.files(2);
+        // The acceptance scenario's own identifier: the next Record is R01842.
+        JdbcClient.create(rx.fx.ds).sql("SELECT setval('gas.friendly_id_seq_archival_record', 1841)").query(Long.class).single();
         ArchivalRecord r = linkAll(newRecord("DEED"), f, List.of("1", "2"));
+        assertThat(r.friendlyId()).isEqualTo("R01842");
         byte[] before = Files.readAllBytes(rx.fx.storedPath(f.get(0)));
         Path pathBefore = rx.fx.storedPath(f.get(0));
         ArchivalRecord c = current(r);
