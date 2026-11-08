@@ -1,7 +1,6 @@
 # Phase 3 decisions and technical clarifications (WP0)
 
-**Status:** for owner review. Per [`PHASE-3-PLAN.md`](PHASE-3-PLAN.md) §11, Phase 3 coding starts only after
-explicit owner approval of this document and [ADR-0011](architecture/ADR-0011-records.md).
+**Status:** APPROVED by owner 2026-11-08. Owner explicitly authorized Phase 3 implementation, subject to the safeguards below. Phase 3 merge, formal acceptance, and acceptance tag remain prohibited without separate owner authorization.
 
 The owner decisions are those of plan §9 (approved 2026-11-08). They are restated here only so the ADR can cite
 them; if this table and plan §9 ever differ, plan §9 governs.
@@ -52,9 +51,9 @@ Plan §10 requires these to be defined before coding. They are specified in full
 | 10.6 Scope control | §9 |
 | 10.7 Compatibility and gates | §10 |
 
-### Choices for owner confirmation
+### Owner-approved technical choices
 
-The specifications leave the following open. These are the proposed answers; please confirm or change them.
+The owner approved all seven choices on 2026-11-08, subject to the two mandatory safeguards stated below.
 
 1. **Original locator (§10.1).** A Citation keeps an immutable `original_locator`, captured on creation, beside
    a correctable `locator`. Change History also records every correction.
@@ -69,11 +68,17 @@ The specifications leave the following open. These are the proposed answers; ple
 5. **Raw sequence numbers (§10.3).** Image positions are shown as the position among the Files the reader can
    see, never as the stored sequence number, because gaps would reveal restricted Files. Stored sequence numbers
    are also kept out of Change History.
-6. **Group size (§10.4).** A single group is limited to 1,000 rows, one bounded transaction. A larger group is
-   reported and not applied.
+6. **Group size (§10.4).** A single transaction processes at most 1,000 rows. Larger archival groups must remain representable and must be processed in bounded, resumable operations with no duplicate Records or links. The transaction limit is not a Record-size limit.
 7. **Catalogue objects.** Repositories, Sources and Capture Sessions carry no restriction in Phase 3; a session
    whose Files are all restricted shows as an empty session to a non-Administrator. Restricting these objects
    is Phase 9 policy (P2-H).
 
 Phase 0, 1 and 2 decisions remain in force, including P2-G (consolidation deferred, now beyond Phase 3), P2-H,
 P2-I and V0020.
+
+## Mandatory safeguards and implementation authorization (owner approved 2026-11-08)
+
+1. **Restricted-row grouping safety.** Skipping a restricted File must never silently merge separate Records or alter the meaning of a Start New Record marker. If omitted rows make group boundaries ambiguous, stop or flag the affected group and leave it unapplied until an authorized Administrator can resolve it. Add explicit regression tests for hidden boundary rows and mixed-visibility groups.
+2. **Unbounded logical Record size.** The 1,000-row limit is a per-transaction processing bound, **not** a maximum size of a logical Record. Design bounded, resumable continuation for larger groups, retaining stable Record identity, correct page ordering, durable progress and replay safety. Test interrupted and retried processing of a group exceeding 1,000 rows.
+
+**Authorization:** Begin Phase 3 implementation under the finalized plan, these decisions and ADR-0011, incorporating both safeguards. Reuse `phase-3-wip` only after checking consistency with the approved design. Preserve Phase 0–2 functionality and the Windows/Linux × PostgreSQL 16/18 matrix. Produce a builder completion report and submit for independent Codex audit. **Do not merge Phase 3 to main, declare acceptance or create a Phase 3 tag without explicit owner authorization.** The Phase 2 acceptance tag push remains a separate outstanding task.
