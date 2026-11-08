@@ -581,6 +581,13 @@ No migration: application rules over the existing tables.
 
 Regression tests (`Phase2AuditCorrectionsIT`, `v0023_*`): object appearing at a verified-empty former location (byte-identical and foreign) across repeated passes, then attested or released; returning released object with the archive's own bytes (reported, never deleted) and a replacement (new unresolved record); crashes at `AFTER_INVENTORY` and `DURING_PHYSICAL_DELETE` with recovery; current object swapped after identification (refused, CURRENT_COPY record) plus a legitimate owned deletion; attested object gone before deletion (ABSENT, not DESTROYED).
 
+Two earlier tests (`gasP2_FV01_cleanupInterruptedAfterEachRemovalNeverReportsCompletionEarly`,
+`gasP2_IV01_cleanupInterruptedAfterEachRemovalNeverTouchesHistoricalLocations`) crashed at the k-th
+`DURING_PHYSICAL_DELETE` of a pass, which counted verified-empty locations (including ones emptied by the previous
+crashed pass) as deletion steps - the behaviour this round removes. They now stop each pass after its first actual
+deletion, once per object to delete, so the removal is still interrupted after every object it deletes; their
+assertions are unchanged.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

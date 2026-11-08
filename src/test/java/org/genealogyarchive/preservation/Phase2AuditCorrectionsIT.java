@@ -1107,16 +1107,11 @@ class Phase2AuditCorrectionsIT {
         Repaired f = lostAndRepair("will2.tif", large("will, interrupted at every removal"));
         FileOperation repair = recreatedAtTheVacatedTarget(f, FaultPoints.Point.AFTER_QUARANTINE_RECORDED);
         FileOperation op = destroy(f.file());
-        // Known locations: the recreated copy, the (lost) original's location and the quarantined partial copy.
-        for (int k = 1; k <= 3; k++) {
-            // Stop right after the k-th location is removed.
-            AtomicInteger reached = new AtomicInteger();
-            int stopAt = k;
-            fx.faults.armSticky(FaultPoints.Point.DURING_PHYSICAL_DELETE, id -> {
-                if (reached.incrementAndGet() == stopAt) {
-                    throw new ScriptedFaults.SimulatedCrash(FaultPoints.Point.DURING_PHYSICAL_DELETE);
-                }
-            });
+        // Objects to delete: the recreated copy and the quarantined partial copy. The (lost) original's location is
+        // verified empty, and an empty location is never a deletion step (fourth V0019 audit). Each pass is stopped
+        // right after its first deletion, so the removal is interrupted after every object it deletes.
+        for (int k = 1; k <= 2; k++) {
+            fx.faults.crashAt(FaultPoints.Point.DURING_PHYSICAL_DELETE);
             assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
                     .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
             fx.faults.clear();
@@ -1416,15 +1411,10 @@ class Phase2AuditCorrectionsIT {
         Path vacated = onVolume(generation(f.contentId(), 1).storagePath());
         Files.write(vacated, b("foreign"));
         FileOperation op = destroy(f);
-        // Known current copies: generation 2 and generation 1's quarantined copy.
+        // Known current copies: generation 2 and generation 1's quarantined copy. Each pass is stopped right after
+        // its first deletion (an already-emptied location is never a deletion step - fourth V0019 audit).
         for (int k = 1; k <= 2; k++) {
-            AtomicInteger reached = new AtomicInteger();
-            int stopAt = k;
-            fx.faults.armSticky(FaultPoints.Point.DURING_PHYSICAL_DELETE, id -> {
-                if (reached.incrementAndGet() == stopAt) {
-                    throw new ScriptedFaults.SimulatedCrash(FaultPoints.Point.DURING_PHYSICAL_DELETE);
-                }
-            });
+            fx.faults.crashAt(FaultPoints.Point.DURING_PHYSICAL_DELETE);
             assertThatThrownBy(() -> fx.preservation().destruction().process(op.operationId()))
                     .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
             fx.faults.clear();
