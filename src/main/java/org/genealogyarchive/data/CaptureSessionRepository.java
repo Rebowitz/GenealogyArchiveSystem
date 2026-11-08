@@ -3,6 +3,7 @@ package org.genealogyarchive.data;
 import org.genealogyarchive.identity.FriendlyId;
 import org.genealogyarchive.records.CaptureRow;
 import org.genealogyarchive.records.CaptureSession;
+import org.genealogyarchive.records.OverrideMode;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -30,16 +31,21 @@ public final class CaptureSessionRepository {
             rs.getString("notes"), Rows.instant(rs, "created_at"), rs.getLong("row_version"));
 
     private static final String ROW_COLUMNS = """
-            file_id, capture_session_id, sequence_number, override_repository_id, override_source_id,
-            override_capture_date, override_researcher, override_equipment_method, override_note, start_new_record,
-            record_group, page_designation, classification_code, applied_record_id, row_version""";
+            file_id, capture_session_id, sequence_number, repository_mode, override_repository_id, source_mode,
+            override_source_id, capture_date_mode, override_capture_date, researcher_mode, override_researcher,
+            equipment_method_mode, override_equipment_method, start_new_record, record_group, page_designation,
+            classification_code, applied_record_id, applied_run_id, row_version""";
 
     private static final RowMapper<CaptureRow> ROW = (rs, n) -> new CaptureRow(Rows.uuid(rs, "file_id"),
-            Rows.uuid(rs, "capture_session_id"), rs.getInt("sequence_number"), Rows.uuid(rs, "override_repository_id"),
-            Rows.uuid(rs, "override_source_id"), rs.getObject("override_capture_date", LocalDate.class),
-            rs.getString("override_researcher"), rs.getString("override_equipment_method"), rs.getString("override_note"),
+            Rows.uuid(rs, "capture_session_id"), rs.getInt("sequence_number"),
+            OverrideMode.valueOf(rs.getString("repository_mode")), Rows.uuid(rs, "override_repository_id"),
+            OverrideMode.valueOf(rs.getString("source_mode")), Rows.uuid(rs, "override_source_id"),
+            OverrideMode.valueOf(rs.getString("capture_date_mode")), rs.getObject("override_capture_date", LocalDate.class),
+            OverrideMode.valueOf(rs.getString("researcher_mode")), rs.getString("override_researcher"),
+            OverrideMode.valueOf(rs.getString("equipment_method_mode")), rs.getString("override_equipment_method"),
             rs.getBoolean("start_new_record"), rs.getString("record_group"), rs.getString("page_designation"),
-            rs.getString("classification_code"), Rows.uuid(rs, "applied_record_id"), rs.getLong("row_version"));
+            rs.getString("classification_code"), Rows.uuid(rs, "applied_record_id"), Rows.uuid(rs, "applied_run_id"),
+            rs.getLong("row_version"));
 
     private final JdbcClient jdbc;
 
@@ -134,19 +140,54 @@ public final class CaptureSessionRepository {
                 .param("f", fileId).param("v", expectedVersion).update() == 1;
     }
 
-    /** Override values (null inherits). */
-    public record Overrides(UUID repositoryId, UUID sourceId, LocalDate captureDate, String researcher,
-                            String equipmentMethod, String note) {
+    /** One field's override: a mode, and a value present exactly in VALUE mode (plan section 10.2). */
+    public record Override<T>(OverrideMode mode, T value) {
+        public Override {
+            if ((mode == OverrideMode.VALUE) != (value != null)) {
+                throw new IllegalArgumentException("An override has a value exactly when its mode is VALUE");
+            }
+        }
+
+        public static <T> Override<T> inherit() {
+            return new Override<>(OverrideMode.INHERIT, null);
+        }
+
+        public static <T> Override<T> blank() {
+            return new Override<>(OverrideMode.BLANK, null);
+        }
+
+        public static <T> Override<T> of(T value) {
+            return new Override<>(OverrideMode.VALUE, value);
+        }
+    }
+
+    /** All of one File's overrides. */
+    public record Overrides(Override<UUID> repository, Override<UUID> source, Override<LocalDate> captureDate,
+                            Override<String> researcher, Override<String> equipmentMethod) {
+
+        public static Overrides of(CaptureRow r) {
+            return new Overrides(new Override<>(r.repositoryMode(), r.overrideRepositoryId()),
+                    new Override<>(r.sourceMode(), r.overrideSourceId()),
+                    new Override<>(r.captureDateMode(), r.overrideCaptureDate()),
+                    new Override<>(r.researcherMode(), r.overrideResearcher()),
+                    new Override<>(r.equipmentMethodMode(), r.overrideEquipmentMethod()));
+        }
     }
 
     public boolean updateOverrides(UUID fileId, long expectedVersion, Overrides o) {
         return jdbc.sql("""
-                UPDATE gas.file_capture_context SET override_repository_id = :repo, override_source_id = :source,
-                       override_capture_date = :date, override_researcher = :researcher,
-                       override_equipment_method = :method, override_note = :note, row_version = row_version + 1
+                UPDATE gas.file_capture_context SET repository_mode = :repoMode, override_repository_id = :repo,
+                       source_mode = :sourceMode, override_source_id = :source,
+                       capture_date_mode = :dateMode, override_capture_date = :date,
+                       researcher_mode = :researcherMode, override_researcher = :researcher,
+                       equipment_method_mode = :methodMode, override_equipment_method = :method,
+                       row_version = row_version + 1
                  WHERE file_id = :f AND row_version = :v
-                """).param("repo", o.repositoryId()).param("source", o.sourceId()).param("date", o.captureDate())
-                .param("researcher", o.researcher()).param("method", o.equipmentMethod()).param("note", o.note())
+                """).param("repoMode", o.repository().mode().name()).param("repo", o.repository().value())
+                .param("sourceMode", o.source().mode().name()).param("source", o.source().value())
+                .param("dateMode", o.captureDate().mode().name()).param("date", o.captureDate().value())
+                .param("researcherMode", o.researcher().mode().name()).param("researcher", o.researcher().value())
+                .param("methodMode", o.equipmentMethod().mode().name()).param("method", o.equipmentMethod().value())
                 .param("f", fileId).param("v", expectedVersion).update() == 1;
     }
 
@@ -163,12 +204,17 @@ public final class CaptureSessionRepository {
                 .param("cls", m.classificationCode()).param("f", fileId).param("v", expectedVersion).update() == 1;
     }
 
-    /** Marks a row applied (only once). */
-    public boolean markApplied(UUID fileId, UUID recordId) {
+    /**
+     * Marks a row applied by a grouping run, only once and only if the row is still the version that was planned
+     * (a row edited after planning is a conflict and is left for the next run).
+     */
+    public boolean markApplied(UUID fileId, long plannedVersion, UUID recordId, UUID runId) {
         return jdbc.sql("""
-                UPDATE gas.file_capture_context SET applied_record_id = :r, row_version = row_version + 1
-                 WHERE file_id = :f AND applied_record_id IS NULL
-                """).param("r", recordId).param("f", fileId).update() == 1;
+                UPDATE gas.file_capture_context SET applied_record_id = :r, applied_run_id = :run,
+                       row_version = row_version + 1
+                 WHERE file_id = :f AND applied_record_id IS NULL AND row_version = :v
+                """).param("r", recordId).param("run", runId).param("f", fileId).param("v", plannedVersion)
+                .update() == 1;
     }
 
     /** Files ingested in an upload batch, in ingestion order (friendly number). */

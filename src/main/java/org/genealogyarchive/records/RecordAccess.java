@@ -14,7 +14,7 @@ import java.util.OptionalLong;
  * Visibility rules for Phase 3 (D3-04). A RESTRICTED Archival Record is visible only with
  * {@link Permission#VIEW_RESTRICTED_RECORDS}; for anyone else every route answers exactly as for a Record that
  * does not exist. Restricted Files keep the Phase 2 rule ({@link FileService#canSee}) everywhere a Record,
- * Capture Session or consolidation shows Files.
+ * or Capture Session shows Files.
  */
 public final class RecordAccess {
 

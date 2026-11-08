@@ -8,6 +8,7 @@ import org.genealogyarchive.data.FileContentRepository;
 import org.genealogyarchive.data.FileOperationRepository;
 import org.genealogyarchive.data.IntegrityRepository;
 import org.genealogyarchive.data.QuarantineRepository;
+import org.genealogyarchive.data.GroupingRunRepository;
 import org.genealogyarchive.data.OperationLocks;
 import org.genealogyarchive.data.ArchiveInstanceRepository;
 import org.genealogyarchive.data.BackgroundJobRepository;
@@ -30,7 +31,6 @@ import org.genealogyarchive.preservation.RestrictedFileHistory;
 import org.genealogyarchive.data.ArchivalRecordRepository;
 import org.genealogyarchive.data.CaptureSessionRepository;
 import org.genealogyarchive.data.CatalogRepository;
-import org.genealogyarchive.data.ConsolidationRepository;
 import org.genealogyarchive.data.VocabularyRepository;
 import org.genealogyarchive.records.RecordsContext;
 import org.genealogyarchive.records.RecordsHistoryVisibility;
@@ -117,7 +117,7 @@ public record CoreServices(
                 PreservationServices.create(preservationContext),
                 RecordsServices.create(new RecordsContext(new CatalogRepository(dataSource),
                         new CaptureSessionRepository(dataSource), archivalRecords, new VocabularyRepository(dataSource),
-                        new ConsolidationRepository(dataSource), archivalFiles, archiveRepository, friendlyIds, tx,
-                        recorder, clock)));
+                        new GroupingRunRepository(dataSource), archivalFiles, archiveRepository, friendlyIds, tx,
+                        recorder, new OperationLocks(dataSource), clock)));
     }
 }

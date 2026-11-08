@@ -30,7 +30,7 @@ public enum Permission {
     VIEW_RESTRICTED_FILES,
     /**
      * Phase 3: create and correct Repositories, Sources, Capture Sessions, Archival Records, their File links,
-     * Roles and Citations; group courthouse captures; consolidate redundant captures (with EDIT_FILES).
+     * Roles and Citations; group courthouse captures.
      */
     EDIT_RECORDS,
     /** Phase 3: see Restricted Archival Records and set or lower a Record's restriction (Administrators, D3-04). */

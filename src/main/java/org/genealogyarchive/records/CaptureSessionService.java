@@ -58,10 +58,14 @@ public final class CaptureSessionService {
                                String equipmentMethod, String notes) {
     }
 
-    /** A File's capture context as inherited and overridden. {@code overridden} names the overridden fields. */
+    /**
+     * A File's capture context as inherited and overridden, resolved when read. {@code overridden} names the fields
+     * the File gives its own value; {@code blanked} names the fields it records as not known for this File even
+     * though the session has a value. Every other field is the session's current value.
+     */
     public record EffectiveContext(CaptureSession session, CaptureRow row, Optional<Repository> repository,
                                    Optional<Source> source, LocalDate captureDate, String researcher,
-                                   String equipmentMethod, String note, Set<String> overridden) {
+                                   String equipmentMethod, Set<String> overridden, Set<String> blanked) {
     }
 
     /** One worksheet row the actor may see. */
@@ -295,55 +299,67 @@ public final class CaptureSessionService {
         return ctx.sessions().row(fileId).map(row -> {
             CaptureSession s = ctx.sessions().find(row.captureSessionId()).orElseThrow();
             Set<String> overridden = new LinkedHashSet<>();
-            UUID repo = pick(row.overrideRepositoryId(), s.repositoryId(), "repository", overridden);
-            UUID source = pick(row.overrideSourceId(), s.sourceId(), "source", overridden);
-            LocalDate date = pick(row.overrideCaptureDate(), s.captureDate(), "capture_date", overridden);
-            String researcher = pick(row.overrideResearcher(), s.researcher(), "researcher", overridden);
-            String method = pick(row.overrideEquipmentMethod(), s.equipmentMethod(), "equipment_method", overridden);
-            String note = pick(row.overrideNote(), null, "note", overridden);
+            Set<String> blanked = new LinkedHashSet<>();
+            UUID repo = pick(row.repositoryMode(), row.overrideRepositoryId(), s.repositoryId(), "repository", overridden, blanked);
+            UUID source = pick(row.sourceMode(), row.overrideSourceId(), s.sourceId(), "source", overridden, blanked);
+            LocalDate date = pick(row.captureDateMode(), row.overrideCaptureDate(), s.captureDate(), "capture_date",
+                    overridden, blanked);
+            String researcher = pick(row.researcherMode(), row.overrideResearcher(), s.researcher(), "researcher",
+                    overridden, blanked);
+            String method = pick(row.equipmentMethodMode(), row.overrideEquipmentMethod(), s.equipmentMethod(),
+                    "equipment_method", overridden, blanked);
             return new EffectiveContext(s, row, Optional.ofNullable(repo).flatMap(id -> ctx.catalog().findRepository(id)),
-                    Optional.ofNullable(source).flatMap(id -> ctx.catalog().findSource(id)), date, researcher, method, note,
-                    overridden);
+                    Optional.ofNullable(source).flatMap(id -> ctx.catalog().findSource(id)), date, researcher, method,
+                    Set.copyOf(overridden), Set.copyOf(blanked));
         });
     }
 
-    private static <T> T pick(T override, T inherited, String name, Set<String> overridden) {
-        if (override != null) {
-            overridden.add(name);
-            return override;
-        }
-        return inherited;
+    /** Tri-state resolution (plan section 10.2): inherit the session's value, use the File's own, or none. */
+    static <T> T pick(OverrideMode mode, T own, T inherited, String name, Set<String> overridden, Set<String> blanked) {
+        return switch (mode) {
+            case INHERIT -> inherited;
+            case VALUE -> {
+                overridden.add(name);
+                yield own;
+            }
+            case BLANK -> {
+                blanked.add(name);
+                yield null;
+            }
+        };
     }
 
     /**
-     * Sets one File's overrides (null inherits again). Only that File changes; the session and its other Files do
-     * not (BI-001). Recorded in the File's Change History.
+     * Sets one File's overrides. Each field inherits the session's value, has the File's own value, or is
+     * explicitly blank for this File. Only that File changes; the session and its other Files do not (BI-001).
+     * Recorded in the File's Change History as a mode and a value per field, so "inherits" and "explicitly not
+     * known" are never confused with a value. Correcting the session itself is recorded only in the session's
+     * history: inheriting Files' history is never rewritten.
      */
     public CaptureRow correctOverrides(Actor actor, UUID fileId, long expectedVersion, CaptureSessionRepository.Overrides o,
                                        String reason) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
-        CaptureSessionRepository.Overrides clean = new CaptureSessionRepository.Overrides(o.repositoryId(), o.sourceId(),
-                o.captureDate(), Texts.optional(o.researcher(), "The researcher", 200),
-                Texts.optional(o.equipmentMethod(), "The equipment or method", 500),
-                Texts.optional(o.note(), "The note", 2000, true));
+        CaptureSessionRepository.Overrides clean = new CaptureSessionRepository.Overrides(o.repository(), o.source(),
+                o.captureDate(), text(o.researcher(), "The researcher", 200),
+                text(o.equipmentMethod(), "The equipment or method", 500));
         return ctx.tx().execute(status -> {
             visibleFile(actor, fileId);
             CaptureRow row = ctx.sessions().lockRow(fileId).orElseThrow(() -> new NotFoundException("The session entry"));
             if (row.version() != expectedVersion) {
                 throw new ConflictException("The session entry");
             }
-            String repoBefore = label(row.overrideRepositoryId(), true);
-            String repoAfter = label(clean.repositoryId(), true);
-            String sourceBefore = label(row.overrideSourceId(), false);
-            String sourceAfter = label(clean.sourceId(), false);
-            List<FieldChange> changes = List.of(
-                    FieldChange.of("capture_repository", FieldClass.CORRECTABLE, repoBefore, repoAfter),
-                    FieldChange.of("capture_source", FieldClass.CORRECTABLE, sourceBefore, sourceAfter),
-                    FieldChange.of("capture_date", FieldClass.CORRECTABLE, row.overrideCaptureDate(), clean.captureDate()),
-                    FieldChange.of("capture_researcher", FieldClass.CORRECTABLE, row.overrideResearcher(), clean.researcher()),
-                    FieldChange.of("capture_equipment_method", FieldClass.CORRECTABLE, row.overrideEquipmentMethod(),
-                            clean.equipmentMethod()),
-                    FieldChange.of("capture_note", FieldClass.CORRECTABLE, row.overrideNote(), clean.note()));
+            CaptureSessionRepository.Overrides before = CaptureSessionRepository.Overrides.of(row);
+            List<FieldChange> changes = new ArrayList<>();
+            overrideChanges(changes, "capture_repository", before.repository().mode(), clean.repository().mode(),
+                    label(before.repository().value(), true), label(clean.repository().value(), true));
+            overrideChanges(changes, "capture_source", before.source().mode(), clean.source().mode(),
+                    label(before.source().value(), false), label(clean.source().value(), false));
+            overrideChanges(changes, "capture_date", before.captureDate().mode(), clean.captureDate().mode(),
+                    before.captureDate().value(), clean.captureDate().value());
+            overrideChanges(changes, "capture_researcher", before.researcher().mode(), clean.researcher().mode(),
+                    before.researcher().value(), clean.researcher().value());
+            overrideChanges(changes, "capture_equipment_method", before.equipmentMethod().mode(),
+                    clean.equipmentMethod().mode(), before.equipmentMethod().value(), clean.equipmentMethod().value());
             if (changes.stream().noneMatch(FieldChange::changed)) {
                 return row;
             }
@@ -353,6 +369,24 @@ public final class CaptureSessionService {
             ctx.recorder().record(actor, ArchivalFileRepository.OBJECT_TYPE, fileId, "CAPTURE_CONTEXT_CORRECTED", changes, reason);
             return ctx.sessions().row(fileId).orElseThrow();
         });
+    }
+
+    private static CaptureSessionRepository.Override<String> text(CaptureSessionRepository.Override<String> o,
+                                                                    String what, int max) {
+        if (o.mode() != OverrideMode.VALUE) {
+            return o;
+        }
+        String clean = Texts.optional(o.value(), what, max);
+        if (clean == null) {
+            throw new RuleViolationException(what + " override needs a value; choose \"not known for this File\" instead.");
+        }
+        return CaptureSessionRepository.Override.of(clean);
+    }
+
+    private static void overrideChanges(List<FieldChange> out, String field, OverrideMode modeBefore, OverrideMode modeAfter,
+                                        Object valueBefore, Object valueAfter) {
+        out.add(FieldChange.of(field + "_mode", FieldClass.CORRECTABLE, modeBefore.name(), modeAfter.name()));
+        out.add(FieldChange.of(field, FieldClass.CORRECTABLE, valueBefore, valueAfter));
     }
 
     private String label(UUID id, boolean repository) {

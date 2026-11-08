@@ -1,5 +1,6 @@
--- V0022 - Phase 3: Archival Records, File-to-Record links, Record Roles, Citations and courthouse grouping
--- (BUILD-SPEC s.17, s.19, s.40; ADR-0011; decisions D3-01, D3-02, D3-04, D3-05, D3-07, D3-10, D3-12).
+-- V0022 - Phase 3: Archival Records, File-to-Record links, Record Roles, Citations and courthouse grouping runs
+-- (BUILD-SPEC s.17, s.19, s.40; ADR-0011; decisions D3-01, D3-02, D3-04, D3-05, D3-07, D3-10, D3-12; plan
+-- section 10).
 --
 -- File-to-Record is many-to-many (R-003). Court/source page designation is distinct from image sequence
 -- (R-001). Classification is correctable and never changes identity or physical storage (R-006). A Record
@@ -22,8 +23,10 @@ CREATE TABLE archival_record (
     -- Source expressions as written (A-004, D3-05); a structured interpretation is added alongside in Phase 4.
     record_date_text     text        CHECK (record_date_text IS NULL OR length(btrim(record_date_text)) BETWEEN 1 AND 200),
     filing_date_text     text        CHECK (filing_date_text IS NULL OR length(btrim(filing_date_text)) BETWEEN 1 AND 200),
-    -- Researcher-entered transcription or abstract (D3-10); never OCR.
-    transcription        text        CHECK (transcription IS NULL OR length(btrim(transcription)) BETWEEN 1 AND 100000),
+    -- D3-10: a researcher-entered verbatim transcription and a separate researcher-written abstract. Neither is OCR
+    -- nor a Source Statement (Phase 5).
+    transcription_text   text        CHECK (transcription_text IS NULL OR length(btrim(transcription_text)) BETWEEN 1 AND 100000),
+    abstract_text        text        CHECK (abstract_text IS NULL OR length(btrim(abstract_text)) BETWEEN 1 AND 20000),
     restriction          text        NOT NULL DEFAULT 'NORMAL' CHECK (restriction IN ('NORMAL', 'RESTRICTED')),
     lifecycle            text        NOT NULL DEFAULT 'ACTIVE' CHECK (lifecycle IN ('ACTIVE', 'DELETED')),
     deleted_at           timestamptz,
@@ -43,31 +46,22 @@ CREATE TRIGGER archival_record_identity_immutable
 CREATE TRIGGER archival_record_no_delete BEFORE DELETE ON archival_record FOR EACH ROW EXECUTE FUNCTION reject_removal();
 CREATE TRIGGER archival_record_no_truncate BEFORE TRUNCATE ON archival_record FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();
 
-ALTER TABLE file_capture_context
-    ADD CONSTRAINT file_capture_context_applied_record FOREIGN KEY (applied_record_id) REFERENCES archival_record (record_id);
-
 -- File-to-Record (s.19, s.40). sequence_number orders images within the Record; page_designation is the
--- court/source page as written, never derived from the sequence. A link carried to a preferred File by
--- consolidation names the consolidation and the File it came from (F-006); the original link is kept.
+-- court/source page as written, never derived from the sequence (R-001). A link is a correctable association.
 CREATE TABLE record_file (
-    record_id             uuid        NOT NULL REFERENCES archival_record (record_id),
-    file_id               uuid        NOT NULL REFERENCES archival_file (file_id),
-    sequence_number       integer     NOT NULL CHECK (sequence_number >= 1),
-    page_designation      text        CHECK (page_designation IS NULL OR length(btrim(page_designation)) BETWEEN 1 AND 50),
-    note                  text        CHECK (note IS NULL OR length(btrim(note)) BETWEEN 1 AND 2000),
-    consolidation_id      uuid,
-    carried_from_file_id  uuid        REFERENCES archival_file (file_id),
-    linked_at             timestamptz NOT NULL,
-    linked_by             uuid        REFERENCES app_user (user_id),
-    PRIMARY KEY (record_id, file_id),
-    CHECK ((consolidation_id IS NULL) = (carried_from_file_id IS NULL)),
-    CHECK (carried_from_file_id IS NULL OR carried_from_file_id <> file_id)
+    record_id         uuid        NOT NULL REFERENCES archival_record (record_id),
+    file_id           uuid        NOT NULL REFERENCES archival_file (file_id),
+    sequence_number   integer     NOT NULL CHECK (sequence_number >= 1),
+    page_designation  text        CHECK (page_designation IS NULL OR length(btrim(page_designation)) BETWEEN 1 AND 50),
+    note              text        CHECK (note IS NULL OR length(btrim(note)) BETWEEN 1 AND 2000),
+    linked_at         timestamptz NOT NULL,
+    linked_by         uuid        REFERENCES app_user (user_id),
+    PRIMARY KEY (record_id, file_id)
 );
 CREATE INDEX record_file_file ON record_file (file_id);
 CREATE TRIGGER record_file_identity_immutable
     BEFORE UPDATE ON record_file
-    FOR EACH ROW EXECUTE FUNCTION reject_identity_change('record_id', 'file_id', 'consolidation_id',
-                                                         'carried_from_file_id', 'linked_at', 'linked_by');
+    FOR EACH ROW EXECUTE FUNCTION reject_identity_change('record_id', 'file_id', 'linked_at', 'linked_by');
 CREATE TRIGGER record_file_no_truncate BEFORE TRUNCATE ON record_file FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();
 
 -- Record Roles (s.19; D3-01). The party is kept as written and may be absent (unreadable). A Role creates no
@@ -89,8 +83,66 @@ CREATE TRIGGER record_role_identity_immutable
     FOR EACH ROW EXECUTE FUNCTION reject_identity_change('role_id', 'record_id', 'created_at', 'created_by');
 CREATE TRIGGER record_role_no_truncate BEFORE TRUNCATE ON record_role FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();
 
--- Courthouse grouping (s.40, D3-02): which Record each explicit record_group of a session created, so later rows
--- with the same group join it. Permanent.
+-- Courthouse grouping runs (s.40, D3-02, plan section 10.4). A run is one application of a session's worksheet:
+-- durable identity, who started it, its state and its tallies. Each group is applied in its own transaction, which
+-- records the group's completion here and marks its rows applied with the run and the Record, so a crash loses at
+-- most the group in progress and a replay skips completed work. A run found RUNNING with no live owner (the
+-- process died) is closed as INTERRUPTED when the next run starts. Permanent.
+CREATE TABLE grouping_run (
+    run_id              uuid        PRIMARY KEY,
+    capture_session_id  uuid        NOT NULL REFERENCES capture_session (capture_session_id),
+    state               text        NOT NULL DEFAULT 'RUNNING' CHECK (state IN ('RUNNING', 'COMPLETED', 'INTERRUPTED')),
+    started_at          timestamptz NOT NULL,
+    started_by          uuid        REFERENCES app_user (user_id),
+    finished_at         timestamptz,
+    rows_planned        integer     NOT NULL DEFAULT 0 CHECK (rows_planned >= 0),
+    rows_applied        integer     NOT NULL DEFAULT 0 CHECK (rows_applied >= 0),
+    rows_ungrouped      integer     NOT NULL DEFAULT 0 CHECK (rows_ungrouped >= 0),
+    rows_conflicted     integer     NOT NULL DEFAULT 0 CHECK (rows_conflicted >= 0),
+    records_created     integer     NOT NULL DEFAULT 0 CHECK (records_created >= 0),
+    records_extended    integer     NOT NULL DEFAULT 0 CHECK (records_extended >= 0),
+    CHECK ((state = 'RUNNING') = (finished_at IS NULL))
+);
+CREATE INDEX grouping_run_session ON grouping_run (capture_session_id, started_at DESC);
+CREATE TRIGGER grouping_run_identity_immutable
+    BEFORE UPDATE ON grouping_run
+    FOR EACH ROW EXECUTE FUNCTION reject_identity_change('run_id', 'capture_session_id', 'started_at', 'started_by');
+CREATE TRIGGER grouping_run_no_delete BEFORE DELETE ON grouping_run FOR EACH ROW EXECUTE FUNCTION reject_removal();
+CREATE TRIGGER grouping_run_no_truncate BEFORE TRUNCATE ON grouping_run FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();
+
+-- A run's final state never changes.
+CREATE FUNCTION grouping_run_final() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.state <> 'RUNNING' THEN
+        RAISE EXCEPTION 'Grouping run % is finished', OLD.run_id USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER grouping_run_final BEFORE UPDATE ON grouping_run FOR EACH ROW EXECUTE FUNCTION grouping_run_final();
+
+-- One completed group of a run: the Record it created or extended and how many rows it applied.
+CREATE TABLE grouping_run_group (
+    run_id        uuid        NOT NULL REFERENCES grouping_run (run_id),
+    group_key     text        NOT NULL CHECK (length(group_key) BETWEEN 1 AND 200),
+    record_id     uuid        NOT NULL REFERENCES archival_record (record_id),
+    created       boolean     NOT NULL,
+    rows_applied  integer     NOT NULL CHECK (rows_applied >= 1),
+    completed_at  timestamptz NOT NULL,
+    PRIMARY KEY (run_id, group_key)
+);
+CREATE TRIGGER grouping_run_group_immutable
+    BEFORE UPDATE OR DELETE ON grouping_run_group FOR EACH ROW EXECUTE FUNCTION reject_removal();
+CREATE TRIGGER grouping_run_group_no_truncate
+    BEFORE TRUNCATE ON grouping_run_group FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();
+
+ALTER TABLE file_capture_context
+    ADD CONSTRAINT file_capture_context_applied_record FOREIGN KEY (applied_record_id) REFERENCES archival_record (record_id),
+    ADD CONSTRAINT file_capture_context_applied_run FOREIGN KEY (applied_run_id) REFERENCES grouping_run (run_id);
+
+-- Which Record each explicit record_group of a session created, so later rows - in later runs or other upload
+-- batches - with the same group join it. Permanent.
 CREATE TABLE capture_session_group (
     capture_session_id  uuid        NOT NULL REFERENCES capture_session (capture_session_id),
     group_key           text        NOT NULL CHECK (length(btrim(group_key)) BETWEEN 1 AND 100),
@@ -103,7 +155,9 @@ CREATE TRIGGER capture_session_group_immutable
 CREATE TRIGGER capture_session_group_no_truncate
     BEFORE TRUNCATE ON capture_session_group FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();
 
--- Citation foundation (s.17): refers to a Source and/or a Record, with a locator and the citation as entered.
+-- Citation foundation (s.17; plan section 10.1): refers to a Source, a Record, or both, with a locator and the
+-- citation as entered. Its targets are part of its identity (a different target is a different Citation); the
+-- locator and text are correctable with history. Reclassifying the cited Record changes nothing here.
 CREATE TABLE citation (
     citation_id      uuid        PRIMARY KEY,
     friendly_number  bigint      NOT NULL UNIQUE CHECK (friendly_number >= 1),
@@ -122,6 +176,7 @@ CREATE INDEX citation_source ON citation (source_id);
 CREATE INDEX citation_record ON citation (record_id);
 CREATE TRIGGER citation_identity_immutable
     BEFORE UPDATE ON citation
-    FOR EACH ROW EXECUTE FUNCTION reject_identity_change('citation_id', 'friendly_number', 'created_at', 'created_by');
+    FOR EACH ROW EXECUTE FUNCTION reject_identity_change('citation_id', 'friendly_number', 'source_id', 'record_id',
+                                                         'created_at', 'created_by');
 CREATE TRIGGER citation_no_delete BEFORE DELETE ON citation FOR EACH ROW EXECUTE FUNCTION reject_removal();
 CREATE TRIGGER citation_no_truncate BEFORE TRUNCATE ON citation FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();

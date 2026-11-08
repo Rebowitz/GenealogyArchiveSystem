@@ -8,14 +8,13 @@ public record RecordsServices(
         CaptureSessionService sessions,
         RecordService records,
         CitationService citations,
-        GroupingService grouping,
-        ConsolidationService consolidation) {
+        GroupingService grouping) {
 
     public static RecordsServices create(RecordsContext ctx) {
         VocabularyService vocabularies = new VocabularyService(ctx);
         RecordService records = new RecordService(ctx, vocabularies);
         CaptureSessionService sessions = new CaptureSessionService(ctx, vocabularies);
         return new RecordsServices(ctx, vocabularies, new CatalogService(ctx), sessions, records, new CitationService(ctx),
-                new GroupingService(ctx, records, sessions), new ConsolidationService(ctx, records));
+                new GroupingService(ctx, records, sessions));
     }
 }

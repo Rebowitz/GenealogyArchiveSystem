@@ -19,7 +19,6 @@ import org.genealogyarchive.service.NotFoundException;
 import org.genealogyarchive.service.RuleViolationException;
 
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -34,13 +33,15 @@ import java.util.UUID;
  *   <li>Nothing beyond identity is required (A-003). Roles never create Persons or relationships (A-009, D3-01).</li>
  *   <li>Restriction (D3-04): a RESTRICTED Record exists only for actors with VIEW_RESTRICTED_RECORDS; restricted
  *       Files never appear through a Record for actors who may not see them.</li>
+ *   <li>Lifecycle (D3-12): ACTIVE or DELETED (recoverable). A deleted Record keeps its identity, links, Roles,
+ *       Citations and history and stays reachable by its identifier, marked deleted (as a deleted File does); it
+ *       is left out of default lists and grouping, and nothing about it can be changed except restoring it.
+ *       There is no purge or merge, and identifiers are never reused.</li>
  * </ul>
  */
 public final class RecordService {
 
     private static final String NOT_FOUND = "The record";
-    /** Most Records changed by one bulk reclassification (one transaction). */
-    public static final int BULK_LIMIT = 500;
 
     private final RecordsContext ctx;
     private final VocabularyService vocabularies;
@@ -50,9 +51,13 @@ public final class RecordService {
         this.vocabularies = vocabularies;
     }
 
-    /** What a researcher enters for a Record. Blank means not known. */
+    /**
+     * What a researcher enters for a Record. Blank means not known. The verbatim transcription and the
+     * researcher-written abstract are separate (D3-10); neither is OCR.
+     */
     public record RecordInput(String classificationCode, String summary, UUID sourceId, String sourceLocator,
-                              String recordDateText, String filingDateText, String transcription, Restriction restriction) {
+                              String recordDateText, String filingDateText, String transcriptionText,
+                              String abstractText, Restriction restriction) {
     }
 
     /** A visible File shown with its link. */
@@ -147,7 +152,8 @@ public final class RecordService {
                 Texts.optional(in.sourceLocator(), "The book/page reference", 500),
                 Texts.optional(in.recordDateText(), "The record date (as written)", 200),
                 Texts.optional(in.filingDateText(), "The filing date (as written)", 200),
-                Texts.optional(in.transcription(), "The transcription", 100_000, true),
+                Texts.optional(in.transcriptionText(), "The verbatim transcription", 100_000, true),
+                Texts.optional(in.abstractText(), "The abstract", 20_000, true),
                 restriction);
     }
 
@@ -171,7 +177,7 @@ public final class RecordService {
                     ctx.sessions().find(captureSessionId).map(CaptureSession::friendlyId).orElseThrow()));
         }
         changes.addAll(recordChanges(new ArchivalRecordRepository.RecordFields(null, null, null, null, null, null, null,
-                Restriction.NORMAL), f));
+                null, Restriction.NORMAL), f));
         ctx.recorder().record(actor, ArchivalRecordRepository.OBJECT_TYPE, id, ChangeKinds.CREATED, changes, null);
         return ctx.records().find(id).orElseThrow();
     }
@@ -207,7 +213,7 @@ public final class RecordService {
                                      RecordLifecycle to, String kind, String reason) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
         return ctx.tx().execute(status -> {
-            ArchivalRecord current = lockVisible(actor, recordId, expectedVersion);
+            ArchivalRecord current = lockSeen(actor, recordId, expectedVersion);
             if (current.lifecycle() != from) {
                 throw new RuleViolationException("The Record is " + current.lifecycle().name().toLowerCase() + ".");
             }
@@ -222,48 +228,6 @@ public final class RecordService {
         });
     }
 
-    /**
-     * Bulk reclassification (D3-11, BI-007): every selected Record, or none. Each Record keeps its identity and
-     * gets its own Change History entry; an unknown, hidden or deleted Record rolls the whole change back.
-     */
-    public int reclassify(Actor actor, List<UUID> recordIds, String classificationCode, String reason) {
-        AccessPolicy.require(actor, Permission.EDIT_RECORDS);
-        List<UUID> ids = List.copyOf(new LinkedHashSet<>(recordIds));
-        if (ids.isEmpty()) {
-            throw new RuleViolationException("Select at least one Record.");
-        }
-        if (ids.size() > BULK_LIMIT) {
-            throw new RuleViolationException("At most " + BULK_LIMIT + " Records can be reclassified at once.");
-        }
-        Integer changed = ctx.tx().execute(status -> {
-            String code = vocabularies.requireUsable(Vocabulary.CLASSIFICATION, classificationCode, null);
-            int n = 0;
-            for (UUID id : ids) {
-                ArchivalRecord current = ctx.records().lock(id).filter(r -> RecordAccess.canSee(actor, r))
-                        .orElseThrow(() -> new NotFoundException(NOT_FOUND));
-                if (current.lifecycle() != RecordLifecycle.ACTIVE) {
-                    throw new RuleViolationException(current.friendlyId() + " is in recoverable deletion.");
-                }
-                if (java.util.Objects.equals(current.classificationCode(), code)) {
-                    continue;
-                }
-                ArchivalRecordRepository.RecordFields before = fieldsOf(current);
-                ArchivalRecordRepository.RecordFields after = new ArchivalRecordRepository.RecordFields(code,
-                        before.summary(), before.sourceId(), before.sourceLocator(), before.recordDateText(),
-                        before.filingDateText(), before.transcription(), before.restriction());
-                if (!ctx.records().update(id, current.version(), after)) {
-                    throw new ConflictException(NOT_FOUND);
-                }
-                ctx.recorder().record(actor, ArchivalRecordRepository.OBJECT_TYPE, id, ChangeKinds.CORRECTED, List.of(
-                        FieldChange.of("classification", FieldClass.CORRECTABLE, current.classificationCode(), code)),
-                        reason == null || reason.isBlank() ? "Bulk reclassification" : reason);
-                n++;
-            }
-            return n;
-        });
-        return changed == null ? 0 : changed;
-    }
-
     // ---- File links ------------------------------------------------------------------------------
 
     public RecordFileLink linkFile(Actor actor, UUID recordId, long expectedVersion, UUID fileId, String page, String note) {
@@ -276,7 +240,7 @@ public final class RecordService {
             if (file.lifecycle() == FileLifecycle.DESTROYED) {
                 throw new RuleViolationException("A destroyed File cannot be linked.");
             }
-            if (!insertLink(actor, record, file, ctx.records().maxLinkSequence(recordId) + 1, p, n, null, null, null)) {
+            if (!insertLink(actor, record, file, ctx.records().maxLinkSequence(recordId) + 1, p, n, null)) {
                 throw new RuleViolationException(file.friendlyId() + " is already linked to " + record.friendlyId() + ".");
             }
             touch(record);
@@ -285,23 +249,20 @@ public final class RecordService {
     }
 
     /**
-     * Inserts a link and its history in the caller's transaction (also used by grouping and consolidation).
+     * Inserts a link and its history in the caller's transaction (also used by grouping).
      *
      * @return false if the File was already linked
      */
     boolean insertLink(Actor actor, ArchivalRecord record, ArchivalFile file, int sequence, String page, String note,
-                       UUID consolidationId, ArchivalFile carriedFrom, String reason) {
-        if (!ctx.records().insertLink(record.recordId(), file.fileId(), sequence, page, note, consolidationId,
-                carriedFrom == null ? null : carriedFrom.fileId(), ctx.clock().instant(), actor.userId())) {
+                       String reason) {
+        if (!ctx.records().insertLink(record.recordId(), file.fileId(), sequence, page, note, ctx.clock().instant(),
+                actor.userId())) {
             return false;
         }
-        List<FieldChange> changes = new ArrayList<>(List.of(
+        List<FieldChange> changes = List.of(
                 FieldChange.set("file", FieldClass.CORRECTABLE, file.friendlyId()),
                 FieldChange.set("sequence", FieldClass.CORRECTABLE, sequence),
-                FieldChange.set("page_designation", FieldClass.CORRECTABLE, page)));
-        if (carriedFrom != null) {
-            changes.add(FieldChange.set("carried_from", FieldClass.IMMUTABLE, carriedFrom.friendlyId()));
-        }
+                FieldChange.set("page_designation", FieldClass.CORRECTABLE, page));
         ctx.recorder().record(actor, ArchivalRecordRepository.OBJECT_TYPE, record.recordId(), "FILE_LINKED", changes, reason);
         return true;
     }
@@ -412,8 +373,19 @@ public final class RecordService {
 
     // ---- helpers ---------------------------------------------------------------------------------
 
-    /** The Record locked for this transaction, if the actor may see it and the version is current. */
+    /**
+     * The Record locked for a change in this transaction: the actor may see it, the version is current and it is
+     * ACTIVE (a deleted Record changes only by being restored, D3-12).
+     */
     ArchivalRecord lockVisible(Actor actor, UUID recordId, long expectedVersion) {
+        ArchivalRecord current = lockSeen(actor, recordId, expectedVersion);
+        if (current.lifecycle() != RecordLifecycle.ACTIVE) {
+            throw new RuleViolationException(current.friendlyId() + " is deleted; restore it before changing it.");
+        }
+        return current;
+    }
+
+    private ArchivalRecord lockSeen(Actor actor, UUID recordId, long expectedVersion) {
         ArchivalRecord current = ctx.records().lock(recordId).filter(r -> RecordAccess.canSee(actor, r))
                 .orElseThrow(() -> new NotFoundException(NOT_FOUND));
         if (current.version() != expectedVersion) {
@@ -436,7 +408,8 @@ public final class RecordService {
 
     static ArchivalRecordRepository.RecordFields fieldsOf(ArchivalRecord r) {
         return new ArchivalRecordRepository.RecordFields(r.classificationCode(), r.summary(), r.sourceId(),
-                r.sourceLocator(), r.recordDateText(), r.filingDateText(), r.transcription(), r.restriction());
+                r.sourceLocator(), r.recordDateText(), r.filingDateText(), r.transcriptionText(), r.abstractText(),
+                r.restriction());
     }
 
     private List<FieldChange> recordChanges(ArchivalRecordRepository.RecordFields b, ArchivalRecordRepository.RecordFields a) {
@@ -447,7 +420,8 @@ public final class RecordService {
                 FieldChange.of("source_locator", FieldClass.CORRECTABLE, b.sourceLocator(), a.sourceLocator()),
                 FieldChange.of("record_date_as_written", FieldClass.CORRECTABLE, b.recordDateText(), a.recordDateText()),
                 FieldChange.of("filing_date_as_written", FieldClass.CORRECTABLE, b.filingDateText(), a.filingDateText()),
-                FieldChange.of("transcription", FieldClass.CORRECTABLE, b.transcription(), a.transcription()),
+                FieldChange.of("transcription_verbatim", FieldClass.CORRECTABLE, b.transcriptionText(), a.transcriptionText()),
+                FieldChange.of("abstract", FieldClass.CORRECTABLE, b.abstractText(), a.abstractText()),
                 FieldChange.of("restriction", FieldClass.CORRECTABLE, b.restriction(), a.restriction()));
     }
 

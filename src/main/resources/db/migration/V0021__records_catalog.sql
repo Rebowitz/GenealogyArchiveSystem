@@ -118,29 +118,42 @@ CREATE TRIGGER capture_session_identity_immutable
 CREATE TRIGGER capture_session_no_delete BEFORE DELETE ON capture_session FOR EACH ROW EXECUTE FUNCTION reject_removal();
 CREATE TRIGGER capture_session_no_truncate BEFORE TRUNCATE ON capture_session FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();
 
--- A File's place in one Capture Session (BI-001). Override columns are NULL to inherit the session's value; the
--- effective value is resolved when read, so correcting the session changes every File that does not override
--- it, and an override changes only its own File. The worksheet columns (D3-02) hold the researcher's grouping
--- marks, so a half-finished batch is ordinary saved state (R-005). The association is correctable (removable).
+-- A File's place in one Capture Session (BI-001; plan section 10.2). Each overridable context field has a mode:
+-- INHERIT (use the session's value, resolved when read), VALUE (this File's own value) or BLANK (explicitly not
+-- known for this File, even if the session has a value). Correcting the session changes the effective context of
+-- every File that inherits; an override changes only its own File. The worksheet columns (D3-02) hold the
+-- researcher's grouping marks, so a half-finished batch is ordinary saved state (R-005). The association is
+-- correctable (a File not yet grouped can be removed from its session).
 CREATE TABLE file_capture_context (
     file_id                    uuid        PRIMARY KEY REFERENCES archival_file (file_id),
     capture_session_id         uuid        NOT NULL REFERENCES capture_session (capture_session_id),
     sequence_number            integer     NOT NULL CHECK (sequence_number >= 1),
+    repository_mode            text        NOT NULL DEFAULT 'INHERIT' CHECK (repository_mode IN ('INHERIT', 'VALUE', 'BLANK')),
     override_repository_id     uuid        REFERENCES repository (repository_id),
+    source_mode                text        NOT NULL DEFAULT 'INHERIT' CHECK (source_mode IN ('INHERIT', 'VALUE', 'BLANK')),
     override_source_id         uuid        REFERENCES source (source_id),
+    capture_date_mode          text        NOT NULL DEFAULT 'INHERIT' CHECK (capture_date_mode IN ('INHERIT', 'VALUE', 'BLANK')),
     override_capture_date      date,
+    researcher_mode            text        NOT NULL DEFAULT 'INHERIT' CHECK (researcher_mode IN ('INHERIT', 'VALUE', 'BLANK')),
     override_researcher        text        CHECK (override_researcher IS NULL OR length(btrim(override_researcher)) BETWEEN 1 AND 200),
+    equipment_method_mode      text        NOT NULL DEFAULT 'INHERIT' CHECK (equipment_method_mode IN ('INHERIT', 'VALUE', 'BLANK')),
     override_equipment_method  text        CHECK (override_equipment_method IS NULL OR length(btrim(override_equipment_method)) BETWEEN 1 AND 500),
-    override_note              text        CHECK (override_note IS NULL OR length(btrim(override_note)) BETWEEN 1 AND 2000),
     start_new_record           boolean     NOT NULL DEFAULT false,
     record_group               text        CHECK (record_group IS NULL OR length(btrim(record_group)) BETWEEN 1 AND 100),
     page_designation           text        CHECK (page_designation IS NULL OR length(btrim(page_designation)) BETWEEN 1 AND 50),
     classification_code        text        REFERENCES record_classification (code),
     applied_record_id          uuid,
+    applied_run_id             uuid,
     added_at                   timestamptz NOT NULL,
     added_by                   uuid        REFERENCES app_user (user_id),
     row_version                bigint      NOT NULL DEFAULT 1 CHECK (row_version >= 1),
-    CONSTRAINT file_capture_context_sequence UNIQUE (capture_session_id, sequence_number) DEFERRABLE INITIALLY IMMEDIATE
+    CONSTRAINT file_capture_context_sequence UNIQUE (capture_session_id, sequence_number) DEFERRABLE INITIALLY IMMEDIATE,
+    CHECK ((repository_mode = 'VALUE') = (override_repository_id IS NOT NULL)),
+    CHECK ((source_mode = 'VALUE') = (override_source_id IS NOT NULL)),
+    CHECK ((capture_date_mode = 'VALUE') = (override_capture_date IS NOT NULL)),
+    CHECK ((researcher_mode = 'VALUE') = (override_researcher IS NOT NULL)),
+    CHECK ((equipment_method_mode = 'VALUE') = (override_equipment_method IS NOT NULL)),
+    CHECK ((applied_record_id IS NULL) = (applied_run_id IS NULL))
 );
 CREATE INDEX file_capture_context_session ON file_capture_context (capture_session_id, sequence_number);
 CREATE TRIGGER file_capture_context_identity_immutable
@@ -148,3 +161,25 @@ CREATE TRIGGER file_capture_context_identity_immutable
     FOR EACH ROW EXECUTE FUNCTION reject_identity_change('file_id', 'capture_session_id', 'added_at', 'added_by');
 CREATE TRIGGER file_capture_context_no_truncate
     BEFORE TRUNCATE ON file_capture_context FOR EACH STATEMENT EXECUTE FUNCTION reject_removal();
+
+-- Once grouped, a row's application is permanent: it cannot be undone or re-pointed, and a grouped row cannot be
+-- removed from its session (its Record links are corrected on the Record instead).
+CREATE FUNCTION file_capture_context_applied_final() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.applied_record_id IS NOT NULL THEN
+            RAISE EXCEPTION 'File % has been grouped in its capture session and cannot be removed from it', OLD.file_id
+                USING ERRCODE = 'integrity_constraint_violation';
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF OLD.applied_record_id IS NOT NULL AND (NEW.applied_record_id IS DISTINCT FROM OLD.applied_record_id
+            OR NEW.applied_run_id IS DISTINCT FROM OLD.applied_run_id) THEN
+        RAISE EXCEPTION 'The grouping of File % is permanent', OLD.file_id USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER file_capture_context_applied_final
+    BEFORE UPDATE OR DELETE ON file_capture_context FOR EACH ROW EXECUTE FUNCTION file_capture_context_applied_final();

@@ -29,7 +29,8 @@ public final class ArchivalRecordRepository {
 
     private static final String RECORD_SELECT = """
             SELECT r.record_id, r.friendly_number, r.classification_code, r.summary, r.source_id, r.capture_session_id,
-                   r.source_locator, r.record_date_text, r.filing_date_text, r.transcription, r.restriction, r.lifecycle,
+                   r.source_locator, r.record_date_text, r.filing_date_text, r.transcription_text, r.abstract_text,
+                   r.restriction, r.lifecycle,
                    r.created_at, coalesce(u.username, 'command line') AS created_by_label, r.row_version
               FROM gas.archival_record r
               LEFT JOIN gas.app_user u ON u.user_id = r.created_by
@@ -38,16 +39,15 @@ public final class ArchivalRecordRepository {
     private static final RowMapper<ArchivalRecord> RECORD = (rs, n) -> new ArchivalRecord(Rows.uuid(rs, "record_id"),
             friendlyIdOf(rs.getLong("friendly_number")), rs.getString("classification_code"), rs.getString("summary"),
             Rows.uuid(rs, "source_id"), Rows.uuid(rs, "capture_session_id"), rs.getString("source_locator"),
-            rs.getString("record_date_text"), rs.getString("filing_date_text"), rs.getString("transcription"),
-            Restriction.valueOf(rs.getString("restriction")), RecordLifecycle.valueOf(rs.getString("lifecycle")),
+            rs.getString("record_date_text"), rs.getString("filing_date_text"), rs.getString("transcription_text"),
+            rs.getString("abstract_text"), Restriction.valueOf(rs.getString("restriction")), RecordLifecycle.valueOf(rs.getString("lifecycle")),
             Rows.instant(rs, "created_at"), rs.getString("created_by_label"), rs.getLong("row_version"));
 
-    private static final String LINK_COLUMNS =
-            "record_id, file_id, sequence_number, page_designation, note, consolidation_id, carried_from_file_id, linked_at";
+    private static final String LINK_COLUMNS = "record_id, file_id, sequence_number, page_designation, note, linked_at";
 
     private static final RowMapper<RecordFileLink> LINK = (rs, n) -> new RecordFileLink(Rows.uuid(rs, "record_id"),
             Rows.uuid(rs, "file_id"), rs.getInt("sequence_number"), rs.getString("page_designation"), rs.getString("note"),
-            Rows.uuid(rs, "consolidation_id"), Rows.uuid(rs, "carried_from_file_id"), Rows.instant(rs, "linked_at"));
+            Rows.instant(rs, "linked_at"));
 
     private static final String ROLE_COLUMNS = "role_id, record_id, role_code, party_as_written, note, sequence_number, row_version";
 
@@ -77,20 +77,21 @@ public final class ArchivalRecordRepository {
 
     /** Values of a Record's correctable fields. */
     public record RecordFields(String classificationCode, String summary, UUID sourceId, String sourceLocator,
-                               String recordDateText, String filingDateText, String transcription,
-                               Restriction restriction) {
+                               String recordDateText, String filingDateText, String transcriptionText,
+                               String abstractText, Restriction restriction) {
     }
 
     public void insertRecord(UUID id, long number, RecordFields f, UUID captureSessionId, Instant at, UUID by) {
         jdbc.sql("""
                 INSERT INTO gas.archival_record (record_id, friendly_number, classification_code, summary, source_id,
-                    capture_session_id, source_locator, record_date_text, filing_date_text, transcription, restriction,
-                    created_at, created_by)
-                VALUES (:id, :n, :cls, :summary, :source, :session, :locator, :rdate, :fdate, :tr, :restriction, :at, :by)
+                    capture_session_id, source_locator, record_date_text, filing_date_text, transcription_text,
+                    abstract_text, restriction, created_at, created_by)
+                VALUES (:id, :n, :cls, :summary, :source, :session, :locator, :rdate, :fdate, :tr, :ab, :restriction, :at, :by)
                 """).param("id", id).param("n", number).param("cls", f.classificationCode()).param("summary", f.summary())
                 .param("source", f.sourceId()).param("session", captureSessionId).param("locator", f.sourceLocator())
-                .param("rdate", f.recordDateText()).param("fdate", f.filingDateText()).param("tr", f.transcription())
-                .param("restriction", f.restriction().name()).param("at", Rows.param(at)).param("by", by).update();
+                .param("rdate", f.recordDateText()).param("fdate", f.filingDateText()).param("tr", f.transcriptionText())
+                .param("ab", f.abstractText()).param("restriction", f.restriction().name()).param("at", Rows.param(at))
+                .param("by", by).update();
     }
 
     public Optional<ArchivalRecord> find(UUID id) {
@@ -122,12 +123,14 @@ public final class ArchivalRecordRepository {
     public boolean update(UUID id, long expectedVersion, RecordFields f) {
         return jdbc.sql("""
                 UPDATE gas.archival_record SET classification_code = :cls, summary = :summary, source_id = :source,
-                       source_locator = :locator, record_date_text = :rdate, filing_date_text = :fdate, transcription = :tr,
-                       restriction = :restriction, row_version = row_version + 1
+                       source_locator = :locator, record_date_text = :rdate, filing_date_text = :fdate,
+                       transcription_text = :tr, abstract_text = :ab, restriction = :restriction,
+                       row_version = row_version + 1
                  WHERE record_id = :id AND row_version = :v
                 """).param("cls", f.classificationCode()).param("summary", f.summary()).param("source", f.sourceId())
                 .param("locator", f.sourceLocator()).param("rdate", f.recordDateText()).param("fdate", f.filingDateText())
-                .param("tr", f.transcription()).param("restriction", f.restriction().name()).param("id", id)
+                .param("tr", f.transcriptionText()).param("ab", f.abstractText())
+                .param("restriction", f.restriction().name()).param("id", id)
                 .param("v", expectedVersion).update() == 1;
     }
 
@@ -198,15 +201,12 @@ public final class ArchivalRecordRepository {
     }
 
     /** @return false if the File is already linked to the Record */
-    public boolean insertLink(UUID recordId, UUID fileId, int sequence, String page, String note, UUID consolidationId,
-                              UUID carriedFrom, Instant at, UUID by) {
+    public boolean insertLink(UUID recordId, UUID fileId, int sequence, String page, String note, Instant at, UUID by) {
         return jdbc.sql("""
-                INSERT INTO gas.record_file (record_id, file_id, sequence_number, page_designation, note, consolidation_id,
-                    carried_from_file_id, linked_at, linked_by)
-                VALUES (:r, :f, :seq, :page, :note, :cons, :carried, :at, :by) ON CONFLICT (record_id, file_id) DO NOTHING
+                INSERT INTO gas.record_file (record_id, file_id, sequence_number, page_designation, note, linked_at, linked_by)
+                VALUES (:r, :f, :seq, :page, :note, :at, :by) ON CONFLICT (record_id, file_id) DO NOTHING
                 """).param("r", recordId).param("f", fileId).param("seq", sequence).param("page", page).param("note", note)
-                .param("cons", consolidationId).param("carried", carriedFrom).param("at", Rows.param(at)).param("by", by)
-                .update() == 1;
+                .param("at", Rows.param(at)).param("by", by).update() == 1;
     }
 
     public boolean updateLink(UUID recordId, UUID fileId, int sequence, String page, String note) {
