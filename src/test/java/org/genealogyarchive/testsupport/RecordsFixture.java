@@ -66,6 +66,14 @@ public final class RecordsFixture implements AutoCloseable {
                 Restriction.RESTRICTED, "test restriction");
     }
 
+    /** An archived File received into a given upload batch, with the given restriction, by {@code actor}. */
+    public ArchivalFile batchFile(Actor actor, UUID batch, Restriction restriction) {
+        counter++;
+        var op = fx.receive(actor, batch, fx.nextKey(), "batch-" + counter + ".tif",
+                ("synthetic batch image " + counter).getBytes(StandardCharsets.UTF_8), restriction, null, null);
+        return fx.file(fx.process(op.operationId()).fileId());
+    }
+
     public List<ArchivalFile> files(int n) {
         List<ArchivalFile> out = new ArrayList<>();
         for (int i = 0; i < n; i++) {

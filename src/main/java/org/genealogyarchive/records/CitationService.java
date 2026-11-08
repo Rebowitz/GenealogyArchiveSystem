@@ -65,7 +65,9 @@ public final class CitationService {
         return ctx.tx().execute(status -> {
             String source = sourceId == null ? null : ctx.catalog().findSource(sourceId).map(Source::friendlyId)
                     .orElseThrow(() -> new NotFoundException("The source"));
-            ArchivalRecord cited = recordId == null ? null : ctx.records().find(recordId)
+            // GAS-P3-006: the cited Record is locked (as deleting it locks it), so it cannot be deleted between this
+            // check and the insert.
+            ArchivalRecord cited = recordId == null ? null : ctx.records().lock(recordId)
                     .filter(r -> RecordAccess.canSee(actor, r)).orElseThrow(() -> new NotFoundException("The record"));
             if (cited != null && cited.lifecycle() != RecordLifecycle.ACTIVE) {
                 throw new RuleViolationException(cited.friendlyId() + " is deleted; restore it before citing it.");
@@ -93,6 +95,16 @@ public final class CitationService {
         String n = Texts.optional(note, "The note", 2000, true);
         return ctx.tx().execute(status -> {
             Citation current = get(actor, citationId);
+            if (current.recordId() != null) {
+                // ADR-0011 s.7 (GAS-P3-006): while the cited Record is deleted, nothing about it changes except
+                // restoring it - its Citations included. Locked so a concurrent delete waits for this change.
+                ArchivalRecord parent = ctx.records().lock(current.recordId()).filter(r -> RecordAccess.canSee(actor, r))
+                        .orElseThrow(() -> new NotFoundException(NOT_FOUND));
+                if (parent.lifecycle() != RecordLifecycle.ACTIVE) {
+                    throw new RuleViolationException(parent.friendlyId()
+                            + " is deleted; restore it before changing its Citations.");
+                }
+            }
             if (current.version() != expectedVersion) {
                 throw new ConflictException(NOT_FOUND);
             }

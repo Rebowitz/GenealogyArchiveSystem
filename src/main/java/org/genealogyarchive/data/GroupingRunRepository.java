@@ -66,6 +66,12 @@ public final class GroupingRunRepository {
                 .list();
     }
 
+    /** The Files a run applied (its permanent marks on the worksheet rows). */
+    public List<UUID> appliedFiles(UUID runId) {
+        return jdbc.sql("SELECT file_id FROM gas.file_capture_context WHERE applied_run_id = :run ORDER BY file_id")
+                .param("run", runId).query((rs, n) -> Rows.uuid(rs, "file_id")).list();
+    }
+
     /** Records the planned row count once planning is done. */
     public void planned(UUID runId, int rowsPlanned, int rowsUngrouped, int rowsHeld, int groupsHeld) {
         jdbc.sql("""
@@ -91,6 +97,14 @@ public final class GroupingRunRepository {
                  WHERE run_id = :run AND state = 'RUNNING'
                 """).param("a", rowsApplied).param("cr", created ? 1 : 0)
                 .param("ex", !created && chunkNumber == 1 ? 1 : 0).param("run", runId).update();
+    }
+
+    /** Counts a group held during the run (it became dependent on something the starter may not see). */
+    public void held(UUID runId, int rows) {
+        jdbc.sql("""
+                UPDATE gas.grouping_run SET rows_held = rows_held + :r, groups_held = groups_held + :g
+                 WHERE run_id = :run AND state = 'RUNNING'
+                """).param("r", rows).param("g", rows > 0 ? 1 : 0).param("run", runId).update();
     }
 
     public void conflicted(UUID runId, int rows) {

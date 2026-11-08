@@ -200,12 +200,17 @@ class GroupingIT {
         for (GroupingFaults.Point point : GroupingFaults.Point.values()) {
             Scenario sc = threeGroups();
             GroupingService faulty = rx.grouping(crashAt(point, point == GroupingFaults.Point.AFTER_PLAN
-                    || point == GroupingFaults.Point.BEFORE_FINISH ? 0 : 1));
+                    || point == GroupingFaults.Point.BEFORE_FINISH || point == GroupingFaults.Point.BEFORE_PLAN ? 0 : 1));
             assertThatThrownBy(() -> faulty.apply(rx.admin, sc.session().captureSessionId()))
                     .as(point.name()).isInstanceOf(Crash.class);
-            List<GroupingRun> runs = rx.records().grouping().runs(rx.admin, sc.session().captureSessionId());
-            assertThat(runs).hasSize(1);
-            assertThat(runs.get(0).state()).isEqualTo(GroupingRun.State.INTERRUPTED);
+            List<GroupingRunView> runs = rx.records().grouping().runs(rx.admin, sc.session().captureSessionId());
+            if (point == GroupingFaults.Point.BEFORE_PLAN) {
+                // Nothing is recorded before planning (GAS-P3-005): a crash there leaves no run at all.
+                assertThat(runs).isEmpty();
+            } else {
+                assertThat(runs).hasSize(1);
+                assertThat(runs.get(0).state()).isEqualTo(GroupingRun.State.INTERRUPTED);
+            }
 
             GroupingRun replay = rx.records().grouping().apply(rx.admin, sc.session().captureSessionId());
             assertThat(replay.state()).isEqualTo(GroupingRun.State.COMPLETED);

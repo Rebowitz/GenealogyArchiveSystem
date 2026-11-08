@@ -166,10 +166,20 @@ public final class CaptureSessionService {
 
     // ---- membership ------------------------------------------------------------------------------
 
-    /** Adds the visible, not-destroyed Files of an upload batch, in ingestion order. */
+    /**
+     * Adds the Files of an upload batch that the actor may see, in ingestion order (GAS-P3-002). Files the actor
+     * may not see are not candidates at all, so no count in the result (added, already in a session, not
+     * available) can reveal how many restricted Files the batch holds. Explicitly entered IDs keep the
+     * hidden-equals-nonexistent rule instead ({@link #addByFriendlyIds}).
+     */
     public AddResult addBatch(Actor actor, UUID sessionId, UUID batchId) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
-        return addFiles(actor, sessionId, ctx.sessions().filesOfBatch(batchId));
+        List<UUID> visible = ctx.sessions().filesOfBatch(batchId).stream()
+                .filter(id -> ctx.files().find(id).filter(f -> RecordAccess.canSee(actor, f)).isPresent())
+                .toList();
+        Counts c = add(actor, sessionId, visible);
+        // A File restricted between the filter above and the insert is neither added nor counted (GAS-P3-002).
+        return new AddResult(c.added(), c.taken(), c.destroyed());
     }
 
     /**
@@ -233,21 +243,34 @@ public final class CaptureSessionService {
      * were destroyed, are counted as not available - exactly like IDs that do not exist.
      */
     public AddResult addFiles(Actor actor, UUID sessionId, List<UUID> fileIds) {
+        Counts c = add(actor, sessionId, fileIds);
+        return new AddResult(c.added(), c.taken(), c.destroyed() + c.hidden());
+    }
+
+    /** What an add did; {@code hidden} counts Files the actor may not see (or that do not exist). */
+    private record Counts(int added, int taken, int destroyed, int hidden) {
+    }
+
+    private Counts add(Actor actor, UUID sessionId, List<UUID> fileIds) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
         if (fileIds.size() > ADD_LIMIT) {
             throw new RuleViolationException("At most " + ADD_LIMIT + " Files can be added at once.");
         }
-        AddResult result = ctx.tx().execute(status -> {
+        return ctx.tx().execute(status -> {
             CaptureSession session = ctx.sessions().lock(sessionId).orElseThrow(() -> new NotFoundException(NOT_FOUND));
             int sequence = ctx.sessions().maxSequence(sessionId);
             int added = 0;
             int taken = 0;
-            int unavailable = 0;
+            int destroyed = 0;
+            int hidden = 0;
             for (UUID fileId : new LinkedHashSet<>(fileIds)) {
-                Optional<ArchivalFile> file = ctx.files().find(fileId)
-                        .filter(f -> RecordAccess.canSee(actor, f) && f.lifecycle() != FileLifecycle.DESTROYED);
+                Optional<ArchivalFile> file = ctx.files().find(fileId).filter(f -> RecordAccess.canSee(actor, f));
                 if (file.isEmpty()) {
-                    unavailable++;
+                    hidden++;
+                    continue;
+                }
+                if (file.get().lifecycle() == FileLifecycle.DESTROYED) {
+                    destroyed++;
                     continue;
                 }
                 if (!ctx.sessions().addRow(fileId, sessionId, sequence + 1, ctx.clock().instant(), actor.userId())) {
@@ -262,9 +285,8 @@ public final class CaptureSessionService {
                 ctx.recorder().record(actor, ArchivalFileRepository.OBJECT_TYPE, fileId, "CAPTURE_SESSION_SET", List.of(
                         FieldChange.set("capture_session", FieldClass.CORRECTABLE, session.friendlyId())), null);
             }
-            return new AddResult(added, taken, unavailable);
+            return new Counts(added, taken, destroyed, hidden);
         });
-        return result;
     }
 
     /** Removes a File from its session (only before it has been grouped into a Record). */
@@ -272,8 +294,12 @@ public final class CaptureSessionService {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
         ctx.tx().executeWithoutResult(status -> {
             ArchivalFile file = visibleFile(actor, fileId);
-            CaptureRow row = ctx.sessions().lockRow(fileId).orElseThrow(() -> new NotFoundException("The session entry"));
-            CaptureSession session = ctx.sessions().lock(row.captureSessionId()).orElseThrow();
+            // Lock order session -> row, as in adding, saving marks and grouping (no lock-order inversion).
+            UUID sessionOfRow = ctx.sessions().row(fileId).map(CaptureRow::captureSessionId)
+                    .orElseThrow(() -> new NotFoundException("The session entry"));
+            CaptureSession session = ctx.sessions().lock(sessionOfRow).orElseThrow();
+            CaptureRow row = ctx.sessions().lockRow(fileId).filter(r -> r.captureSessionId().equals(sessionOfRow))
+                    .orElseThrow(() -> new ConflictException("The session entry"));
             if (row.version() != expectedVersion) {
                 throw new ConflictException("The session entry");
             }
@@ -308,7 +334,7 @@ public final class CaptureSessionService {
                     overridden, blanked);
             String method = pick(row.equipmentMethodMode(), row.overrideEquipmentMethod(), s.equipmentMethod(),
                     "equipment_method", overridden, blanked);
-            return new EffectiveContext(s, row, Optional.ofNullable(repo).flatMap(id -> ctx.catalog().findRepository(id)),
+            return new EffectiveContext(s, forReader(actor, row), Optional.ofNullable(repo).flatMap(id -> ctx.catalog().findRepository(id)),
                     Optional.ofNullable(source).flatMap(id -> ctx.catalog().findSource(id)), date, researcher, method,
                     Set.copyOf(overridden), Set.copyOf(blanked));
         });
@@ -361,13 +387,13 @@ public final class CaptureSessionService {
             overrideChanges(changes, "capture_equipment_method", before.equipmentMethod().mode(),
                     clean.equipmentMethod().mode(), before.equipmentMethod().value(), clean.equipmentMethod().value());
             if (changes.stream().noneMatch(FieldChange::changed)) {
-                return row;
+                return forReader(actor, row);
             }
             if (!ctx.sessions().updateOverrides(fileId, expectedVersion, clean)) {
                 throw new ConflictException("The session entry");
             }
             ctx.recorder().record(actor, ArchivalFileRepository.OBJECT_TYPE, fileId, "CAPTURE_CONTEXT_CORRECTED", changes, reason);
-            return ctx.sessions().row(fileId).orElseThrow();
+            return forReader(actor, ctx.sessions().row(fileId).orElseThrow());
         });
     }
 
@@ -411,11 +437,21 @@ public final class CaptureSessionService {
         return new Worksheet(session, List.copyOf(page), from, to < visible.size());
     }
 
+    /**
+     * A row as the actor may see it (GAS-P3-001): the applied Record is named only when the actor may see that
+     * Record; a row grouped into a Record they cannot see shows only that it is grouped.
+     */
+    CaptureRow forReader(Actor actor, CaptureRow row) {
+        boolean recordVisible = row.appliedRecordId() != null && ctx.records().find(row.appliedRecordId())
+                .filter(r -> RecordAccess.canSee(actor, r)).isPresent();
+        return row.forReader(recordVisible);
+    }
+
     List<WorksheetRow> visibleRows(Actor actor, UUID sessionId) {
         List<WorksheetRow> out = new ArrayList<>();
         for (CaptureRow row : ctx.sessions().rows(sessionId)) {
             ctx.files().find(row.fileId()).filter(f -> RecordAccess.canSee(actor, f))
-                    .ifPresent(f -> out.add(new WorksheetRow(row, f)));
+                    .ifPresent(f -> out.add(new WorksheetRow(forReader(actor, row), f)));
         }
         return out;
     }

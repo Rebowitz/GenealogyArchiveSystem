@@ -49,7 +49,8 @@
                         <option th:each="t : ${classifications}" th:if="${t.code() != w.row().classificationCode()}"
                                 th:value="${t.code()}" th:text="${t.label()}">Deed</option>
                     </select></td>
-                    <td><a th:if="${done}" th:href="@{/records/{id}(id=${w.row().appliedRecordId()})}">Record</a>
+                    <td><a th:if="${done and w.row().appliedRecordId() != null}" th:href="@{/records/{id}(id=${w.row().appliedRecordId()})}">Record</a>
+                        <span th:if="${done and w.row().appliedRecordId() == null}" class="muted">Grouped</span>
                         <button th:if="${!done and canEdit}" type="submit" name="version" th:value="${w.row().version()}"
                                 th:formaction="@{/sessions/{id}/files/{f}/remove(id=${s.captureSessionId()}, f=${fid})}">Remove</button></td>
                 </tr>
@@ -93,9 +94,9 @@
                 <td th:text="${g.state()}">COMPLETED</td>
                 <td th:text="${g.rowsApplied()}">0</td>
                 <td th:text="${g.recordsCreated() + ' / ' + g.recordsExtended()}">0</td>
-                <td th:text="${g.rowsHeld()}">0</td>
-                <td th:text="${g.rowsConflicted()}">0</td>
-                <td th:text="${g.rowsUngrouped()}">0</td>
+                <td th:text="${g.rowsHeld() == null ? '-' : g.rowsHeld()}">0</td>
+                <td th:text="${g.rowsConflicted() == null ? '-' : g.rowsConflicted()}">0</td>
+                <td th:text="${g.rowsUngrouped() == null ? '-' : g.rowsUngrouped()}">0</td>
             </tr>
             </tbody>
         </table>

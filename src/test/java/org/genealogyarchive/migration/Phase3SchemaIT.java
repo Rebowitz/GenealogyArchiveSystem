@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * Phase 3 schema (V0021-V0022): an accepted Phase 2 database (V0020) with Files, a destroyed File's tombstone and a
+ * Phase 3 schema (V0021-V0023, V0023 from the first audit's GAS-P3-008): an accepted Phase 2 database (V0020) with Files, a destroyed File's tombstone and a
  * quarantine object upgrades cleanly with that data unchanged (plan section 10.7); Phase 3 adds only the
  * Repository/Source/Capture Session/Record/grouping tables (ADR-0011); identifiers and history are permanent;
  * vocabularies hold only spec-named seeds (D3-08).
@@ -118,7 +118,7 @@ class Phase3SchemaIT {
         SchemaMigrator.MigrationReport report = current.migrate();
 
         assertThat(report.fromVersion()).isEqualTo("0020");
-        assertThat(report.migrationsApplied()).as("V0021-V0022").isEqualTo(2);
+        assertThat(report.migrationsApplied()).as("V0021-V0023").isEqualTo(3);
         assertThat(current.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
         assertThat(new PostMigrationValidator(ds, current).validate()).isEmpty();
         for (int i = 0; i < PHASE_2_SNAPSHOTS.length; i++) {
@@ -302,6 +302,51 @@ class Phase3SchemaIT {
         execute("UPDATE grouping_run SET state = 'INTERRUPTED', finished_at = now()");
         assertThat(failure("UPDATE grouping_run SET state = 'RUNNING', finished_at = NULL")).contains("finished");
         assertThat(failure("DELETE FROM grouping_run")).contains("cannot be removed");
+    }
+
+    /**
+     * GAS-P3-008: once a row is applied, its worksheet marks are final at the database boundary; capture-context
+     * overrides stay correctable. Also: a V0022 database with an applied row upgrades to V0023 unchanged.
+     */
+    @Test
+    void appliedWorksheetMarksAreFinalInTheDatabase() throws Exception {
+        SchemaMigrator.upTo(ds, "0022").migrate();
+        seedFileInSession();
+        execute("UPDATE file_capture_context SET start_new_record = true, record_group = 'g1', page_designation = '227', "
+                + "classification_code = 'DEED'");
+        execute("INSERT INTO archival_record (record_id, friendly_number, created_at) VALUES "
+                + "('30000000-0000-4000-8000-000000000001', 1, now())");
+        execute("INSERT INTO grouping_run (run_id, capture_session_id, restricted_view, started_at) VALUES "
+                + "('90000000-0000-4000-8000-000000000001', '50000000-0000-4000-8000-000000000001', false, now())");
+        execute("UPDATE file_capture_context SET applied_record_id = '30000000-0000-4000-8000-000000000001', "
+                + "applied_run_id = '90000000-0000-4000-8000-000000000001'");
+        // V0022's trigger let these through (the defect).
+        execute("UPDATE file_capture_context SET page_designation = '228'");
+        execute("UPDATE file_capture_context SET page_designation = '227'");
+        List<String> before = query("SELECT * FROM gas.file_capture_context");
+
+        SchemaMigrator.MigrationReport report = new SchemaMigrator(ds).migrate();
+        assertThat(report.fromVersion()).isEqualTo("0022");
+        assertThat(report.migrationsApplied()).isEqualTo(1);
+        assertThat(query("SELECT * FROM gas.file_capture_context")).as("upgrade changes no row").isEqualTo(before);
+
+        for (String change : List.of("start_new_record = false", "record_group = 'rewritten'", "record_group = NULL",
+                "page_designation = '999'", "page_designation = NULL", "classification_code = 'DTRUST'",
+                "classification_code = NULL")) {
+            assertThat(failure("UPDATE file_capture_context SET " + change)).as(change).contains("permanent");
+        }
+        // Overrides of the capture context are not grouping marks and stay correctable.
+        execute("UPDATE file_capture_context SET researcher_mode = 'VALUE', override_researcher = 'A. Helper', "
+                + "row_version = row_version + 1");
+        execute("UPDATE file_capture_context SET researcher_mode = 'BLANK', override_researcher = NULL, "
+                + "capture_date_mode = 'VALUE', override_capture_date = '2026-10-02', row_version = row_version + 1");
+        assertThat(query("SELECT start_new_record, record_group, page_designation, classification_code, researcher_mode "
+                + "FROM gas.file_capture_context")).containsExactly("t|g1|227|DEED|BLANK");
+        // Unapplied rows keep editable marks.
+        execute("INSERT INTO file_capture_context (file_id, capture_session_id, sequence_number, added_at) VALUES "
+                + "('77777777-7777-4777-8777-777777777772', '50000000-0000-4000-8000-000000000001', 2, now())");
+        execute("UPDATE file_capture_context SET page_designation = '230', record_group = 'x' "
+                + "WHERE file_id = '77777777-7777-4777-8777-777777777772'");
     }
 
     private void seedFileInSession() throws Exception {

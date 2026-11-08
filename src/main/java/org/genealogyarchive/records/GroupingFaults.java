@@ -9,6 +9,8 @@ import java.util.UUID;
 public interface GroupingFaults {
 
     enum Point {
+        /** The request is validated and the session's grouping lock held; nothing is planned or recorded yet. */
+        BEFORE_PLAN,
         /** The run is recorded and planned; nothing has been applied. */
         AFTER_PLAN,
         /** Before a chunk's transaction begins. */

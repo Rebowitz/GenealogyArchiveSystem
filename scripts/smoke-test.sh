@@ -35,15 +35,13 @@ CONFIG="--config=$WORK/installation.yml"
 
 WEB=""
 WORKER=""
-fail() { echo "::error::smoke test: $*"; exit 1; }
+# shellcheck source=smoke-checks.sh
+. "scripts/smoke-checks.sh"   # fail, contains, require_output
 # A failed check must not leave the web or worker process holding the step's output open (it would hang the job).
 stop_background() {
   for p in $WEB $WORKER; do kill -TERM "$p" 2>/dev/null || true; done
 }
 trap stop_background EXIT
-# True if the text contains the fragment. Matching in the shell, not "producer | grep -q": under pipefail grep -q
-# exits at the first match and the still-writing producer then fails the pipeline, a timing-dependent false failure.
-contains() { case "$1" in *"$2"*) return 0;; *) return 1;; esac; }
 expect_exit() {
   local want="$1"; shift
   set +e; java -jar "$JAR" "$@" "$CONFIG"; local got=$?; set -e
@@ -90,7 +88,7 @@ expect_exit 0 init-volume --volume-id="$VOLUME_ID"
 expect_exit 5 init-volume --volume-id="$VOLUME_ID"     # a marker is never written twice
 [ -f "$WORK/volume-primary/.genealogy-archive-volume" ] || fail "volume marker not written"
 expect_exit 0 set-ingestion-volume --volume-id="$VOLUME_ID"
-contains "$(java -jar "$JAR" status "$CONFIG")" "Ingestion" || fail "status does not report the ingestion volume"
+require_output "Ingestion" "status does not report the ingestion volume" java -jar "$JAR" status "$CONFIG"
 
 java -jar "$JAR" serve "$CONFIG" &
 WEB=$!

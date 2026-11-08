@@ -13,12 +13,14 @@ import org.genealogyarchive.service.NotFoundException;
 import org.genealogyarchive.service.RuleViolationException;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -47,6 +49,11 @@ import java.util.UUID;
  * <p><b>Stopping part-way (R-005).</b> A run may be bounded to the rows up to and including one File, so a researcher
  * who has marked only the first part of a batch applies only that part; later rows stay unapplied, valid archived
  * material, until they are marked and applied.
+ * <p><b>Current authorization at commit (GAS-P3-004).</b> Each chunk transaction share-locks every File it applies
+ * and every applied row it continues from, and re-reads them: if any is no longer visible to the person applying
+ * (or a target Record is no longer visible or ACTIVE) the group's remaining work is held; if a File's lifecycle
+ * changed since planning, the group's remaining work is a conflict, left for the next run. Committed chunks stay;
+ * the group is not reported complete. Links are made with the freshly read File, never the planning snapshot.
  * <p>One run per session at a time (advisory lock); a run left RUNNING by a process that stopped is closed as
  * INTERRUPTED by the next one. Nothing here touches preservation originals.
  */
@@ -84,6 +91,8 @@ public final class GroupingService {
         UUID targetRecordId;
         boolean held;
         final List<PlanRow> rows = new ArrayList<>();
+        /** Applied rows this group continues from (rule 3); their visibility is re-checked at commit. */
+        final List<UUID> continuesFrom = new ArrayList<>();
 
         Group(String key) {
             this.key = key;
@@ -105,6 +114,13 @@ public final class GroupingService {
         }
     }
 
+    /** Thrown inside a chunk transaction to roll it back because the group now depends on something hidden. */
+    private static final class Hold extends RuntimeException {
+        Hold() {
+            super(null, null, false, false);
+        }
+    }
+
     /** Applies the whole worksheet. @return the run as recorded */
     public GroupingRun apply(Actor actor, UUID sessionId) {
         return apply(actor, sessionId, null);
@@ -119,12 +135,13 @@ public final class GroupingService {
     public GroupingRun apply(Actor actor, UUID sessionId, UUID throughFileId) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
         sessions.get(actor, sessionId);
+        Integer cutoffSequence = null;
         if (throughFileId != null) {
-            boolean ok = ctx.sessions().row(throughFileId).filter(r -> r.captureSessionId().equals(sessionId)).isPresent()
-                    && ctx.files().find(throughFileId).filter(f -> RecordAccess.canSee(actor, f)).isPresent();
-            if (!ok) {
+            Optional<CaptureRow> cutoff = ctx.sessions().row(throughFileId).filter(r -> r.captureSessionId().equals(sessionId));
+            if (cutoff.isEmpty() || ctx.files().find(throughFileId).filter(f -> RecordAccess.canSee(actor, f)).isEmpty()) {
                 throw new NotFoundException("The file");
             }
+            cutoffSequence = cutoff.get().sequence();
         }
         Optional<OperationLocks.Held> held = ctx.locks().tryLock(LOCK_NAMESPACE, sessionId);
         if (held.isEmpty()) {
@@ -133,12 +150,14 @@ public final class GroupingService {
         try (OperationLocks.Held lock = held.get()) {
             UUID runId = GlobalIds.newId();
             boolean restrictedView = AccessPolicy.allows(actor, Permission.VIEW_RESTRICTED_FILES);
-            ctx.tx().executeWithoutResult(status -> {
-                ctx.runs().closeStale(sessionId, ctx.clock().instant());
-                ctx.runs().start(runId, sessionId, restrictedView, ctx.clock().instant(), actor.userId());
-            });
+            ctx.tx().executeWithoutResult(status -> ctx.runs().closeStale(sessionId, ctx.clock().instant()));
+            faults.reach(GroupingFaults.Point.BEFORE_PLAN, null, null, 0);
+            // Planned before the run is recorded: a cutoff missing from the snapshot rejects the request with
+            // nothing applied and no run started (GAS-P3-005).
+            Plan plan = plan(actor, sessionId, throughFileId, cutoffSequence);
+            ctx.tx().executeWithoutResult(status ->
+                    ctx.runs().start(runId, sessionId, restrictedView, ctx.clock().instant(), actor.userId()));
             try {
-                Plan plan = plan(actor, sessionId, throughFileId);
                 int planned = 0;
                 int heldRows = 0;
                 int heldGroups = 0;
@@ -179,15 +198,61 @@ public final class GroupingService {
         }
     }
 
-    /** Runs of the session the actor may see (a run started with restricted view only for those who have it). */
-    public List<GroupingRun> runs(Actor actor, UUID sessionId) {
+    /**
+     * Runs of the session as the actor may see them (GAS-P3-003). A reader who can see restricted Files and Records
+     * gets the stored accounting. Anyone else gets only runs started without restricted view, with counts
+     * recomputed from current visibility (visible applied Files, visible created/extended Records) and the
+     * unattributable counts omitted; a run with nothing visible left is not shown at all. Stored runs are never
+     * changed.
+     */
+    public List<GroupingRunView> runs(Actor actor, UUID sessionId) {
         sessions.get(actor, sessionId);
-        return ctx.runs().ofSession(sessionId, AccessPolicy.allows(actor, Permission.VIEW_RESTRICTED_FILES), 50);
+        boolean full = AccessPolicy.allows(actor, Permission.VIEW_RESTRICTED_FILES)
+                && RecordAccess.seesRestrictedRecords(actor);
+        List<GroupingRunView> out = new ArrayList<>();
+        for (GroupingRun run : ctx.runs().ofSession(sessionId, full, 50)) {
+            if (full) {
+                out.add(GroupingRunView.full(run));
+                continue;
+            }
+            int applied = (int) ctx.runs().appliedFiles(run.runId()).stream()
+                    .filter(id -> ctx.files().find(id).filter(f -> RecordAccess.canSee(actor, f)).isPresent()).count();
+            Set<UUID> created = new LinkedHashSet<>();
+            Set<UUID> touched = new LinkedHashSet<>();
+            for (var chunk : ctx.runs().chunks(run.runId())) {
+                touched.add(chunk.recordId());
+                if (chunk.created()) {
+                    created.add(chunk.recordId());
+                }
+            }
+            int visibleCreated = 0;
+            int visibleExtended = 0;
+            for (UUID recordId : touched) {
+                if (ctx.records().find(recordId).filter(r -> RecordAccess.canSee(actor, r)).isPresent()) {
+                    if (created.contains(recordId)) {
+                        visibleCreated++;
+                    } else {
+                        visibleExtended++;
+                    }
+                }
+            }
+            if (applied == 0 && visibleCreated == 0 && visibleExtended == 0) {
+                continue;
+            }
+            out.add(new GroupingRunView(run.runId(), run.state(), run.startedAt(), run.finishedAt(), applied,
+                    visibleCreated, visibleExtended, null, null, null));
+        }
+        return out;
     }
 
     // ---- planning --------------------------------------------------------------------------------
 
-    private Plan plan(Actor actor, UUID sessionId, UUID throughFileId) {
+    /**
+     * Plans over one snapshot of the session's rows. With a cutoff, the cutoff row must be in that snapshot, at
+     * the position validated when the request arrived, and visible; otherwise the request is rejected exactly as
+     * for a File that does not exist. A missing cutoff never means "apply everything" (GAS-P3-005).
+     */
+    private Plan plan(Actor actor, UUID sessionId, UUID throughFileId, Integer cutoffSequence) {
         Map<String, Group> groups = new LinkedHashMap<>();
         Group current = null;
         int ungrouped = 0;
@@ -196,15 +261,21 @@ public final class GroupingService {
             if (reachedBound) {
                 break;
             }
-            reachedBound = row.fileId().equals(throughFileId);
             ArchivalFile file = ctx.files().find(row.fileId()).orElseThrow();
             boolean visible = RecordAccess.canSee(actor, file);
+            if (row.fileId().equals(throughFileId)) {
+                if (!visible || cutoffSequence == null || row.sequence() != cutoffSequence) {
+                    throw new NotFoundException("The file");
+                }
+                reachedBound = true;
+            }
             if (row.applied()) {
                 // Rule 3: following blank rows continue this row's Record - held unless the actor may see both the
                 // row and the Record, and the Record is ACTIVE.
                 Optional<ArchivalRecord> rec = ctx.records().find(row.appliedRecordId());
                 Group g = groups.computeIfAbsent("r:" + row.appliedRecordId(), Group::new);
                 g.targetRecordId = row.appliedRecordId();
+                g.continuesFrom.add(row.fileId());
                 if (!visible || rec.isEmpty() || !RecordAccess.canSee(actor, rec.get())
                         || rec.get().lifecycle() != RecordLifecycle.ACTIVE) {
                     g.held = true;
@@ -243,6 +314,9 @@ public final class GroupingService {
                 }
             }
         }
+        if (throughFileId != null && !reachedBound) {
+            throw new NotFoundException("The file");
+        }
         return new Plan(List.copyOf(groups.values()), ungrouped);
     }
 
@@ -265,6 +339,13 @@ public final class GroupingService {
                 int remaining = rows.size() - from;
                 ctx.tx().executeWithoutResult(status -> ctx.runs().conflicted(runId, remaining));
                 return;
+            } catch (Hold h) {
+                // Count only the remaining rows the starter can still see, so the count reveals nothing hidden.
+                int visible = (int) rows.subList(from, rows.size()).stream()
+                        .filter(r -> ctx.files().find(r.row().fileId()).filter(f -> RecordAccess.canSee(actor, f)).isPresent())
+                        .count();
+                ctx.tx().executeWithoutResult(status -> ctx.runs().held(runId, visible));
+                return;
             }
             faults.reach(GroupingFaults.Point.AFTER_CHUNK, runId, g.key, number);
         }
@@ -272,12 +353,32 @@ public final class GroupingService {
 
     private void applyChunk(Actor actor, UUID sessionId, UUID runId, Group g, List<PlanRow> chunk, int number,
                             boolean last, String classification) {
+        // Lock order: session, worksheet rows, Files (shared), Record - the same order as every other path that
+        // takes more than one of these.
         CaptureSession session = ctx.sessions().lock(sessionId).orElseThrow(() -> new NotFoundException("The capture session"));
         for (PlanRow p : chunk) {
             CaptureRow now = ctx.sessions().lockRow(p.row().fileId()).orElse(null);
             if (now == null || now.applied() || now.version() != p.row().version()
                     || !now.captureSessionId().equals(sessionId)) {
                 throw new Conflict();
+            }
+        }
+        // GAS-P3-004: authorize with the Files as they are now, held stable until commit.
+        List<ArchivalFile> current = new ArrayList<>(chunk.size());
+        for (PlanRow p : chunk) {
+            ArchivalFile f = ctx.files().lockShared(p.row().fileId()).orElseThrow(Conflict::new);
+            if (!RecordAccess.canSee(actor, f)) {
+                throw new Hold();
+            }
+            if (f.lifecycle() != FileLifecycle.ACTIVE) {
+                throw new Conflict();
+            }
+            current.add(f);
+        }
+        for (UUID from : g.continuesFrom) {
+            ArchivalFile f = ctx.files().lockShared(from).orElseThrow(Conflict::new);
+            if (!RecordAccess.canSee(actor, f)) {
+                throw new Hold();
             }
         }
         UUID target = g.targetRecordId;
@@ -287,9 +388,10 @@ public final class GroupingService {
         ArchivalRecord record;
         boolean created = false;
         if (target != null) {
-            record = ctx.records().lock(target)
-                    .filter(r -> RecordAccess.canSee(actor, r) && r.lifecycle() == RecordLifecycle.ACTIVE)
-                    .orElseThrow(Conflict::new);
+            record = ctx.records().lock(target).orElseThrow(Conflict::new);
+            if (!RecordAccess.canSee(actor, record) || record.lifecycle() != RecordLifecycle.ACTIVE) {
+                throw new Hold();
+            }
         } else {
             record = records.insert(actor, new ArchivalRecordRepository.RecordFields(classification, null,
                     session.sourceId(), null, null, null, null, null, Restriction.NORMAL), sessionId);
@@ -298,8 +400,9 @@ public final class GroupingService {
         }
         String reason = "Courthouse grouping in " + session.friendlyId();
         int sequence = ctx.records().maxLinkSequence(record.recordId());
-        for (PlanRow p : chunk) {
-            if (records.insertLink(actor, record, p.file(), sequence + 1, p.row().pageDesignation(), null, reason)) {
+        for (int i = 0; i < chunk.size(); i++) {
+            PlanRow p = chunk.get(i);
+            if (records.insertLink(actor, record, current.get(i), sequence + 1, p.row().pageDesignation(), null, reason)) {
                 sequence++;
             }
             if (!ctx.sessions().markApplied(p.row().fileId(), p.row().version(), record.recordId(), runId)) {

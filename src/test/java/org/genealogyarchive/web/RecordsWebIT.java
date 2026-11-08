@@ -177,4 +177,42 @@ class RecordsWebIT {
         ok(admin, "/records/" + hidden.recordId(), "restricted summary");
         ok(admin, "/records/" + normal.recordId(), secret.friendlyId(), "SECRET-PAGE");
     }
+
+    /** GAS-P3-001/002/003 over HTTP: the session page never names a hidden Record or counts hidden Files. */
+    @Test
+    void gasP3_001_002_003_sessionPageDisclosesNothingHidden() {
+        org.genealogyarchive.records.CaptureSession session = rx.session("Audit session");
+        ArchivalFile visible = rx.file();
+        rx.add(session, java.util.List.of(visible));
+        rx.start(session, visible);
+        rx.records().grouping().apply(rx.editor, session.captureSessionId());
+        UUID record = rx.row(visible.fileId()).appliedRecordId();
+        ArchivalRecord rec = rx.records().records().get(rx.admin, record);
+        rx.records().records().correct(rx.admin, record, rec.version(), new RecordService.RecordInput(null, null, null,
+                null, null, null, null, null, Restriction.RESTRICTED), null);
+
+        for (String user : new String[]{"editor1", "viewer1"}) {
+            String page = signedIn(user).get("/sessions/" + session.captureSessionId()).body();
+            assertThat(page).contains(visible.friendlyId(), "Grouped")
+                    .doesNotContain(record.toString(), rec.friendlyId());
+            // GAS-P3-003: the run's Record is hidden now, but its visible File still counts.
+            assertThat(page).contains("Grouping runs");
+        }
+        String adminPage = signedIn("admin1").get("/sessions/" + session.captureSessionId()).body();
+        assertThat(adminPage).contains(record.toString());
+
+        // GAS-P3-002: a batch of only restricted Files answers like an empty batch.
+        UUID hiddenBatch = rx.fx.newBatch(rx.admin);
+        rx.batchFile(rx.admin, hiddenBatch, Restriction.RESTRICTED);
+        rx.batchFile(rx.admin, hiddenBatch, Restriction.RESTRICTED);
+        UUID emptyBatch = rx.fx.newBatch(rx.admin);
+        WebSession editor = signedIn("editor1");
+        String path = "/sessions/" + session.captureSessionId();
+        assertThat(editor.submit(path, path + "/files", Map.of("batchId", hiddenBatch.toString())).statusCode()).isEqualTo(302);
+        String afterHidden = editor.get(path).body();
+        assertThat(editor.submit(path, path + "/files", Map.of("batchId", emptyBatch.toString())).statusCode()).isEqualTo(302);
+        String afterEmpty = editor.get(path).body();
+        assertThat(afterHidden).contains("0 added; 0 already in a capture session; 0 not available.");
+        assertThat(afterEmpty).contains("0 added; 0 already in a capture session; 0 not available.");
+    }
 }

@@ -259,7 +259,9 @@ public final class RecordService {
         // The stored image sequence is never written to history: its gaps could reveal restricted Files (ADR-0011 s.8).
         List<FieldChange> changes = List.of(
                 FieldChange.set("file", FieldClass.CORRECTABLE, file.friendlyId()),
-                FieldChange.set("page_designation", FieldClass.CORRECTABLE, page));
+                FieldChange.set("page_designation", FieldClass.CORRECTABLE, page),
+                // GAS-P3-007: the researcher's note is part of the history from the start.
+                FieldChange.set("note", FieldClass.CORRECTABLE, note));
         ctx.recorder().record(actor, ArchivalRecordRepository.OBJECT_TYPE, record.recordId(), "FILE_LINKED", changes, reason);
         return true;
     }
@@ -342,7 +344,9 @@ public final class RecordService {
             ctx.records().removeLink(recordId, fileId);
             ctx.recorder().record(actor, ArchivalRecordRepository.OBJECT_TYPE, recordId, "FILE_UNLINKED", List.of(
                     FieldChange.of("file", FieldClass.CORRECTABLE, file.friendlyId(), null),
-                    FieldChange.of("page_designation", FieldClass.CORRECTABLE, link.pageDesignation(), null)), reason);
+                    FieldChange.of("page_designation", FieldClass.CORRECTABLE, link.pageDesignation(), null),
+                    // GAS-P3-007: the note survives in history after the association is removed.
+                    FieldChange.of("note", FieldClass.CORRECTABLE, link.note(), null)), reason);
             touch(record);
         });
     }

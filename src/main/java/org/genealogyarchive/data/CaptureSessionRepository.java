@@ -47,7 +47,7 @@ public final class CaptureSessionRepository {
             OverrideMode.valueOf(rs.getString("equipment_method_mode")), rs.getString("override_equipment_method"),
             rs.getBoolean("start_new_record"), rs.getString("record_group"), rs.getString("page_designation"),
             rs.getString("classification_code"), Rows.uuid(rs, "applied_record_id"), Rows.uuid(rs, "applied_run_id"),
-            rs.getLong("row_version"));
+            rs.getObject("applied_record_id") != null, rs.getLong("row_version"));
 
     private final JdbcClient jdbc;
 
