@@ -588,6 +588,87 @@ crashed pass) as deletion steps - the behaviour this round removes. They now sto
 deletion, once per object to delete, so the removal is still interrupted after every object it deletes; their
 assertions are unchanged.
 
+## Fifth V0019 audit correction (audited revision `4cf50b52a44a9bce2f99ab45cf7c7dea93e6cf17`)
+
+One MAJOR finding, reproduced from the source before any change:
+
+**A replacement inherited a release.** In `DestructionProcessor.classify`, an object at a location an Administrator
+released went to `Inventory.released` when its SHA-256 was among the released records' observed hashes - a hash
+alone. Final reconciliation then only asked whether *something* was present at each released location and reported
+it as the released object; completion went on to BYTES_REMOVED. An object put in its place after classification -
+different bytes or byte-identical - was reported as released, no unresolved record was made, and destruction
+completed. `refuse` (used by reconciliation and by the deletion helper) had the same hash-only branch, so an object
+that appeared at a location found empty, or one refused for deletion, could also inherit a release.
+
+### What evidence binds a release to an object
+
+A release (`unresolved_object`, resolution NOT_ARCHIVAL) records what was observed when the object was found:
+`observed_size`, `observed_sha256` and `detected_at` (the database time of the observation). Nothing else about the
+physical object was stored, and Java exposes no portable physical identity (`fileKey()` is null on Windows/NTFS).
+The evidence available without a schema change is therefore: the size and SHA-256 observed, the time of that
+observation, and the object's own filesystem times (creation and last modification) and, where the platform gives
+one, its file key.
+
+### Correction design (documented before coding)
+
+* **At classification**, an object counts as the released object only if all hold: no open record at the location;
+  it is a plain file; a release record at the location has exactly its size and SHA-256; the object's creation and
+  last-modification times are no later than that record's observation (an object created or rewritten after the
+  release's observation is not the object observed); and the location was not found empty earlier in the same pass.
+  Otherwise it is unresolved (a record is made, with its size and SHA-256 so an Administrator can attest or release
+  it).
+* **The classification's evidence is kept** in the inventory: size, SHA-256, creation and modification times and
+  file key (when present).
+* **At reconciliation** every released location is examined again: verified empty -> the released object is gone
+  (empty location, nothing to account for; noted); present with *exactly* the evidence kept at classification ->
+  the release still holds and is reported; anything else (different bytes, or byte-identical bytes with different
+  times or file key) -> a replacement: recorded unresolved, removal CLEANUP_INCOMPLETE; undeterminable (access
+  failure, volume not confirmed) -> incomplete.
+* **No inheritance anywhere else**: `refuse` no longer reports anything as released. An object that appears at a
+  location found empty in this pass - including a released object that disappeared and came back - is unresolved,
+  because the observed disappearance means hash and size cannot show it is the same object. This makes the fourth
+  round's "returning released object" case stricter: it is now unresolved until an Administrator decides again.
+* **Fault point** `BEFORE_RECONCILIATION`, after the deletions and before final reconciliation.
+
+**Conservative limits (stated, not hidden).** A byte-identical object placed with times no later than the
+observation (moved in from elsewhere, or copied with its timestamps preserved), where the platform gives no file
+key that changed, cannot be told from the released object: it is reported as released. Filesystem times are compared
+with the database's clock, so skew between the two can make a genuine released object look replaced (it then stays
+unresolved - the safe direction) or, if the database clock is ahead, let a replacement written within the skew pass.
+Stronger cross-pass evidence would need the observed times (and file key where available) stored with the record -
+a schema change (V0020) that is **not** made here; it is an owner decision.
+
+No migration.
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| Classification | `notTheReleasedObject`: no open record, plain file, exact size and SHA-256 of a release at the location (`UnresolvedObjectRepository.releasedAt`), creation and modification times no later than that release's observation, location not seen empty this pass. Otherwise unresolved; the new record carries the object's size and SHA-256. |
+| Evidence kept | `Inventory.released` maps each location to `Evidence` (size, SHA-256, creation time, modification time, file key). |
+| Reconciliation | `stillTheReleasedObject`: verified empty -> noted, nothing to account for; identical evidence -> reported; otherwise a replacement -> `refuse` (unresolved record, `not deleted` event); undeterminable -> incomplete. |
+| No inheritance | `refuse` has no released branch: an object appearing at an empty location, or refused at deletion, is always unresolved. |
+| Test seam | Fault point `BEFORE_RECONCILIATION`. |
+
+### Cross-path review: does final reconciliation rely on an earlier classification?
+
+| Category | Final accounting rests on |
+|---|---|
+| Released locations | Re-identification by the evidence kept at classification (this round). |
+| Verified-absent locations | A new probe at reconciliation; anything present -> unresolved (fourth round; never released now). |
+| Deleted by this pass | A new probe; anything present -> unresolved. |
+| Superseded generations, former locations | Classified with no claim: unresolved, released (evidence-bound) or absent; reconciled as above. |
+| Quarantine objects, attested objects, operation copies | Deleted only through `deleteAuthorized`, which re-checks the claim and the identified size and SHA-256; a refusal is unresolved, never released. |
+| Unresolved | Never reclassified within a pass; always blocks completion. |
+| Completion transaction | Records close DESTROYED / ABSENT from this pass's reconciliation; the window between reconciliation and the commit is part of the P2-E check-then-act limitation. |
+
+Regression tests (`v0024_*`): replacement before reconciliation with different and byte-identical bytes (unresolved,
+repeated passes, then released by an Administrator); unchanged released object (reported, completes) and vanished
+released object (noted, completes); replacement between passes, different and byte-identical; replacement with an
+integrity scan and a crash before reconciliation, then restarts; access denied and substituted volume marker at
+reconciliation (incomplete, then completes once examinable). The fourth round's returning-released-object test now
+expects the returning object to be unresolved until released again.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

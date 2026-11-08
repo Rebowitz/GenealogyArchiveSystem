@@ -254,3 +254,12 @@ attestation), the absence of any release or other open record, and the size and 
 otherwise it refuses and records the object as unresolved. A location verified empty is never a deletion instruction:
 anything that appears there is reconciled as unresolved (or reported, if it is a released object). The check-then-delete
 window remains the accepted P2-E limitation.
+
+### Release bound to the object (fifth V0019 audit)
+
+A release applies to the object it was made about, never to its path. An object is taken for a released object only
+with no open record at the location, exactly the released size and SHA-256, filesystem times no later than the
+release's observation, and no disappearance seen in the same pass; reconciliation reports it only if it still has
+exactly the evidence seen at classification. Anything else is unresolved. Without stored physical identity (no
+portable file key on Windows), a byte-identical object carrying old timestamps cannot be told from the released one;
+storing the observed times with the record would need a migration and is left to the owner.

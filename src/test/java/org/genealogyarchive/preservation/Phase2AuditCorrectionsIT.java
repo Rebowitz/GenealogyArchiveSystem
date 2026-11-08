@@ -3640,8 +3640,10 @@ class Phase2AuditCorrectionsIT {
 
     /**
      * Case 2: an object an Administrator released - here with the archive's own bytes - disappears, is verified absent
-     * by the inventory, and returns before deletion. The release stays authoritative: it is reported and left, never
-     * adopted or deleted. A different object returning in its place is a replacement: unresolved, removal incomplete.
+     * by the inventory, and returns before deletion. It is never deleted or adopted. Since the fifth V0019 audit a
+     * returning object is not taken for the released one either - its disappearance was observed, so neither its path
+     * nor its hash shows it is the same object - it is unresolved until an Administrator decides again. A different
+     * object returning in its place is likewise unresolved.
      */
     @Test
     void v0023_aReturningReleasedObjectIsNeverDeletedAndAReplacementStaysUnresolved() throws Exception {
@@ -3667,19 +3669,21 @@ class Phase2AuditCorrectionsIT {
             fx.preservation().destruction().process(op.operationId());
             FileOperation d = fx.operation(op.operationId());
             assertThat(s.former()).as("never deleted").hasBinaryContent(returning);
-            if (replacement) {
-                assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), returning);
-                UnresolvedObjectRepository.Entry v = openRecordAt(s.formerPath());
-                assertThat(v.unresolvedId()).isNotEqualTo(u.unresolvedId());
-                assertThat(v.observedSha256()).isEqualTo(sha256(returning));
-            } else {
-                assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
-                assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
-                assertThat(d.message()).contains("released", s.formerPath());
-                assertThat(openRecordExistsAt(s.formerPath())).isFalse();
-                assertThat(record(u.unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.NOT_ARCHIVAL);
-            }
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), returning);
+            UnresolvedObjectRepository.Entry v = openRecordAt(s.formerPath());
+            assertThat(v.unresolvedId()).isNotEqualTo(u.unresolvedId());
+            assertThat(v.observedSha256()).isEqualTo(sha256(returning));
+            assertThat(record(u.unresolvedId()).resolution()).as("the earlier release is kept as it was")
+                    .isEqualTo(UnresolvedObjectRepository.Resolution.NOT_ARCHIVAL);
             assertThat(s.current()).doesNotExist();
+            // A new decision resolves it: released again, it is left and the removal completes.
+            fx.preservation().unresolved().release(fx.admin, v.unresolvedId(), "inspected again: still the researcher's copy");
+            fx.preservation().destruction().process(op.operationId());
+            FileOperation done = fx.operation(op.operationId());
+            assertThat(done.state()).as(done.message()).isEqualTo(OperationState.COMPLETED);
+            assertThat(done.outcome()).isEqualTo("BYTES_REMOVED");
+            assertThat(s.former()).as("released, never deleted").hasBinaryContent(returning);
         }
     }
 
@@ -3768,5 +3772,201 @@ class Phase2AuditCorrectionsIT {
         assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
         assertThat(record(u.unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.ABSENT);
         assertThat(record(u.unresolvedId()).resolutionDetail()).contains("verified absent");
+    }
+    // ---- Fifth V0019 audit: a release is bound to its object, never to the path ---------------------------------
+
+    /** A destruction whose former location holds an object an Administrator released; the owned copy is gone. */
+    private record ReleasedAtFormer(FormerAndCurrent s, FileOperation op, UnresolvedObjectRepository.Entry release,
+                                    byte[] object) {
+    }
+
+    private ReleasedAtFormer releasedAtFormer(String name) throws Exception {
+        byte[] bytes = b("vestry minutes, " + name);
+        FormerAndCurrent s = formerAndCurrent(name, bytes);
+        byte[] object = b("a transcription a researcher keeps here, " + name);
+        Files.write(s.former(), object);
+        FileOperation op = destroy(s.file());
+        fx.preservation().destruction().process(op.operationId());
+        assertIncompleteAndUntouched(op.operationId(), s.file(), s.former(), object);
+        assertThat(s.current()).doesNotExist();
+        UnresolvedObjectRepository.Entry u = openRecordAt(s.formerPath());
+        UnresolvedObjectRepository.Entry released = fx.preservation().unresolved().release(fx.admin, u.unresolvedId(),
+                "inspected: a researcher's transcription, not the archive's");
+        assertThat(released.resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.NOT_ARCHIVAL);
+        return new ReleasedAtFormer(s, op, released, object);
+    }
+
+    /** A byte-identical replacement: a new file with the same bytes and a different (earlier) modification time. */
+    private static void replaceByteIdentical(Path location, byte[] bytes) throws IOException {
+        java.nio.file.attribute.FileTime was = Files.getLastModifiedTime(location);
+        SafeFiles.clearReadOnly(location);
+        Files.delete(location);
+        Files.write(location, bytes);
+        Files.setLastModifiedTime(location, java.nio.file.attribute.FileTime.from(was.toInstant().minusSeconds(5)));
+    }
+
+    private void assertCompletedLeaving(UUID destruction, ArchivalFile f, Path object, byte[] bytes) {
+        FileOperation d = fx.operation(destruction);
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(object).as("released, never deleted").hasBinaryContent(bytes);
+        assertThat(content(f).state()).isEqualTo(ContentState.DESTROYED);
+    }
+
+    /**
+     * Cases 1, 2, 5, 6, 7: the released object is classified, then replaced before final reconciliation - with
+     * different bytes, or with byte-identical bytes in a new file. The replacement never inherits the release: it is
+     * recorded unresolved (with its own size and SHA-256), never deleted, and BYTES_REMOVED stays blocked through
+     * repeated passes until an Administrator decides about it.
+     */
+    @Test
+    void v0024_aReleasedObjectReplacedBeforeReconciliationIsUnresolvedNotReported() throws Exception {
+        for (boolean identical : List.of(false, true)) {
+            ReleasedAtFormer r = releasedAtFormer("replaced-" + identical + ".tif");
+            byte[] replacement = identical ? r.object() : b("a different file put in its place");
+            fx.faults.arm(FaultPoints.Point.BEFORE_RECONCILIATION, id -> {
+                if (identical) {
+                    replaceByteIdentical(r.s().former(), replacement);
+                } else {
+                    SafeFiles.clearReadOnly(r.s().former());
+                    Files.write(r.s().former(), replacement);
+                }
+            });
+            fx.preservation().destruction().process(r.op().operationId());
+            assertIncompleteAndUntouched(r.op().operationId(), r.s().file(), r.s().former(), replacement);
+            UnresolvedObjectRepository.Entry v = openRecordAt(r.s().formerPath());
+            assertThat(v.unresolvedId()).isNotEqualTo(r.release().unresolvedId());
+            assertThat(v.observedSha256()).isEqualTo(sha256(replacement));
+            assertThat(v.observedSize()).isEqualTo((long) replacement.length);
+            assertThat(record(r.release().unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.NOT_ARCHIVAL);
+            assertThat(eventDetails(r.op().operationId())).anyMatch(e -> e.contains("not deleted")
+                    && e.contains("a release does not pass to a replacement") && e.contains(v.unresolvedId().toString())
+                    && e.contains(identical ? "filesystem identity" : "bytes differ"));
+            assertThat(fx.operation(r.op().operationId()).message()).doesNotContain("released as not this archive's");
+            for (int i = 0; i < 3; i++) {
+                fx.rebuild();
+                fx.preservation().recovery().runOnce();
+                fx.preservation().destruction().process(r.op().operationId());
+                assertIncompleteAndUntouched(r.op().operationId(), r.s().file(), r.s().former(), replacement);
+                assertThat(openRecordAt(r.s().formerPath()).unresolvedId()).as("one durable record").isEqualTo(v.unresolvedId());
+            }
+            fx.preservation().unresolved().release(fx.admin, v.unresolvedId(), "inspected: also not the archive's");
+            fx.preservation().recovery().runOnce();
+            assertCompletedLeaving(r.op().operationId(), r.s().file(), r.s().former(), replacement);
+        }
+    }
+
+    /**
+     * Case 3 and 4: the released object unchanged until reconciliation is reported and the removal completes; one that
+     * disappears before reconciliation leaves nothing to account for (noted) and the removal completes too.
+     */
+    @Test
+    void v0024_anUnchangedReleasedObjectIsReportedAndAVanishedOneIsNotedAsGone() throws Exception {
+        ReleasedAtFormer kept = releasedAtFormer("kept.tif");
+        fx.faults.arm(FaultPoints.Point.BEFORE_RECONCILIATION, id -> { });
+        fx.preservation().destruction().process(kept.op().operationId());
+        assertCompletedLeaving(kept.op().operationId(), kept.s().file(), kept.s().former(), kept.object());
+        assertThat(fx.operation(kept.op().operationId()).message()).contains("released", kept.s().formerPath());
+        assertThat(openRecordExistsAt(kept.s().formerPath())).isFalse();
+
+        ReleasedAtFormer gone = releasedAtFormer("gone.tif");
+        fx.faults.arm(FaultPoints.Point.BEFORE_RECONCILIATION, id -> Files.delete(gone.s().former()));
+        fx.preservation().destruction().process(gone.op().operationId());
+        FileOperation d = fx.operation(gone.op().operationId());
+        assertThat(d.state()).as(d.message()).isEqualTo(OperationState.COMPLETED);
+        assertThat(d.outcome()).isEqualTo("BYTES_REMOVED");
+        assertThat(gone.s().former()).doesNotExist();
+        assertThat(openRecordExistsAt(gone.s().formerPath())).isFalse();
+        assertThat(record(gone.release().unresolvedId()).resolution()).isEqualTo(UnresolvedObjectRepository.Resolution.NOT_ARCHIVAL);
+        assertThat(eventDetails(gone.op().operationId())).anyMatch(e -> e.contains("no longer there (verified absent)")
+                && e.contains(gone.s().formerPath()));
+    }
+
+    /**
+     * Replacement after a prior release, between passes: an object written after the release's observation - byte-
+     * identical or not - is not taken for the released object. It is recorded unresolved and blocks completion.
+     */
+    @Test
+    void v0024_anObjectReplacingAReleasedOneBetweenPassesIsUnresolved() throws Exception {
+        for (boolean identical : List.of(false, true)) {
+            ReleasedAtFormer r = releasedAtFormer("between-" + identical + ".tif");
+            byte[] replacement = identical ? r.object() : b("another file, written after the release");
+            SafeFiles.clearReadOnly(r.s().former());
+            Files.delete(r.s().former());
+            Files.write(r.s().former(), replacement);
+            fx.preservation().destruction().process(r.op().operationId());
+            assertIncompleteAndUntouched(r.op().operationId(), r.s().file(), r.s().former(), replacement);
+            assertThat(fx.operation(r.op().operationId()).message()).contains(r.s().formerPath(),
+                    identical ? "created or modified after the released object was observed"
+                            : "does not have the size and SHA-256 of the released object");
+            UnresolvedObjectRepository.Entry v = openRecordAt(r.s().formerPath());
+            assertThat(v.unresolvedId()).isNotEqualTo(r.release().unresolvedId());
+            assertThat(v.observedSha256()).isEqualTo(sha256(replacement));
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(r.op().operationId());
+            assertIncompleteAndUntouched(r.op().operationId(), r.s().file(), r.s().former(), replacement);
+            assertThat(openRecordAt(r.s().formerPath()).unresolvedId()).isEqualTo(v.unresolvedId());
+        }
+    }
+
+    /**
+     * Case 5 with crashes and an integrity scan: a replacement is made, a scan runs and the worker dies just before
+     * reconciliation. After every restart the replacement stays unresolved, untouched, and the removal incomplete.
+     */
+    @Test
+    void v0024_aReplacementBeforeReconciliationSurvivesScansCrashesAndRestarts() throws Exception {
+        ReleasedAtFormer r = releasedAtFormer("crash-replaced.tif");
+        byte[] replacement = b("a replacement placed while destruction ran");
+        fx.faults.arm(FaultPoints.Point.BEFORE_RECONCILIATION, id -> {
+            SafeFiles.clearReadOnly(r.s().former());
+            Files.write(r.s().former(), replacement);
+            fx.scan(fx.services(), "QUICK");
+            throw new ScriptedFaults.SimulatedCrash(FaultPoints.Point.BEFORE_RECONCILIATION);
+        });
+        assertThatThrownBy(() -> fx.preservation().destruction().process(r.op().operationId()))
+                .isInstanceOf(ScriptedFaults.SimulatedCrash.class);
+        assertThat(fx.operation(r.op().operationId()).outcome()).isNotEqualTo("BYTES_REMOVED");
+        assertThat(r.s().former()).hasBinaryContent(replacement);
+        for (int i = 0; i < 3; i++) {
+            fx.rebuild();
+            fx.preservation().recovery().runOnce();
+            fx.preservation().destruction().process(r.op().operationId());
+            assertIncompleteAndUntouched(r.op().operationId(), r.s().file(), r.s().former(), replacement);
+        }
+        assertThat(openRecordAt(r.s().formerPath()).observedSha256()).isEqualTo(sha256(replacement));
+    }
+
+    /**
+     * Filesystem access failure and configured-volume substitution at reconciliation: the released object cannot be
+     * re-identified, so the removal is incomplete (never BYTES_REMOVED on the earlier classification); once the
+     * location can be examined again on the right volume, the unchanged released object is reported and it completes.
+     */
+    @Test
+    void v0024_aReleasedObjectThatCannotBeReexaminedKeepsTheRemovalIncomplete() throws Exception {
+        for (boolean substituted : List.of(false, true)) {
+            ReleasedAtFormer r = releasedAtFormer("unexaminable-" + substituted + ".tif");
+            byte[][] marker = new byte[1][];
+            fx.faults.arm(FaultPoints.Point.BEFORE_RECONCILIATION, id -> {
+                if (substituted) {
+                    marker[0] = substituteMarker();
+                } else {
+                    fx.faults.denyAccess(r.s().former());
+                }
+            });
+            fx.preservation().destruction().process(r.op().operationId());
+            FileOperation d = fx.operation(r.op().operationId());
+            assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
+            assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
+            assertThat(d.message()).contains(r.s().formerPath(), "could not be checked");
+            if (substituted) {
+                restoreMarker(marker[0]);
+            } else {
+                fx.faults.restoreAccess(r.s().former());
+            }
+            assertThat(r.s().former()).hasBinaryContent(r.object());
+            fx.preservation().destruction().process(r.op().operationId());
+            assertCompletedLeaving(r.op().operationId(), r.s().file(), r.s().former(), r.object());
+        }
     }
 }

@@ -36,6 +36,8 @@ public interface FaultPoints {
         AFTER_INVENTORY,
         /** Destruction: after each known copy is deleted, before the next (GAS-P2-R01). */
         DURING_PHYSICAL_DELETE,
+        /** Destruction: deletions done, before final reconciliation of every location (fifth V0019 audit). */
+        BEFORE_RECONCILIATION,
         /** Repair: repaired generation committed, before the damaged copy is moved to quarantine. */
         BEFORE_QUARANTINE_MOVE,
         /** Any quarantine move: the object has been moved, before the move is recorded (GAS-P2-008). */

@@ -131,6 +131,18 @@ public final class UnresolvedObjectRepository {
                 """).param("v", volumeId).param("p", path).query(String.class).list();
     }
 
+    /**
+     * Every record an Administrator released (NOT_ARCHIVAL) at this location, with what was observed when each object
+     * was found: the evidence a later object must match before it is taken for the released one (fifth V0019 audit).
+     */
+    public List<Entry> releasedAt(UUID volumeId, String path) {
+        return jdbc.sql("SELECT " + COLUMNS + """
+                 FROM gas.unresolved_object
+                 WHERE volume_id = :v AND path = :p AND status = 'RESOLVED' AND resolution = 'NOT_ARCHIVAL'
+                 ORDER BY detected_at, unresolved_id
+                """).param("v", volumeId).param("p", path).query(ENTRY).list();
+    }
+
     /** Locks the record for the rest of the caller's transaction (decisions about it are serialised). */
     public Optional<Entry> lockForUpdate(UUID unresolvedId) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM gas.unresolved_object WHERE unresolved_id = :id FOR UPDATE")
