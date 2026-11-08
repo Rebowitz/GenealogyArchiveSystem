@@ -5,8 +5,8 @@
 | Audit | Phase 3 independent implementation, security, architecture and acceptance audit |
 | Audited head | `8b0f142487fc1ce8beee8759e20efddb458b5ca4` (tested implementation `6d71856`, CI run 42519342916) |
 | Verdict | **REVISIONS REQUIRED**: 4 BLOCKING, 4 MAJOR, 1 MINOR |
-| Corrected implementation head | `CORRECTED_SHA` |
-| CI evidence | `CI_EVIDENCE` |
+| Corrected implementation head | `3abd2f7` (all corrections and tests); verified at `8c5555c975cc9195581846f3cf94e0e3a5b1049f`, which adds only this report |
+| CI evidence | CI run **42533095750** on `8c5555c`: all four jobs passed (details below). The run on `3abd2f7` itself (42533012227) was cancelled by the report push; the code is identical. |
 | Status of every finding | **builder-corrected, pending independent verification**. Only Codex can close a finding, and only the owner can accept Phase 3. |
 
 **Scope.** These are corrections to the nine findings and the tests that demonstrate them. Nothing else changed:
@@ -101,7 +101,28 @@ The blocking findings were corrected first.
 | Residual limitation | None known. |
 
 ## Focused results and full CI evidence
-`FOCUSED_AND_CI`
+CI run **42533095750** on `8c5555c975cc9195581846f3cf94e0e3a5b1049f`. Each job's full log was inspected; the
+whole-workflow indicator was not relied on.
+
+| Job | Tests | Fail / Err / Skip | Phase3AuditCorrectionsIT | Phase3SchemaIT | GroupingIT | RecordsWebIT | Smoke-check helpers | Packaged smoke | Native service | Worker kill/restart |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ubuntu-24.04 / PostgreSQL 16 (128891518638) | 692 | 0 / 0 / 0 | 13 passed | 9 passed | 20 passed | 3 passed | all 6 cases passed | passed | systemd passed | `WorkerProcessKillIT` passed |
+| ubuntu-24.04 / PostgreSQL 18 (128891518300) | 692 | 0 / 0 / 0 | 13 passed | 9 passed | 20 passed | 3 passed | all 6 cases passed | passed | systemd passed | passed |
+| windows-2025 / PostgreSQL 16 (128891518546) | 692 | 0 / 0 / 0 | 13 passed | 9 passed | 20 passed | 3 passed | all 6 cases passed | passed | Windows service passed | passed |
+| windows-2025 / PostgreSQL 18 (128891518524) | 692 | 0 / 0 / 0 | 13 passed | 9 passed | 20 passed | 3 passed | all 6 cases passed | passed | Windows service passed | passed |
+
+Tests per job: 677 before the corrections, 692 after (+13 in `Phase3AuditCorrectionsIT`, +1 in `Phase3SchemaIT`, +1 in
+`RecordsWebIT`). All Phase 0–2 tests still run. So do the earlier Phase 3 tests: the 2,345-row and 1,001-row grouping,
+interruption and replay, capture-context inheritance and isolation, Citation identity and original locator,
+restriction traversal, and the V0020→Phase 3 upgrade.
+
+**Focused checks run locally before CI:**
+- V0023 applied to a local PostgreSQL 16 database holding an applied worksheet row: all four mark changes were
+  rejected; override and version updates were accepted.
+- `scripts/ci/smoke-checks-test.sh`: all 6 cases passed.
+- The defective status-check shape, reproduced in isolation, passed although the producer exited 7.
+
+The Java tests themselves run only in CI.
 
 ## Changes to earlier tests
 - `GroupingIT.replayAfterInterruptionAtEveryBoundaryCreatesNoDuplicates` iterates over every fault point, now including BEFORE_PLAN. For BEFORE_PLAN it expects no run row, because nothing is recorded before planning. For every other point the assertions are unchanged.

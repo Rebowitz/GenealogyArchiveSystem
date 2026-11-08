@@ -1,5 +1,13 @@
 # Phase 3 completion report — Repository, Source and Archival Records
 
+> **Audit history.** The first independent Codex audit of `8b0f142` returned **REVISIONS REQUIRED** with nine findings
+> (GAS-P3-001…009: 4 BLOCKING, 4 MAJOR, 1 MINOR). The builder's corrections are described in
+> [`PHASE-3-AUDIT-1-CORRECTIONS.md`](PHASE-3-AUDIT-1-CORRECTIONS.md). All nine are **builder-corrected, pending
+> independent verification**. The rest of this report describes the implementation as first submitted; the
+> correction report supersedes it where they differ: reader-projected worksheet rows and run summaries,
+> chunk-time authorization, cutoff validation, the Citation parent freeze, link-note history, V0023 and the
+> smoke status check. The corrected implementation was verified by CI run 42533095750 (692 tests per job).
+
 Prepared by the implementation agent for independent review. **Phase 3 is not accepted.** Formal acceptance
 requires an independent Codex audit, correction of confirmed findings and owner approval. The Phase 3 PR is a
 draft and has not been merged; no Phase 3 tag exists.
