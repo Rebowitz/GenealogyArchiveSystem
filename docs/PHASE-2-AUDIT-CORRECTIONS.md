@@ -669,6 +669,9 @@ integrity scan and a crash before reconciliation, then restarts; access denied a
 reconciliation (incomplete, then completes once examinable). The fourth round's returning-released-object test now
 expects the returning object to be unresolved until released again.
 
+Note: when a destruction is already CLEANUP_INCOMPLETE, a later incomplete pass records its reason as an operation
+event; the operation's `message` keeps the first reason. The tests read the events for later passes.
+
 ## Remaining limitations (unchanged scope decisions)
 
 Linux separation per unit with one account (B1); residual directory-swap race (P2-E); NAS fallback

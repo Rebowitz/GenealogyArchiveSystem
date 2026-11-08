@@ -3842,7 +3842,7 @@ class Phase2AuditCorrectionsIT {
             assertThat(eventDetails(r.op().operationId())).anyMatch(e -> e.contains("not deleted")
                     && e.contains("a release does not pass to a replacement") && e.contains(v.unresolvedId().toString())
                     && e.contains(identical ? "filesystem identity" : "bytes differ"));
-            assertThat(fx.operation(r.op().operationId()).message()).doesNotContain("released as not this archive's");
+            assertThat(eventDetails(r.op().operationId())).noneMatch(e -> e.contains("released as not this archive's"));
             for (int i = 0; i < 3; i++) {
                 fx.rebuild();
                 fx.preservation().recovery().runOnce();
@@ -3896,9 +3896,10 @@ class Phase2AuditCorrectionsIT {
             Files.write(r.s().former(), replacement);
             fx.preservation().destruction().process(r.op().operationId());
             assertIncompleteAndUntouched(r.op().operationId(), r.s().file(), r.s().former(), replacement);
-            assertThat(fx.operation(r.op().operationId()).message()).contains(r.s().formerPath(),
-                    identical ? "created or modified after the released object was observed"
-                            : "does not have the size and SHA-256 of the released object");
+            // A repeat of CLEANUP_INCOMPLETE is recorded as an operation event (the message keeps the first reason).
+            assertThat(eventDetails(r.op().operationId())).anyMatch(e -> e.contains(r.s().formerPath())
+                    && e.contains(identical ? "created or modified after the released object was observed"
+                            : "does not have the size and SHA-256 of the released object"));
             UnresolvedObjectRepository.Entry v = openRecordAt(r.s().formerPath());
             assertThat(v.unresolvedId()).isNotEqualTo(r.release().unresolvedId());
             assertThat(v.observedSha256()).isEqualTo(sha256(replacement));
@@ -3958,7 +3959,7 @@ class Phase2AuditCorrectionsIT {
             FileOperation d = fx.operation(r.op().operationId());
             assertThat(d.state()).as(d.message()).isEqualTo(OperationState.CLEANUP_INCOMPLETE);
             assertThat(d.outcome()).isNotEqualTo("BYTES_REMOVED");
-            assertThat(d.message()).contains(r.s().formerPath(), "could not be checked");
+            assertThat(eventDetails(r.op().operationId())).anyMatch(e -> e.contains(r.s().formerPath() + " (could not be checked)"));
             if (substituted) {
                 restoreMarker(marker[0]);
             } else {
