@@ -1,5 +1,10 @@
 # Phase 2 completion report — File Preservation
 
+> **Accepted.** Phase 2 was formally accepted by the owner on 2026-11-08 at
+> `464d2d0ac971b020679fa5d408e9490f0b89f0ee`; see
+> [`PHASE-2-ACCEPTANCE-AND-OPERATIONS-NOTES.md`](PHASE-2-ACCEPTANCE-AND-OPERATIONS-NOTES.md). The text below is
+> the original report, kept as written.
+
 Prepared by the implementation agent for independent review. **Phase 2 is not accepted.** Formal
 acceptance requires independent review, correction of confirmed findings and owner approval. The Phase 2
 PR has not been merged.
