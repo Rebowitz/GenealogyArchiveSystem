@@ -3,10 +3,10 @@ package org.genealogyarchive.web;
 import org.genealogyarchive.access.AccessPolicy;
 import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.access.Permission;
-import org.genealogyarchive.data.CaptureSessionRepository;
-import org.genealogyarchive.data.CaptureSessionRepository.FieldOverride;
 import org.genealogyarchive.history.HistoryService;
 import org.genealogyarchive.preservation.PreservationServices;
+import org.genealogyarchive.records.CaptureOverrides;
+import org.genealogyarchive.records.FieldOverride;
 import org.genealogyarchive.records.CaptureSession;
 import org.genealogyarchive.records.CaptureSessionService;
 import org.genealogyarchive.records.GroupingRun;
@@ -195,7 +195,7 @@ public class CaptureSessionController {
     @PostMapping("/files/{fileId}/capture-context")
     public String correctOverrides(@PathVariable UUID fileId, @RequestParam long version,
                                    @RequestParam Map<String, String> f, Authentication authentication) {
-        CaptureSessionRepository.Overrides o = new CaptureSessionRepository.Overrides(
+        CaptureOverrides o = new CaptureOverrides(
                 override(f, "repository", UUID::fromString),
                 override(f, "source", UUID::fromString),
                 override(f, "captureDate", LocalDate::parse),

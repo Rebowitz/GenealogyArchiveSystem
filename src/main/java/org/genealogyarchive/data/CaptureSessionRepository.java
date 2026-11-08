@@ -1,9 +1,11 @@
 package org.genealogyarchive.data;
 
 import org.genealogyarchive.identity.FriendlyId;
+import org.genealogyarchive.records.CaptureOverrides;
 import org.genealogyarchive.records.CaptureRow;
 import org.genealogyarchive.records.CaptureSession;
 import org.genealogyarchive.records.OverrideMode;
+import org.genealogyarchive.records.UploadBatchSummary;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -140,41 +142,7 @@ public final class CaptureSessionRepository {
                 .param("f", fileId).param("v", expectedVersion).update() == 1;
     }
 
-    /** One field's override: a mode, and a value present exactly in VALUE mode (plan section 10.2). */
-    public record FieldOverride<T>(OverrideMode mode, T value) {
-        public FieldOverride {
-            if ((mode == OverrideMode.VALUE) != (value != null)) {
-                throw new IllegalArgumentException("An override has a value exactly when its mode is VALUE");
-            }
-        }
-
-        public static <T> FieldOverride<T> inherit() {
-            return new FieldOverride<>(OverrideMode.INHERIT, null);
-        }
-
-        public static <T> FieldOverride<T> blank() {
-            return new FieldOverride<>(OverrideMode.BLANK, null);
-        }
-
-        public static <T> FieldOverride<T> of(T value) {
-            return new FieldOverride<>(OverrideMode.VALUE, value);
-        }
-    }
-
-    /** All of one File's overrides. */
-    public record Overrides(FieldOverride<UUID> repository, FieldOverride<UUID> source, FieldOverride<LocalDate> captureDate,
-                            FieldOverride<String> researcher, FieldOverride<String> equipmentMethod) {
-
-        public static Overrides of(CaptureRow r) {
-            return new Overrides(new FieldOverride<>(r.repositoryMode(), r.overrideRepositoryId()),
-                    new FieldOverride<>(r.sourceMode(), r.overrideSourceId()),
-                    new FieldOverride<>(r.captureDateMode(), r.overrideCaptureDate()),
-                    new FieldOverride<>(r.researcherMode(), r.overrideResearcher()),
-                    new FieldOverride<>(r.equipmentMethodMode(), r.overrideEquipmentMethod()));
-        }
-    }
-
-    public boolean updateOverrides(UUID fileId, long expectedVersion, Overrides o) {
+    public boolean updateOverrides(UUID fileId, long expectedVersion, CaptureOverrides o) {
         return jdbc.sql("""
                 UPDATE gas.file_capture_context SET repository_mode = :repoMode, override_repository_id = :repo,
                        source_mode = :sourceMode, override_source_id = :source,
@@ -223,16 +191,12 @@ public final class CaptureSessionRepository {
                 .param("b", batchId).query((rs, n) -> Rows.uuid(rs, "file_id")).list();
     }
 
-    /** A recent upload batch (no File counts: they could reveal restricted Files). */
-    public record BatchSummary(UUID batchId, Instant createdAt, String createdByLabel, String note) {
-    }
-
-    public List<BatchSummary> recentBatches(int limit) {
+    public List<UploadBatchSummary> recentBatches(int limit) {
         return jdbc.sql("""
                 SELECT b.batch_id, b.created_at, u.username, b.note
                   FROM gas.file_upload_batch b JOIN gas.app_user u ON u.user_id = b.created_by
                  ORDER BY b.created_at DESC LIMIT :n
-                """).param("n", limit).query((rs, n) -> new BatchSummary(Rows.uuid(rs, "batch_id"),
+                """).param("n", limit).query((rs, n) -> new UploadBatchSummary(Rows.uuid(rs, "batch_id"),
                         Rows.instant(rs, "created_at"), rs.getString("username"), rs.getString("note"))).list();
     }
 

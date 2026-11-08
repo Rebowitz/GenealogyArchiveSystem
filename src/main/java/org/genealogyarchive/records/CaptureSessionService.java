@@ -159,7 +159,7 @@ public final class CaptureSessionService {
         return history.forObject(actor, CaptureSessionRepository.OBJECT_TYPE, sessionId);
     }
 
-    public List<CaptureSessionRepository.BatchSummary> recentBatches(Actor actor) {
+    public List<UploadBatchSummary> recentBatches(Actor actor) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
         return ctx.sessions().recentBatches(50);
     }
@@ -336,10 +336,10 @@ public final class CaptureSessionService {
      * known" are never confused with a value. Correcting the session itself is recorded only in the session's
      * history: inheriting Files' history is never rewritten.
      */
-    public CaptureRow correctOverrides(Actor actor, UUID fileId, long expectedVersion, CaptureSessionRepository.Overrides o,
+    public CaptureRow correctOverrides(Actor actor, UUID fileId, long expectedVersion, CaptureOverrides o,
                                        String reason) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
-        CaptureSessionRepository.Overrides clean = new CaptureSessionRepository.Overrides(o.repository(), o.source(),
+        CaptureOverrides clean = new CaptureOverrides(o.repository(), o.source(),
                 o.captureDate(), text(o.researcher(), "The researcher", 200),
                 text(o.equipmentMethod(), "The equipment or method", 500));
         return ctx.tx().execute(status -> {
@@ -348,7 +348,7 @@ public final class CaptureSessionService {
             if (row.version() != expectedVersion) {
                 throw new ConflictException("The session entry");
             }
-            CaptureSessionRepository.Overrides before = CaptureSessionRepository.Overrides.of(row);
+            CaptureOverrides before = CaptureOverrides.of(row);
             List<FieldChange> changes = new ArrayList<>();
             overrideChanges(changes, "capture_repository", before.repository().mode(), clean.repository().mode(),
                     label(before.repository().value(), true), label(clean.repository().value(), true));
@@ -371,7 +371,7 @@ public final class CaptureSessionService {
         });
     }
 
-    private static CaptureSessionRepository.FieldOverride<String> text(CaptureSessionRepository.FieldOverride<String> o,
+    private static FieldOverride<String> text(FieldOverride<String> o,
                                                                     String what, int max) {
         if (o.mode() != OverrideMode.VALUE) {
             return o;
@@ -380,7 +380,7 @@ public final class CaptureSessionService {
         if (clean == null) {
             throw new RuleViolationException(what + " override needs a value; choose \"not known for this File\" instead.");
         }
-        return CaptureSessionRepository.FieldOverride.of(clean);
+        return FieldOverride.of(clean);
     }
 
     private static void overrideChanges(List<FieldChange> out, String field, OverrideMode modeBefore, OverrideMode modeAfter,

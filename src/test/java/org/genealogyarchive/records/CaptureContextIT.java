@@ -1,7 +1,5 @@
 package org.genealogyarchive.records;
 
-import org.genealogyarchive.data.CaptureSessionRepository.FieldOverride;
-import org.genealogyarchive.data.CaptureSessionRepository.Overrides;
 import org.genealogyarchive.history.ChangeRecord;
 import org.genealogyarchive.history.FieldChange;
 import org.genealogyarchive.preservation.ArchivalFile;
@@ -53,8 +51,8 @@ class CaptureContextIT {
         return rx.fx.services().history().forObject(rx.admin, "archival_file", f.fileId());
     }
 
-    private static Overrides inheritAll() {
-        return new Overrides(FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.inherit(),
+    private static CaptureOverrides inheritAll() {
+        return new CaptureOverrides(FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.inherit(),
                 FieldOverride.inherit(), FieldOverride.inherit());
     }
 
@@ -81,10 +79,10 @@ class CaptureContextIT {
         }
         ArchivalFile odd = files.get(7);
         ArchivalFile unknown = files.get(8);
-        sessions().correctOverrides(rx.editor, odd.fileId(), rx.row(odd.fileId()).version(), new Overrides(
+        sessions().correctOverrides(rx.editor, odd.fileId(), rx.row(odd.fileId()).version(), new CaptureOverrides(
                 FieldOverride.inherit(), FieldOverride.of(other.sourceId()), FieldOverride.inherit(),
                 FieldOverride.inherit(), FieldOverride.of("Flatbed scanner")), "page from the next book");
-        sessions().correctOverrides(rx.editor, unknown.fileId(), rx.row(unknown.fileId()).version(), new Overrides(
+        sessions().correctOverrides(rx.editor, unknown.fileId(), rx.row(unknown.fileId()).version(), new CaptureOverrides(
                 FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.blank(), FieldOverride.inherit(),
                 FieldOverride.inherit()), "date not known for this one");
 
@@ -113,10 +111,10 @@ class CaptureContextIT {
                 null, null, null, null));
         List<ArchivalFile> f = rx.files(3);
         sessions().addFiles(rx.editor, s.captureSessionId(), f.stream().map(ArchivalFile::fileId).toList());
-        sessions().correctOverrides(rx.editor, f.get(1).fileId(), rx.row(f.get(1).fileId()).version(), new Overrides(
+        sessions().correctOverrides(rx.editor, f.get(1).fileId(), rx.row(f.get(1).fileId()).version(), new CaptureOverrides(
                 FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.of("A. Helper"),
                 FieldOverride.inherit()), null);
-        sessions().correctOverrides(rx.editor, f.get(2).fileId(), rx.row(f.get(2).fileId()).version(), new Overrides(
+        sessions().correctOverrides(rx.editor, f.get(2).fileId(), rx.row(f.get(2).fileId()).version(), new CaptureOverrides(
                 FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.blank(),
                 FieldOverride.inherit()), null);
         int historyBefore = fileHistory(f.get(0)).size();
@@ -142,10 +140,10 @@ class CaptureContextIT {
         CaptureSession s = rx.session("Visit");
         ArchivalFile f = rx.file();
         rx.add(s, List.of(f));
-        sessions().correctOverrides(rx.editor, f.fileId(), rx.row(f.fileId()).version(), new Overrides(
+        sessions().correctOverrides(rx.editor, f.fileId(), rx.row(f.fileId()).version(), new CaptureOverrides(
                 FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.blank(),
                 FieldOverride.inherit()), null);
-        sessions().correctOverrides(rx.editor, f.fileId(), rx.row(f.fileId()).version(), new Overrides(
+        sessions().correctOverrides(rx.editor, f.fileId(), rx.row(f.fileId()).version(), new CaptureOverrides(
                 FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.of("not known"),
                 FieldOverride.inherit()), null);
         sessions().correctOverrides(rx.editor, f.fileId(), rx.row(f.fileId()).version(), inheritAll(), null);
@@ -165,7 +163,7 @@ class CaptureContextIT {
         ArchivalFile f = rx.file();
         rx.add(s, List.of(f));
         assertThatThrownBy(() -> sessions().correctOverrides(rx.editor, f.fileId(), rx.row(f.fileId()).version(),
-                new Overrides(FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.inherit(),
+                new CaptureOverrides(FieldOverride.inherit(), FieldOverride.inherit(), FieldOverride.inherit(),
                         FieldOverride.of("   "), FieldOverride.inherit()), null)).isInstanceOf(RuleViolationException.class);
         assertThatThrownBy(() -> new FieldOverride<>(OverrideMode.BLANK, "x")).isInstanceOf(IllegalArgumentException.class);
     }
