@@ -11,7 +11,7 @@ You are implementing the Genealogy Archive System. Work from the repository spec
 1. Archival invariants.
 2. `docs/ACCEPTANCE-SPEC.md`.
 3. `docs/BUILD-SPEC.md`.
-4. The currently approved phase brief, such as `docs/PHASE-0.md`.
+4. The currently approved phase brief (`docs/PHASE-N.md` or `docs/PHASE-N-PLAN.md`) and its `docs/PHASE-N-DECISIONS.md`.
 5. Existing implementation details that do not conflict with the above.
 6. Implementation convenience.
 
@@ -50,7 +50,7 @@ Do not add microservices, Kubernetes, distributed databases, an authoritative gr
 
 ### Working method
 1. Read this file.
-2. Read `docs/PHASE-0.md`.
+2. Read the currently approved phase brief (`docs/PHASE-N.md` or `docs/PHASE-N-PLAN.md`, highest approved N) and its `docs/PHASE-N-DECISIONS.md`.
 3. Read referenced portions of `docs/BUILD-SPEC.md` and `docs/ACCEPTANCE-SPEC.md`.
 4. Inspect the existing repository before choosing libraries or adding infrastructure.
 5. Implement only the approved phase/task.
@@ -61,7 +61,7 @@ Do not add microservices, Kubernetes, distributed databases, an authoritative gr
 10. Do not silently broaden scope or perform unrelated refactoring.
 
 ### Required completion report
-Report:
+Write the full report to `docs/PHASE-N-COMPLETION.md` (N = current phase), covering:
 1. What was implemented.
 2. Schema/migration changes.
 3. File/storage behavior affected.
@@ -70,5 +70,12 @@ Report:
 6. Known limitations.
 7. Unresolved specification questions.
 8. Deviations from specification.
+
+### Reporting in chat
+- Full issue details (severity, cause, fix, status, commit) go in `docs/issues.md`.
+- In chat: one line per issue (severity, summary, fixed or not), plus the completion
+  report path and the test pass/fail totals per platform.
+- Explain in chat, in two or three sentences each: BLOCKING items, unresolved
+  specification questions, and deviations from specification. These need an owner decision.
 
 **Final rule:** Preserve the evidence, preserve the uncertainty, preserve the provenance, preserve the identity, and keep the researcher's ordinary work simple.
