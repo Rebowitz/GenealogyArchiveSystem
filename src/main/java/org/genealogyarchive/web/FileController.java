@@ -13,6 +13,7 @@ import org.genealogyarchive.preservation.IngestionService;
 import org.genealogyarchive.preservation.OperationState;
 import org.genealogyarchive.preservation.PreservationServices;
 import org.genealogyarchive.preservation.Restriction;
+import org.genealogyarchive.records.RecordsServices;
 import org.genealogyarchive.service.NotFoundException;
 import org.genealogyarchive.service.RuleViolationException;
 import org.springframework.http.HttpStatus;
@@ -54,11 +55,14 @@ import java.util.UUID;
 public class FileController {
 
     private final PreservationServices preservation;
+    private final RecordsServices records;
     private final HistoryService history;
     private final WebActors actors;
 
-    public FileController(PreservationServices preservation, HistoryService history, WebActors actors) {
+    public FileController(PreservationServices preservation, RecordsServices records, HistoryService history,
+                          WebActors actors) {
         this.preservation = preservation;
+        this.records = records;
         this.history = history;
         this.actors = actors;
     }
@@ -86,6 +90,12 @@ public class FileController {
         model.addAttribute("view", view);
         model.addAttribute("f", view.file());
         model.addAttribute("history", preservation.files().history(actor, fileId, history));
+        // Phase 3: the Records using this File and its capture context (both filtered for the reader).
+        model.addAttribute("uses", records.records().usesOfFile(actor, fileId));
+        model.addAttribute("capture", records.sessions().context(actor, fileId).orElse(null));
+        model.addAttribute("repositories", records.catalog().repositories(actor));
+        model.addAttribute("sources", records.catalog().sources(actor, null));
+        model.addAttribute("canEditRecords", AccessPolicy.allows(actor, Permission.EDIT_RECORDS));
         model.addAttribute("canEdit", AccessPolicy.allows(actor, Permission.EDIT_FILES));
         model.addAttribute("canIngest", AccessPolicy.allows(actor, Permission.INGEST_FILES));
         model.addAttribute("canDestroy", AccessPolicy.allows(actor, Permission.DESTROY_FILES));

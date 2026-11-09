@@ -1,0 +1,47 @@
+# Reference Acceptance Archive (BUILD-SPEC s.64) - synthetic courthouse deed book, Phase 3.
+# Every name, place, date and image here is invented. No real genealogy data, people or records.
+# Version-controlled and permanent: later phases extend it (Persons in Phase 4, evidence in Phase 5, ...);
+# never edit an entry in a way that changes what an existing test expects.
+repository:
+  name: Example County Clerk of Court (synthetic)
+  location: Example Courthouse, Example Town (synthetic)
+source:
+  title: Deed Book 12 (synthetic)
+  type: Deed book
+  volume: Book 12
+  creator: County Court of Example County (synthetic)          # O-004: creator is not the Repository
+  accessProvider: Example Online Image Service (synthetic)     # O-006
+  jurisdiction: Example County (synthetic)                     # O-005
+session:
+  title: Courthouse visit - Deed Book 12 (synthetic)
+  captureDate: "2026-10-01"
+  researcher: Synthetic Researcher
+  method: Phone camera on a copy stand
+# Images in capture order with the researcher's worksheet marks (D3-02).
+images:
+  - {key: img01, start: true, page: "227", class: DEED}     # Deed A begins (R-001)
+  - {key: img02, page: "227"}                               # second capture of page 227 (R-002, F-005)
+  - {key: img03, page: "228"}
+  - {key: img04, page: "229"}                               # end of Deed A; also the start of Deed B (R-003)
+  - {key: img05, start: true, page: "230", class: DEED}     # Deed B continues
+  - {key: img06, start: true, page: "231", class: DTRUST}   # Deed of trust D
+  - {key: img07, group: plat, start: true, page: "232"}     # explicit group wins over Start New Record (R-004)
+  - {key: img08, page: "233"}                               # continues the plat group
+  - {key: img09, group: Plat, page: "240"}                  # same group, not adjacent, different case
+  - {key: img10}                                            # unmarked: researcher stopped after img09 (R-005)
+  - {key: img11}
+  - {key: img12}
+# The researcher applies grouping only through this image (R-005).
+applyThrough: img09
+# Links made by hand after grouping.
+extraLinks:
+  - {record: B, image: img04, page: "229", note: lower half of the page}
+expected:
+  records:
+    A: {first: img01, class: DEED, images: [img01, img02, img03, img04], pages: ["227", "227", "228", "229"]}
+    B: {first: img05, class: DEED, images: [img05, img04], pages: ["230", "229"]}
+    D: {first: img06, class: DTRUST, images: [img06], pages: ["231"]}
+    P: {first: img07, class: null, images: [img07, img08, img09], pages: ["232", "233", "240"]}
+  unapplied: [img10, img11, img12]
+  # R-006: the researcher later corrects Deed A from DEED to DTRUST.
+  reclassify: {record: A, to: DTRUST}

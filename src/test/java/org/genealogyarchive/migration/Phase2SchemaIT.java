@@ -47,12 +47,14 @@ class Phase2SchemaIT {
         SchemaMigrator current = new SchemaMigrator(ds);
         assertThat(current.status().state()).isEqualTo(SchemaStatus.State.BEHIND);
 
-        SchemaMigrator.MigrationReport report = current.migrate();
+        // Pinned to the accepted Phase 2 schema (V0020); later phases are checked in their own schema ITs.
+        SchemaMigrator phase2 = SchemaMigrator.upTo(ds, "0020");
+        SchemaMigrator.MigrationReport report = phase2.migrate();
 
         assertThat(report.fromVersion()).isEqualTo("0008");
         assertThat(report.migrationsApplied()).as("V0009-V0020").isEqualTo(12);
-        assertThat(current.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
-        assertThat(new PostMigrationValidator(ds, current).validate()).isEmpty();
+        assertThat(phase2.status().state()).isEqualTo(SchemaStatus.State.CURRENT);
+        assertThat(new PostMigrationValidator(ds, phase2).validate()).isEmpty();
     }
 
     private static String allMessages(Throwable t) {
@@ -92,7 +94,7 @@ class Phase2SchemaIT {
         SchemaMigrator.upTo(ds, "0016").migrate();
         execute("INSERT INTO storage_volume (volume_id, name, purpose, required) VALUES ('" + VOLUME + "', 'v', 'originals', true)");
         operationClaiming("22222222-2222-4222-8222-222222222222", "originals/aa/bb/one.g2");
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, "0020").migrate();
         assertThat(version()).isEqualTo("0020");
         try (Connection c = ds.getConnection(); Statement st = c.createStatement();
              ResultSet rs = st.executeQuery("SELECT owner_kind, operation_id FROM gas.physical_location_owner")) {
@@ -137,7 +139,7 @@ class Phase2SchemaIT {
             assertThat(rs.next()).isFalse();
         }
         execute("UPDATE file_operation SET target_created = false WHERE operation_id = '" + unrecorded + "'");
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, "0020").migrate();
         assertThat(version()).isEqualTo("0020");
     }
 
@@ -164,7 +166,7 @@ class Phase2SchemaIT {
                 + "reason, state, source_size, source_sha256) VALUES (gen_random_uuid(), '" + VOLUME + "', '" + operation + "', '"
                 + content + "', 'originals/44/44/c.g1', 'quarantine/x/damaged-g1', 'DAMAGED_GENERATION', 'INTENDED', 3, repeat('cd', 32))");
 
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, "0020").migrate();
         assertThat(version()).isEqualTo("0020");
         try (Connection c = ds.getConnection(); Statement st = c.createStatement()) {
             try (ResultSet rs = st.executeQuery("SELECT evidence_basis FROM gas.quarantine_object")) {
@@ -213,7 +215,7 @@ class Phase2SchemaIT {
                 + VOLUME + "', 'originals/aa/aa/released', '" + operation + "', 'OBJECT_AT_VACATED_LOCATION', 3, " + sha
                 + ", 'legacy released', 'RESOLVED', 'NOT_ARCHIVAL', 'released', clock_timestamp())");
 
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, "0020").migrate();
         assertThat(version()).isEqualTo("0020");
         try (Connection c = ds.getConnection(); Statement st = c.createStatement();
              ResultSet rs = st.executeQuery("SELECT identity_evidence, decision_evidence, observed_created_at, observed_sha256, "
@@ -264,7 +266,8 @@ class Phase2SchemaIT {
 
     @Test
     void phase2AddsOnlyFilePreservationTables() {
-        new SchemaMigrator(ds).migrate();
+        // Phase 2 ends at V0020; Phase 3 tables are asserted by Phase3SchemaIT.
+        SchemaMigrator.upTo(ds, "0020").migrate();
         assertThat(tables()).containsExactlyInAnyOrder(
                 "relation flyway_schema_history kind=r",
                 "relation schema_identity kind=r",

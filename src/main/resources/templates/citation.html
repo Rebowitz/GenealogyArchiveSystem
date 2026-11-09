@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head(${c.friendlyId()})}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1 th:text="${c.friendlyId()}">CT00001</h1>
+    <p th:if="${c.lifecycle().name() == 'DELETED'}"><strong>Deleted</strong> (recoverable).</p>
+    <dl class="facts">
+        <dt>Source cited</dt>
+        <dd><a th:if="${source != null}" th:href="@{/sources/{id}(id=${source.sourceId()})}"
+               th:text="${source.friendlyId() + ' ' + source.title()}">S</a>
+            <span th:if="${source == null and viaSource != null}">none stored; via the Record:
+                <a th:href="@{/sources/{id}(id=${viaSource.sourceId()})}" th:text="${viaSource.friendlyId() + ' ' + viaSource.title()}">S</a></span>
+            <span th:if="${source == null and viaSource == null}" class="muted">(none)</span></dd>
+        <dt>Record cited</dt>
+        <dd><a th:if="${record != null}" th:href="@{/records/{id}(id=${record.recordId()})}" th:text="${record.friendlyId()}">R</a>
+            <span th:if="${record == null}" class="muted">(none)</span></dd>
+        <dt>Locator as first entered</dt><dd th:text="${c.originalLocator() ?: '(none)'}">p. 227</dd>
+        <dt>Current locator</dt><dd th:text="${c.locator() ?: '(none)'}">p. 227</dd>
+        <dt>Citation as entered</dt><dd th:text="${c.citationText() ?: '(none)'}">text</dd>
+        <dt>Note</dt><dd th:text="${c.note() ?: '(none)'}">note</dd>
+        <dt>Created</dt><dd th:text="${c.createdAt()}">when</dd>
+        <dt>Global ID</dt><dd><code th:text="${c.citationId()}">id</code></dd>
+    </dl>
+    <section th:if="${canEdit}">
+        <h2>Correct</h2>
+        <p class="muted">What the Citation refers to never changes; to cite something else, add a new Citation.</p>
+        <form th:action="@{/citations/{id}(id=${c.citationId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${c.version()}">
+            <input type="hidden" name="deleted" th:value="${c.lifecycle().name() == 'DELETED'}">
+            <label>Locator <input type="text" name="locator" maxlength="500" th:value="${c.locator()}"></label>
+            <label>Citation as entered <textarea name="citationText" maxlength="4000" th:text="${c.citationText()}"></textarea></label>
+            <label>Note <input type="text" name="note" maxlength="2000" th:value="${c.note()}"></label>
+            <button type="submit">Save</button>
+        </form>
+        <form th:action="@{/citations/{id}(id=${c.citationId()})}" method="post" class="inline">
+            <input type="hidden" name="version" th:value="${c.version()}">
+            <input type="hidden" name="locator" th:value="${c.locator()}">
+            <input type="hidden" name="citationText" th:value="${c.citationText()}">
+            <input type="hidden" name="note" th:value="${c.note()}">
+            <input type="hidden" name="deleted" th:value="${c.lifecycle().name() != 'DELETED'}">
+            <button type="submit" th:text="${c.lifecycle().name() == 'DELETED' ? 'Restore' : 'Delete (recoverable)'}">Delete</button>
+        </form>
+    </section>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

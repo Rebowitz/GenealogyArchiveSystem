@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head(${r.friendlyId()})}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1><span th:text="${r.friendlyId()}">RP0001</span> <span class="muted" th:text="${r.name()}">name</span></h1>
+    <dl class="facts">
+        <dt>Address or location</dt><dd th:text="${r.locationText() ?: '(not recorded)'}">where</dd>
+        <dt>Description</dt><dd th:text="${r.description() ?: '(none)'}">description</dd>
+        <dt>Global ID</dt><dd><code th:text="${r.repositoryId()}">id</code></dd>
+    </dl>
+    <section>
+        <h2>Sources held</h2>
+        <p class="muted" th:if="${#lists.isEmpty(sources)}">No Sources name this Repository.</p>
+        <ul><li th:each="s : ${sources}"><a th:href="@{/sources/{id}(id=${s.sourceId()})}" th:text="${s.friendlyId()}">S00001</a>
+            <span th:text="${s.title()}">title</span></li></ul>
+    </section>
+    <section th:if="${canEdit}">
+        <h2>Correct</h2>
+        <form th:action="@{/repositories/{id}(id=${r.repositoryId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${r.version()}">
+            <label>Name <input type="text" name="name" maxlength="300" th:value="${r.name()}" required></label>
+            <label>Address or location <input type="text" name="location" maxlength="1000" th:value="${r.locationText()}"></label>
+            <label>Description <textarea name="description" maxlength="4000" th:text="${r.description()}"></textarea></label>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Save</button>
+        </form>
+    </section>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

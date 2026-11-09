@@ -167,6 +167,17 @@ public final class ArchivalFileRepository {
         return find(fileId);
     }
 
+    /**
+     * The File, share-locked for this transaction: its restriction and lifecycle cannot change (those updates
+     * lock the row) until the transaction ends, while other readers and share-lockers proceed. Used to apply
+     * work under the File's current authorization (GAS-P3-004).
+     */
+    public Optional<ArchivalFile> lockShared(UUID fileId) {
+        jdbc.sql("SELECT file_id FROM gas.archival_file WHERE file_id = :id FOR SHARE").param("id", fileId)
+                .query(UUID.class).optional();
+        return find(fileId);
+    }
+
     /** Correctable attributes. @return true if the row had {@code expectedVersion} */
     public boolean updateAttributes(UUID fileId, long expectedVersion, String managedFilename, int displayRotation,
                                     Restriction restriction) {

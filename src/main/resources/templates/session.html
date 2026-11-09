@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head(${s.friendlyId()})}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1><span th:text="${s.friendlyId()}">CS0001</span> <span class="muted" th:text="${s.title()}">title</span></h1>
+    <p class="status ok" th:if="${notice != null}" th:text="${notice}">notice</p>
+    <dl class="facts">
+        <dt>Repository</dt>
+        <dd><a th:if="${repository != null}" th:href="@{/repositories/{id}(id=${repository.repositoryId()})}"
+               th:text="${repository.friendlyId() + ' ' + repository.name()}">RP</a>
+            <span th:if="${repository == null}" class="muted">(not recorded)</span></dd>
+        <dt>Source</dt>
+        <dd><a th:if="${source != null}" th:href="@{/sources/{id}(id=${source.sourceId()})}"
+               th:text="${source.friendlyId() + ' ' + source.title()}">S</a>
+            <span th:if="${source == null}" class="muted">(not recorded)</span></dd>
+        <dt>Capture date</dt><dd th:text="${s.captureDate() ?: '(not recorded)'}">date</dd>
+        <dt>Researcher</dt><dd th:text="${s.researcher() ?: '(not recorded)'}">who</dd>
+        <dt>Equipment or method</dt><dd th:text="${s.equipmentMethod() ?: '(not recorded)'}">how</dd>
+        <dt>Notes</dt><dd th:text="${s.notes() ?: '(none)'}">notes</dd>
+    </dl>
+
+    <section>
+        <h2>Worksheet</h2>
+        <p class="muted">Mark where each Record starts, or give rows a record group (a group overrides Start New Record).
+            Blank rows continue the Record above them. Save as you go; applying creates or extends Records.</p>
+        <p class="muted" th:if="${#lists.isEmpty(sheet.rows())}">No Files in this session yet.</p>
+        <form th:unless="${#lists.isEmpty(sheet.rows())}" th:action="@{/sessions/{id}/worksheet(id=${s.captureSessionId()})}" method="post">
+            <input type="hidden" name="offset" th:value="${sheet.offset()}">
+            <table class="list worksheet">
+                <thead><tr><th>#</th><th></th><th>File</th><th>Start new Record</th><th>Record group</th><th>Page</th><th>Classification</th><th>Grouped into</th></tr></thead>
+                <tbody>
+                <tr th:each="w, it : ${sheet.rows()}" th:with="fid=${w.row().fileId()}, done=${w.row().applied()}">
+                    <td th:text="${sheet.offset() + it.count}">1</td>
+                    <td class="thumb"><img th:if="${w.file().lifecycle().name() != 'DESTROYED'}" th:src="@{/files/{id}/thumbnail(id=${fid})}" alt=""
+                                           loading="lazy" onerror="this.style.display='none'"></td>
+                    <td><a th:href="@{/files/{id}(id=${fid})}" th:text="${w.file().friendlyId()}">F</a>
+                        <span class="muted" th:if="${w.file().lifecycle().name() != 'ACTIVE'}" th:text="${w.file().lifecycle()}">DELETED</span>
+                        <input type="hidden" name="row" th:value="${fid}" th:if="${!done}">
+                        <input type="hidden" th:name="'version_' + ${fid}" th:value="${w.row().version()}" th:if="${!done}"></td>
+                    <td><input type="checkbox" name="start" th:value="${fid}" th:checked="${w.row().startNewRecord()}" th:disabled="${done or !canEdit}"></td>
+                    <td><input type="text" th:name="'group_' + ${fid}" maxlength="100" th:value="${w.row().recordGroup()}" th:disabled="${done or !canEdit}"></td>
+                    <td><input type="text" th:name="'page_' + ${fid}" maxlength="50" th:value="${w.row().pageDesignation()}" th:disabled="${done or !canEdit}" size="6"></td>
+                    <td><select th:name="'class_' + ${fid}" th:disabled="${done or !canEdit}">
+                        <option value="">(none)</option>
+                        <option th:if="${w.row().classificationCode() != null}" th:value="${w.row().classificationCode()}"
+                                th:text="${classificationLabels[w.row().classificationCode()] ?: w.row().classificationCode()}" selected>current</option>
+                        <option th:each="t : ${classifications}" th:if="${t.code() != w.row().classificationCode()}"
+                                th:value="${t.code()}" th:text="${t.label()}">Deed</option>
+                    </select></td>
+                    <td><a th:if="${done and w.row().appliedRecordId() != null}" th:href="@{/records/{id}(id=${w.row().appliedRecordId()})}">Record</a>
+                        <span th:if="${done and w.row().appliedRecordId() == null}" class="muted">Grouped</span>
+                        <button th:if="${!done and canEdit}" type="submit" name="version" th:value="${w.row().version()}"
+                                th:formaction="@{/sessions/{id}/files/{f}/remove(id=${s.captureSessionId()}, f=${fid})}">Remove</button></td>
+                </tr>
+                </tbody>
+            </table>
+            <p>
+                <button th:if="${canEdit}" type="submit">Save this page</button>
+                <a th:if="${sheet.offset() > 0}" th:href="@{/sessions/{id}(id=${s.captureSessionId()}, offset=${sheet.offset() - page < 0 ? 0 : sheet.offset() - page})}">Previous page</a>
+                <a th:if="${sheet.hasMore()}" th:href="@{/sessions/{id}(id=${s.captureSessionId()}, offset=${sheet.offset() + page})}">Next page</a>
+            </p>
+        </form>
+        <form th:if="${canEdit and !#lists.isEmpty(sheet.rows())}" th:action="@{/sessions/{id}/apply(id=${s.captureSessionId()})}" method="post">
+            <label>Apply only through File ID (optional, to stop part-way) <input type="text" name="through" placeholder="F00083" maxlength="20"></label>
+            <button type="submit">Apply grouping (create or extend Records)</button>
+        </form>
+    </section>
+
+    <section th:if="${canEdit}">
+        <h2>Add Files</h2>
+        <form th:action="@{/sessions/{id}/files(id=${s.captureSessionId()})}" method="post" class="inline">
+            <label>From upload batch
+                <select name="batchId" required>
+                    <option th:each="b : ${batches}" th:value="${b.batchId()}" th:text="${b.createdAt() + ' ' + b.createdByLabel() + (b.note() == null ? '' : ' - ' + b.note())}">batch</option>
+                </select></label>
+            <button type="submit">Add batch</button>
+        </form>
+        <form th:action="@{/sessions/{id}/files(id=${s.captureSessionId()})}" method="post" class="inline">
+            <label>By File IDs or ranges <input type="text" name="fileIds" placeholder="F00010-F00042, F00050" maxlength="20000" required></label>
+            <button type="submit">Add</button>
+        </form>
+    </section>
+
+    <section>
+        <h2>Grouping runs</h2>
+        <p class="muted" th:if="${#lists.isEmpty(runs)}">No grouping runs yet.</p>
+        <table class="list" th:unless="${#lists.isEmpty(runs)}">
+            <thead><tr><th>Started</th><th>State</th><th>Applied</th><th>Records created / extended</th><th>Held</th><th>Changed during run</th><th>Ungrouped</th></tr></thead>
+            <tbody>
+            <tr th:each="g : ${runs}" th:classappend="${g.state().name() == 'INTERRUPTED' ? 'problem' : ''}">
+                <td th:text="${g.startedAt()}">when</td>
+                <td th:text="${g.state()}">COMPLETED</td>
+                <td th:text="${g.rowsApplied()}">0</td>
+                <td th:text="${g.recordsCreated() + ' / ' + g.recordsExtended()}">0</td>
+                <td th:text="${g.rowsHeld() == null ? '-' : g.rowsHeld()}">0</td>
+                <td th:text="${g.rowsConflicted() == null ? '-' : g.rowsConflicted()}">0</td>
+                <td th:text="${g.rowsUngrouped() == null ? '-' : g.rowsUngrouped()}">0</td>
+            </tr>
+            </tbody>
+        </table>
+        <p class="muted">An interrupted run keeps everything it committed; applying again continues from there.
+            Held rows belong to groups an Administrator must apply.</p>
+    </section>
+
+    <section th:if="${canEdit}">
+        <h2>Correct the session</h2>
+        <p class="muted">Files that inherit a value see the correction at once; Files with their own value or "not known" keep theirs.</p>
+        <form th:action="@{/sessions/{id}(id=${s.captureSessionId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${s.version()}">
+            <div th:replace="~{fragments :: sessionFields(${s}, ${repositories}, ${sources})}"></div>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Save</button>
+        </form>
+    </section>
+    <section th:replace="~{fragments :: history(${history})}"></section>
+</main>
+</body>
+</html>

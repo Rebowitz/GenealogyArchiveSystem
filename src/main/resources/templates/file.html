@@ -99,6 +99,84 @@
         <ul><li th:each="o : ${view.operations()}"><a th:href="@{/preservation/operations/{id}(id=${o.operationId()})}"
                 th:text="${o.kind()} + ' ' + ${o.state()}">op</a></li></ul>
     </section>
+    <section>
+        <h2>Used in Records</h2>
+        <p class="muted" th:if="${#lists.isEmpty(uses)}">Not linked to any Record.</p>
+        <ul><li th:each="u : ${uses}"><a th:href="@{/records/{id}(id=${u.record().recordId()})}" th:text="${u.record().friendlyId()}">R</a>
+            <span th:if="${u.link().pageDesignation() != null}" th:text="'page ' + ${u.link().pageDesignation()}">page</span>
+            <span class="muted" th:if="${u.record().lifecycle().name() == 'DELETED'}">(Record deleted)</span></li></ul>
+    </section>
+    <section th:if="${capture != null}">
+        <h2>Capture context</h2>
+        <p>Captured in <a th:href="@{/sessions/{id}(id=${capture.session().captureSessionId()})}" th:text="${capture.session().friendlyId()}">CS</a>
+            <span th:text="${capture.session().title()}">title</span>.</p>
+        <dl class="facts">
+            <dt>Repository</dt>
+            <dd><span th:text="${capture.repository().isPresent() ? capture.repository().get().friendlyId() + ' ' + capture.repository().get().name() : '(not known)'}">RP</span>
+                <span class="label-note" th:text="${capture.overridden().contains('repository') ? 'this File' : (capture.blanked().contains('repository') ? 'not known for this File' : 'from ' + capture.session().friendlyId())}">from</span></dd>
+            <dt>Source</dt>
+            <dd><span th:text="${capture.source().isPresent() ? capture.source().get().friendlyId() + ' ' + capture.source().get().title() : '(not known)'}">S</span>
+                <span class="label-note" th:text="${capture.overridden().contains('source') ? 'this File' : (capture.blanked().contains('source') ? 'not known for this File' : 'from ' + capture.session().friendlyId())}">from</span></dd>
+            <dt>Capture date</dt>
+            <dd><span th:text="${capture.captureDate() ?: '(not known)'}">date</span>
+                <span class="label-note" th:text="${capture.overridden().contains('capture_date') ? 'this File' : (capture.blanked().contains('capture_date') ? 'not known for this File' : 'from ' + capture.session().friendlyId())}">from</span></dd>
+            <dt>Researcher</dt>
+            <dd><span th:text="${capture.researcher() ?: '(not known)'}">who</span>
+                <span class="label-note" th:text="${capture.overridden().contains('researcher') ? 'this File' : (capture.blanked().contains('researcher') ? 'not known for this File' : 'from ' + capture.session().friendlyId())}">from</span></dd>
+            <dt>Equipment or method</dt>
+            <dd><span th:text="${capture.equipmentMethod() ?: '(not known)'}">how</span>
+                <span class="label-note" th:text="${capture.overridden().contains('equipment_method') ? 'this File' : (capture.blanked().contains('equipment_method') ? 'not known for this File' : 'from ' + capture.session().friendlyId())}">from</span></dd>
+        </dl>
+        <form th:if="${canEditRecords}" th:action="@{/files/{id}/capture-context(id=${f.fileId()})}" method="post" class="form">
+            <input type="hidden" name="version" th:value="${capture.row().version()}">
+            <p class="muted">For each item: inherit the session's value, give this File its own value, or record that it is not known for this File.</p>
+            <label>Repository
+                <select name="repositoryMode">
+                    <option value="INHERIT" th:selected="${capture.row().repositoryMode().name() == 'INHERIT'}">Inherit from session</option>
+                    <option value="VALUE" th:selected="${capture.row().repositoryMode().name() == 'VALUE'}">This File's own:</option>
+                    <option value="BLANK" th:selected="${capture.row().repositoryMode().name() == 'BLANK'}">Not known for this File</option>
+                </select>
+                <select name="repository">
+                    <option value="">(choose)</option>
+                    <option th:each="r : ${repositories}" th:value="${r.repositoryId()}" th:text="${r.friendlyId() + ' ' + r.name()}"
+                            th:selected="${r.repositoryId() == capture.row().overrideRepositoryId()}">RP</option>
+                </select></label>
+            <label>Source
+                <select name="sourceMode">
+                    <option value="INHERIT" th:selected="${capture.row().sourceMode().name() == 'INHERIT'}">Inherit from session</option>
+                    <option value="VALUE" th:selected="${capture.row().sourceMode().name() == 'VALUE'}">This File's own:</option>
+                    <option value="BLANK" th:selected="${capture.row().sourceMode().name() == 'BLANK'}">Not known for this File</option>
+                </select>
+                <select name="source">
+                    <option value="">(choose)</option>
+                    <option th:each="x : ${sources}" th:value="${x.sourceId()}" th:text="${x.friendlyId() + ' ' + x.title()}"
+                            th:selected="${x.sourceId() == capture.row().overrideSourceId()}">S</option>
+                </select></label>
+            <label>Capture date
+                <select name="captureDateMode">
+                    <option value="INHERIT" th:selected="${capture.row().captureDateMode().name() == 'INHERIT'}">Inherit from session</option>
+                    <option value="VALUE" th:selected="${capture.row().captureDateMode().name() == 'VALUE'}">This File's own:</option>
+                    <option value="BLANK" th:selected="${capture.row().captureDateMode().name() == 'BLANK'}">Not known for this File</option>
+                </select>
+                <input type="date" name="captureDate" th:value="${capture.row().overrideCaptureDate()}"></label>
+            <label>Researcher
+                <select name="researcherMode">
+                    <option value="INHERIT" th:selected="${capture.row().researcherMode().name() == 'INHERIT'}">Inherit from session</option>
+                    <option value="VALUE" th:selected="${capture.row().researcherMode().name() == 'VALUE'}">This File's own:</option>
+                    <option value="BLANK" th:selected="${capture.row().researcherMode().name() == 'BLANK'}">Not known for this File</option>
+                </select>
+                <input type="text" name="researcher" maxlength="200" th:value="${capture.row().overrideResearcher()}"></label>
+            <label>Equipment or method
+                <select name="equipmentMethodMode">
+                    <option value="INHERIT" th:selected="${capture.row().equipmentMethodMode().name() == 'INHERIT'}">Inherit from session</option>
+                    <option value="VALUE" th:selected="${capture.row().equipmentMethodMode().name() == 'VALUE'}">This File's own:</option>
+                    <option value="BLANK" th:selected="${capture.row().equipmentMethodMode().name() == 'BLANK'}">Not known for this File</option>
+                </select>
+                <input type="text" name="equipmentMethod" maxlength="500" th:value="${capture.row().overrideEquipmentMethod()}"></label>
+            <label>Reason (optional) <input type="text" name="reason" maxlength="4000"></label>
+            <button type="submit">Save capture context</button>
+        </form>
+    </section>
     <section th:replace="~{fragments :: history(${history})}"></section>
 </main>
 </body>

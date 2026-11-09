@@ -27,5 +27,14 @@ public enum Permission {
     /** Phase 2: integrity scans, re-verification, verified repair, retry/cancel of blocked operations. */
     MANAGE_PRESERVATION,
     /** Phase 2: see and download Restricted Files and lower a restriction (Administrators, decision B2). */
-    VIEW_RESTRICTED_FILES
+    VIEW_RESTRICTED_FILES,
+    /**
+     * Phase 3: create and correct Repositories, Sources, Capture Sessions, Archival Records, their File links,
+     * Roles and Citations; group courthouse captures.
+     */
+    EDIT_RECORDS,
+    /** Phase 3: see Restricted Archival Records and set or lower a Record's restriction (Administrators, D3-04). */
+    VIEW_RESTRICTED_RECORDS,
+    /** Phase 3: add, relabel and retire record classifications and Role types (archive configuration, D3-08). */
+    MANAGE_VOCABULARIES
 }

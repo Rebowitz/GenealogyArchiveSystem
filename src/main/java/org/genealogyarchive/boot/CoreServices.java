@@ -8,6 +8,7 @@ import org.genealogyarchive.data.FileContentRepository;
 import org.genealogyarchive.data.FileOperationRepository;
 import org.genealogyarchive.data.IntegrityRepository;
 import org.genealogyarchive.data.QuarantineRepository;
+import org.genealogyarchive.data.GroupingRunRepository;
 import org.genealogyarchive.data.OperationLocks;
 import org.genealogyarchive.data.ArchiveInstanceRepository;
 import org.genealogyarchive.data.BackgroundJobRepository;
@@ -27,6 +28,13 @@ import org.genealogyarchive.preservation.FaultPoints;
 import org.genealogyarchive.preservation.PreservationContext;
 import org.genealogyarchive.preservation.PreservationServices;
 import org.genealogyarchive.preservation.RestrictedFileHistory;
+import org.genealogyarchive.data.ArchivalRecordRepository;
+import org.genealogyarchive.data.CaptureSessionRepository;
+import org.genealogyarchive.data.CatalogRepository;
+import org.genealogyarchive.data.VocabularyRepository;
+import org.genealogyarchive.records.RecordsContext;
+import org.genealogyarchive.records.RecordsHistoryVisibility;
+import org.genealogyarchive.records.RecordsServices;
 import org.genealogyarchive.security.PasswordHasher;
 import org.genealogyarchive.security.UserService;
 import org.genealogyarchive.service.OperationalStatusService;
@@ -54,7 +62,8 @@ public record CoreServices(
         FriendlyIdSeriesRepository friendlyIds,
         PasswordHasher passwordHasher,
         Clock clock,
-        PreservationServices preservation) {
+        PreservationServices preservation,
+        RecordsServices records) {
 
     public static CoreServices create(DataSource dataSource, InstallationConfig config, Clock clock) {
         return create(dataSource, new VolumeRoots(config.storageRoots()), clock, new PasswordHasher(), config.files(),
@@ -72,8 +81,11 @@ public record CoreServices(
         ChangeHistoryRepository historyRepository = new ChangeHistoryRepository(dataSource);
         ChangeRecorder recorder = new ChangeRecorder(historyRepository, clock);
         ArchivalFileRepository archivalFiles = new ArchivalFileRepository(dataSource);
-        // Restricted Files never appear in Change History for readers who may not see them (GAS-P2-003, FV02).
-        HistoryService history = new HistoryService(historyRepository, new RestrictedFileHistory(archivalFiles, historyRepository));
+        ArchivalRecordRepository archivalRecords = new ArchivalRecordRepository(dataSource);
+        // Restricted Files never appear in Change History for readers who may not see them (GAS-P2-003, FV02),
+        // and neither do restricted Archival Records (Phase 3, D3-04).
+        HistoryService history = new HistoryService(historyRepository, new RecordsHistoryVisibility(
+                new RestrictedFileHistory(archivalFiles, historyRepository), archivalRecords));
         ArchiveInstanceRepository archiveRepository = new ArchiveInstanceRepository(dataSource);
         StorageVolumeRepository volumeRepository = new StorageVolumeRepository(dataSource);
         FriendlyIdSeriesRepository friendlyIds = new FriendlyIdSeriesRepository(dataSource);
@@ -102,6 +114,10 @@ public record CoreServices(
                 friendlyIds,
                 hasher,
                 clock,
-                PreservationServices.create(preservationContext));
+                PreservationServices.create(preservationContext),
+                RecordsServices.create(new RecordsContext(new CatalogRepository(dataSource),
+                        new CaptureSessionRepository(dataSource), archivalRecords, new VocabularyRepository(dataSource),
+                        new GroupingRunRepository(dataSource), archivalFiles, archiveRepository, friendlyIds, tx,
+                        recorder, new OperationLocks(dataSource), clock)));
     }
 }

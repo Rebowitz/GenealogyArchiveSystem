@@ -33,7 +33,15 @@ EOF
 export GAS_DB_PASSWORD="$GAS_TEST_DB_PASSWORD"
 CONFIG="--config=$WORK/installation.yml"
 
-fail() { echo "::error::smoke test: $*"; exit 1; }
+WEB=""
+WORKER=""
+# shellcheck source=smoke-checks.sh
+. "scripts/smoke-checks.sh"   # fail, contains, require_output
+# A failed check must not leave the web or worker process holding the step's output open (it would hang the job).
+stop_background() {
+  for p in $WEB $WORKER; do kill -TERM "$p" 2>/dev/null || true; done
+}
+trap stop_background EXIT
 expect_exit() {
   local want="$1"; shift
   set +e; java -jar "$JAR" "$@" "$CONFIG"; local got=$?; set -e
@@ -80,7 +88,7 @@ expect_exit 0 init-volume --volume-id="$VOLUME_ID"
 expect_exit 5 init-volume --volume-id="$VOLUME_ID"     # a marker is never written twice
 [ -f "$WORK/volume-primary/.genealogy-archive-volume" ] || fail "volume marker not written"
 expect_exit 0 set-ingestion-volume --volume-id="$VOLUME_ID"
-java -jar "$JAR" status "$CONFIG" | grep -q "Ingestion" || fail "status does not report the ingestion volume"
+require_output "Ingestion" "status does not report the ingestion volume" java -jar "$JAR" status "$CONFIG"
 
 java -jar "$JAR" serve "$CONFIG" &
 WEB=$!
@@ -92,7 +100,8 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 [ "$code" = "200" ] || fail "web application not ready (last HTTP status $code)"
-curl -fsS "http://127.0.0.1:${PORT}/" | grep -q "Archive instance is ready" || fail "home page does not report ready"
+home_page="$(curl -fsS "http://127.0.0.1:${PORT}/")" || fail "home page not served"
+contains "$home_page" "Archive instance is ready" || fail "home page does not report ready"
 # Phase 1: sign in through the real form (CSRF token from the page) and read an archive page.
 COOKIES="$WORK/cookies.txt"
 login_page="$(curl -fsS -c "$COOKIES" -b "$COOKIES" "http://127.0.0.1:${PORT}/login")"
@@ -102,7 +111,8 @@ location="$(curl -s -o /dev/null -w '%{redirect_url}' -c "$COOKIES" -b "$COOKIES
   --data-urlencode "_csrf=$token" --data-urlencode "username=smoke-admin" --data-urlencode "password=$ADMIN_PW" \
   "http://127.0.0.1:${PORT}/login")"
 case "$location" in *error*|"") fail "sign-in failed (redirect: $location)";; esac
-curl -fsS -b "$COOKIES" "http://127.0.0.1:${PORT}/archive" | grep -q "Smoke Test Archive" || fail "signed-in archive page not shown"
+archive_page="$(curl -fsS -b "$COOKIES" "http://127.0.0.1:${PORT}/archive")" || fail "signed-in archive page not served"
+contains "$archive_page" "Smoke Test Archive" || fail "signed-in archive page not shown"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/archive")" = "302" ] || fail "archive page reachable without sign-in"
 echo "ok: local sign-in works and protects archive pages"
 
@@ -111,7 +121,7 @@ java -jar "$JAR" worker "$CONFIG" &
 WORKER=$!
 head -c 3145731 /dev/urandom > "$WORK/scan.bin"
 upload_page="$(curl -fsS -b "$COOKIES" -c "$COOKIES" "http://127.0.0.1:${PORT}/files/upload")"
-printf '%s' "$upload_page" | grep -q "Uploads are stored on volume" || fail "upload page does not report readiness"
+contains "$upload_page" "Uploads are stored on volume" || fail "upload page does not report readiness"
 token="$(printf '%s' "$upload_page" | sed -n 's/.*name="_csrf" value="\([^"]*\)".*/\1/p' | head -1)"
 batch_location="$(curl -s -o /dev/null -w '%{redirect_url}' -b "$COOKIES" -c "$COOKIES" \
   --data-urlencode "_csrf=$token" --data-urlencode "note=smoke test" "http://127.0.0.1:${PORT}/files/batches")"
@@ -126,7 +136,7 @@ FILE_ID=""
 st=""
 for _ in $(seq 1 60); do
   st="$(curl -fsS -b "$COOKIES" "http://127.0.0.1:${PORT}/files/operations/${OP}/status")"
-  if printf '%s' "$st" | grep -q '"archived":true'; then
+  if contains "$st" '"archived":true'; then
     FILE_ID="$(printf '%s' "$st" | sed -n 's/.*"fileId":"\([0-9a-f-]*\)".*/\1/p')"
     break
   fi

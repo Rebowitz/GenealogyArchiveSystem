@@ -12,10 +12,14 @@ public enum Role {
             Permission.CONFIGURE_ARCHIVE, Permission.MANAGE_USERS, Permission.MANAGE_STORAGE_VOLUMES,
             Permission.VIEW_OPERATIONS, Permission.RETRY_JOBS,
             Permission.INGEST_FILES, Permission.EDIT_FILES, Permission.DESTROY_FILES,
-            Permission.MANAGE_PRESERVATION, Permission.VIEW_RESTRICTED_FILES)),
-    /** Phase 2: Editors ingest and correct Files and use recoverable deletion; never destroy (SEC-002). */
+            Permission.MANAGE_PRESERVATION, Permission.VIEW_RESTRICTED_FILES,
+            Permission.EDIT_RECORDS, Permission.VIEW_RESTRICTED_RECORDS, Permission.MANAGE_VOCABULARIES)),
+    /**
+     * Phase 2: Editors ingest and correct Files and use recoverable deletion; never destroy (SEC-002).
+     * Phase 3: Editors enter and correct records (SEC-002 "normal research and data-entry operations").
+     */
     EDITOR(EnumSet.of(Permission.VIEW_ARCHIVE, Permission.CHANGE_OWN_PASSWORD,
-            Permission.INGEST_FILES, Permission.EDIT_FILES)),
+            Permission.INGEST_FILES, Permission.EDIT_FILES, Permission.EDIT_RECORDS)),
     VIEWER(EnumSet.of(Permission.VIEW_ARCHIVE, Permission.CHANGE_OWN_PASSWORD));
 
     private final Set<Permission> permissions;

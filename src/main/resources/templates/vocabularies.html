@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments :: head('Vocabularies')}"></head>
+<body>
+<header th:replace="~{fragments :: nav}"></header>
+<main>
+    <h1>Record vocabularies</h1>
+    <p class="muted">Codes are permanent: they are never deleted or reused. Retiring a term stops it being offered for new use;
+        Records and Roles that already use it keep it.</p>
+    <section th:each="v : ${ {'CLASSIFICATION', 'ROLE_TYPE'} }" th:with="terms=${v == 'CLASSIFICATION' ? classifications : roles}">
+        <h2 th:text="${v == 'CLASSIFICATION' ? 'Record classifications' : 'Record role types'}">Classifications</h2>
+        <table class="list">
+            <thead><tr><th>Code</th><th>Label, description and status</th></tr></thead>
+            <tbody>
+            <tr th:each="t : ${terms}">
+                <td><code th:text="${t.code()}">DEED</code></td>
+                <td><form th:action="@{/vocabularies/{v}/{c}(v=${v}, c=${t.code()})}" method="post" class="inline">
+                    <input type="hidden" name="version" th:value="${t.version()}">
+                    <input type="text" name="label" maxlength="100" th:value="${t.label()}" required>
+                    <input type="text" name="description" maxlength="2000" th:value="${t.description()}" placeholder="description">
+                    <label><input type="checkbox" name="retired" value="true" th:checked="${t.retired()}"> retired</label>
+                    <button type="submit">Save</button>
+                </form></td>
+            </tr>
+            </tbody>
+        </table>
+        <form th:action="@{/vocabularies/{v}(v=${v})}" method="post" class="inline">
+            <label>New code <input type="text" name="code" maxlength="32" required placeholder="WILL"></label>
+            <label>Label <input type="text" name="label" maxlength="100" required></label>
+            <label>Description <input type="text" name="description" maxlength="2000"></label>
+            <button type="submit">Add</button>
+        </form>
+    </section>
+</main>
+</body>
+</html>

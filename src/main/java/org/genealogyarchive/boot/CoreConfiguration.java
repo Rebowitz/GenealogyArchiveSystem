@@ -9,6 +9,7 @@ import org.genealogyarchive.history.HistoryService;
 import org.genealogyarchive.jobs.JobQueue;
 import org.genealogyarchive.preservation.FaultPoints;
 import org.genealogyarchive.preservation.PreservationServices;
+import org.genealogyarchive.records.RecordsServices;
 import org.genealogyarchive.security.AppUserDetailsService;
 import org.genealogyarchive.security.PasswordHasher;
 import org.genealogyarchive.security.UserService;
@@ -63,6 +64,11 @@ public class CoreConfiguration {
     CoreServices coreServices(DataSource dataSource, VolumeRoots roots, Clock clock, PasswordHasher hasher,
                               InstallationConfig config, ObjectProvider<FaultPoints> faults) {
         return CoreServices.create(dataSource, roots, clock, hasher, config.files(), faults.getIfAvailable(() -> FaultPoints.NONE));
+    }
+
+    @Bean
+    RecordsServices recordsServices(CoreServices core) {
+        return core.records();
     }
 
     @Bean
