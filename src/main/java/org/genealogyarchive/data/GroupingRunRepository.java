@@ -66,10 +66,15 @@ public final class GroupingRunRepository {
                 .list();
     }
 
-    /** The Files a run applied (its permanent marks on the worksheet rows). */
-    public List<UUID> appliedFiles(UUID runId) {
-        return jdbc.sql("SELECT file_id FROM gas.file_capture_context WHERE applied_run_id = :run ORDER BY file_id")
-                .param("run", runId).query((rs, n) -> Rows.uuid(rs, "file_id")).list();
+    /** One File a run applied and the Record it applied it to (the run's permanent worksheet marks). */
+    public record Contribution(UUID fileId, UUID recordId) {
+    }
+
+    public List<Contribution> contributions(UUID runId) {
+        return jdbc.sql("""
+                SELECT file_id, applied_record_id FROM gas.file_capture_context WHERE applied_run_id = :run ORDER BY file_id
+                """).param("run", runId).query((rs, n) -> new Contribution(Rows.uuid(rs, "file_id"),
+                        Rows.uuid(rs, "applied_record_id"))).list();
     }
 
     /** Records the planned row count once planning is done. */

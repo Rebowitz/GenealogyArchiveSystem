@@ -202,10 +202,10 @@ class RecordsWebIT {
         assertThat(adminPage).contains(record.toString());
 
         // GAS-P3-002: a batch of only restricted Files answers like an empty batch.
-        UUID hiddenBatch = rx.fx.newBatch(rx.admin);
-        rx.batchFile(rx.admin, hiddenBatch, Restriction.RESTRICTED);
-        rx.batchFile(rx.admin, hiddenBatch, Restriction.RESTRICTED);
-        UUID emptyBatch = rx.fx.newBatch(rx.admin);
+        UUID hiddenBatch = rx.fx.newBatch(rx.editor);
+        rx.restrictedBatchFile(rx.editor, hiddenBatch);
+        rx.restrictedBatchFile(rx.editor, hiddenBatch);
+        UUID emptyBatch = rx.fx.newBatch(rx.editor);
         WebSession editor = signedIn("editor1");
         String path = "/sessions/" + session.captureSessionId();
         assertThat(editor.submit(path, path + "/files", Map.of("batchId", hiddenBatch.toString())).statusCode()).isEqualTo(302);
@@ -214,5 +214,37 @@ class RecordsWebIT {
         String afterEmpty = editor.get(path).body();
         assertThat(afterHidden).contains("0 added; 0 already in a capture session; 0 not available.");
         assertThat(afterEmpty).contains("0 added; 0 already in a capture session; 0 not available.");
+    }
+
+    /**
+     * GAS-P3-003 and GAS-P3-010 over HTTP: a run whose only Record became restricted is not listed, and another
+     * user's batch metadata (UUID, date, uploader, note) never appears in the session page.
+     */
+    @Test
+    void gasP3_003_010_sessionPageHidesRestrictedRunsAndOthersBatches() {
+        org.genealogyarchive.records.CaptureSession session = rx.session("Second audit");
+        ArchivalFile f = rx.file();
+        rx.add(session, java.util.List.of(f));
+        rx.start(session, f);
+        rx.records().grouping().apply(rx.editor, session.captureSessionId());
+        UUID record = rx.row(f.fileId()).appliedRecordId();
+        ArchivalRecord rec = rx.records().records().get(rx.admin, record);
+        rx.records().records().correct(rx.admin, record, rec.version(), new RecordService.RecordInput(null, null, null,
+                null, null, null, null, null, Restriction.RESTRICTED), null);
+
+        var other = rx.otherEditor();
+        UUID theirs = rx.fx.preservation().ingestion().startBatch(other, "private note 51c9 (synthetic)").batchId();
+        UUID mine = rx.fx.newBatch(rx.editor);
+        String path = "/sessions/" + session.captureSessionId();
+
+        String editorPage = signedIn("editor1").get(path).body();
+        assertThat(editorPage).contains(mine.toString())
+                .doesNotContain(theirs.toString(), "private note 51c9", "editor2")
+                .contains("No grouping runs yet.");
+        String viewerPage = signedIn("viewer1").get(path).body();
+        assertThat(viewerPage).doesNotContain(theirs.toString(), "private note 51c9", "editor2")
+                .contains("No grouping runs yet.");
+        String adminPage = signedIn("admin1").get(path).body();
+        assertThat(adminPage).contains(theirs.toString(), "private note 51c9", "editor2").doesNotContain("No grouping runs yet.");
     }
 }

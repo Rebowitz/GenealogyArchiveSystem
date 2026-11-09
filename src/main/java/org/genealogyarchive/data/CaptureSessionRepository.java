@@ -191,13 +191,24 @@ public final class CaptureSessionRepository {
                 .param("b", batchId).query((rs, n) -> Rows.uuid(rs, "file_id")).list();
     }
 
-    public List<UploadBatchSummary> recentBatches(int limit) {
+    /**
+     * Recent upload batches, newest first. {@code createdBy} null lists every batch; otherwise only that user's
+     * batches. The filter is applied before the limit (GAS-P3-010).
+     */
+    public List<UploadBatchSummary> recentBatches(UUID createdBy, int limit) {
         return jdbc.sql("""
                 SELECT b.batch_id, b.created_at, u.username, b.note
                   FROM gas.file_upload_batch b JOIN gas.app_user u ON u.user_id = b.created_by
+                 WHERE (CAST(:by AS uuid) IS NULL OR b.created_by = :by)
                  ORDER BY b.created_at DESC LIMIT :n
-                """).param("n", limit).query((rs, n) -> new UploadBatchSummary(Rows.uuid(rs, "batch_id"),
+                """).param("by", createdBy).param("n", limit).query((rs, n) -> new UploadBatchSummary(Rows.uuid(rs, "batch_id"),
                         Rows.instant(rs, "created_at"), rs.getString("username"), rs.getString("note"))).list();
+    }
+
+    /** Who created an upload batch (empty if there is no such batch). */
+    public Optional<UUID> batchCreator(UUID batchId) {
+        return jdbc.sql("SELECT created_by FROM gas.file_upload_batch WHERE batch_id = :b").param("b", batchId)
+                .query((rs, n) -> Rows.uuid(rs, "created_by")).optional();
     }
 
     // ---- explicit groups -------------------------------------------------------------------------

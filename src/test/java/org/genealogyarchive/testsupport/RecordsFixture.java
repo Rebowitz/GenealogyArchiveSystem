@@ -43,6 +43,18 @@ public final class RecordsFixture implements AutoCloseable {
         return new RecordsFixture(PreservationFixture.create(temp));
     }
 
+    /** A second Editor (another user), created on first use; signs in as {@code editor2}. */
+    public Actor otherEditor() {
+        if (otherEditor == null) {
+            org.genealogyarchive.security.AppUser u = fx.services().users().create(Actor.commandLine(), "editor2", "editor2",
+                    org.genealogyarchive.access.Role.EDITOR, ArchiveFixtures.PASSWORD);
+            otherEditor = Actor.user(u.userId(), u.username(), org.genealogyarchive.access.Role.EDITOR);
+        }
+        return otherEditor;
+    }
+
+    private Actor otherEditor;
+
     public RecordsServices records() {
         return fx.services().records();
     }
@@ -72,6 +84,16 @@ public final class RecordsFixture implements AutoCloseable {
         var op = fx.receive(actor, batch, fx.nextKey(), "batch-" + counter + ".tif",
                 ("synthetic batch image " + counter).getBytes(StandardCharsets.UTF_8), restriction, null, null);
         return fx.file(fx.process(op.operationId()).fileId());
+    }
+
+    /**
+     * A File the actor uploads into their own batch and an Administrator then restricts: how a batch comes to hold
+     * Files its own uploader can no longer see.
+     */
+    public ArchivalFile restrictedBatchFile(Actor actor, UUID batch) {
+        ArchivalFile f = batchFile(actor, batch, Restriction.NORMAL);
+        return fx.preservation().files().correct(admin, f.fileId(), f.version(), f.managedFilename(), 0,
+                Restriction.RESTRICTED, "restricted after upload");
     }
 
     public List<ArchivalFile> files(int n) {

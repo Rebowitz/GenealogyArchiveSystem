@@ -4,6 +4,7 @@ import org.genealogyarchive.access.AccessPolicy;
 import org.genealogyarchive.access.Actor;
 import org.genealogyarchive.access.Permission;
 import org.genealogyarchive.data.ArchivalRecordRepository;
+import org.genealogyarchive.data.GroupingRunRepository;
 import org.genealogyarchive.data.OperationLocks;
 import org.genealogyarchive.identity.GlobalIds;
 import org.genealogyarchive.preservation.ArchivalFile;
@@ -18,7 +19,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -200,10 +200,10 @@ public final class GroupingService {
 
     /**
      * Runs of the session as the actor may see them (GAS-P3-003). A reader who can see restricted Files and Records
-     * gets the stored accounting. Anyone else gets only runs started without restricted view, with counts
-     * recomputed from current visibility (visible applied Files, visible created/extended Records) and the
-     * unattributable counts omitted; a run with nothing visible left is not shown at all. Stored runs are never
-     * changed.
+     * gets the stored accounting. Anyone else gets only runs started without restricted view, built from the run's
+     * authorized contributions: applied Files whose File and applied Record the reader may both see now. Applied,
+     * created and extended counts come from that set alone, unattributable counts are omitted, and a run with no
+     * authorized contribution is not shown at all (GAS-P3-003). Stored runs are never changed.
      */
     public List<GroupingRunView> runs(Actor actor, UUID sessionId) {
         sessions.get(actor, sessionId);
@@ -215,28 +215,27 @@ public final class GroupingService {
                 out.add(GroupingRunView.full(run));
                 continue;
             }
-            int applied = (int) ctx.runs().appliedFiles(run.runId()).stream()
-                    .filter(id -> ctx.files().find(id).filter(f -> RecordAccess.canSee(actor, f)).isPresent()).count();
-            Set<UUID> created = new LinkedHashSet<>();
-            Set<UUID> touched = new LinkedHashSet<>();
+            // GAS-P3-003: a contribution is one File the run applied together with the Record it went into; it
+            // counts only if the reader may see both, now. Retention and every counter use this one set.
+            Set<UUID> createdHere = new LinkedHashSet<>();
             for (var chunk : ctx.runs().chunks(run.runId())) {
-                touched.add(chunk.recordId());
                 if (chunk.created()) {
-                    created.add(chunk.recordId());
+                    createdHere.add(chunk.recordId());
                 }
             }
-            int visibleCreated = 0;
-            int visibleExtended = 0;
-            for (UUID recordId : touched) {
-                if (ctx.records().find(recordId).filter(r -> RecordAccess.canSee(actor, r)).isPresent()) {
-                    if (created.contains(recordId)) {
-                        visibleCreated++;
-                    } else {
-                        visibleExtended++;
-                    }
+            int applied = 0;
+            Set<UUID> visibleRecords = new LinkedHashSet<>();
+            for (GroupingRunRepository.Contribution c : ctx.runs().contributions(run.runId())) {
+                boolean fileVisible = ctx.files().find(c.fileId()).filter(f -> RecordAccess.canSee(actor, f)).isPresent();
+                boolean recordVisible = ctx.records().find(c.recordId()).filter(r -> RecordAccess.canSee(actor, r)).isPresent();
+                if (fileVisible && recordVisible) {
+                    applied++;
+                    visibleRecords.add(c.recordId());
                 }
             }
-            if (applied == 0 && visibleCreated == 0 && visibleExtended == 0) {
+            int visibleCreated = (int) visibleRecords.stream().filter(createdHere::contains).count();
+            int visibleExtended = visibleRecords.size() - visibleCreated;
+            if (applied == 0) {
                 continue;
             }
             out.add(new GroupingRunView(run.runId(), run.state(), run.startedAt(), run.finishedAt(), applied,
@@ -324,7 +323,9 @@ public final class GroupingService {
 
     private void applyGroup(Actor actor, UUID sessionId, UUID runId, Group g) {
         List<PlanRow> rows = g.applicable();
-        String classification = rows.stream().map(r -> r.row().classificationCode()).filter(Objects::nonNull)
+        // Approved rule: a new Record takes the classification of its group's first row that has one. That row may
+        // fall in a later chunk, so it is validated where the Record is created (GAS-P3-004, second audit).
+        PlanRow classificationSource = rows.stream().filter(r -> r.row().classificationCode() != null)
                 .findFirst().orElse(null);
         int chunkNumber = 0;
         for (int from = 0; from < rows.size(); from += CHUNK_ROWS) {
@@ -334,7 +335,7 @@ public final class GroupingService {
             faults.reach(GroupingFaults.Point.BEFORE_CHUNK, runId, g.key, number);
             try {
                 ctx.tx().executeWithoutResult(status ->
-                        applyChunk(actor, sessionId, runId, g, chunk, number, last, classification));
+                        applyChunk(actor, sessionId, runId, g, chunk, number, last, classificationSource));
             } catch (Conflict c) {
                 int remaining = rows.size() - from;
                 ctx.tx().executeWithoutResult(status -> ctx.runs().conflicted(runId, remaining));
@@ -352,7 +353,7 @@ public final class GroupingService {
     }
 
     private void applyChunk(Actor actor, UUID sessionId, UUID runId, Group g, List<PlanRow> chunk, int number,
-                            boolean last, String classification) {
+                            boolean last, PlanRow classificationSource) {
         // Lock order: session, worksheet rows, Files (shared), Record - the same order as every other path that
         // takes more than one of these.
         CaptureSession session = ctx.sessions().lock(sessionId).orElseThrow(() -> new NotFoundException("The capture session"));
@@ -393,6 +394,27 @@ public final class GroupingService {
                 throw new Hold();
             }
         } else {
+            // GAS-P3-004 (second audit): the row supplying the new Record's classification is a dependency of this
+            // transaction even if it lies in a later chunk. Lock its worksheet row (same order: rows before Files)
+            // and its File, and use its classification only if the row is unchanged and unapplied and its File is
+            // ACTIVE and visible to the person applying; otherwise hold or conflict the group before anything is
+            // written, so no hidden or stale value reaches the Record or its history.
+            String classification = null;
+            if (classificationSource != null) {
+                CaptureRow src = ctx.sessions().lockRow(classificationSource.row().fileId()).orElse(null);
+                if (src == null || src.applied() || src.version() != classificationSource.row().version()
+                        || !src.captureSessionId().equals(sessionId)) {
+                    throw new Conflict();
+                }
+                ArchivalFile srcFile = ctx.files().lockShared(src.fileId()).orElseThrow(Conflict::new);
+                if (!RecordAccess.canSee(actor, srcFile)) {
+                    throw new Hold();
+                }
+                if (srcFile.lifecycle() != FileLifecycle.ACTIVE) {
+                    throw new Conflict();
+                }
+                classification = src.classificationCode();
+            }
             record = records.insert(actor, new ArchivalRecordRepository.RecordFields(classification, null,
                     session.sourceId(), null, null, null, null, null, Restriction.NORMAL), sessionId);
             ctx.sessions().insertGroup(sessionId, g.key, record.recordId(), ctx.clock().instant());

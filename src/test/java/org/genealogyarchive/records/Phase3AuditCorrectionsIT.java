@@ -101,16 +101,18 @@ class Phase3AuditCorrectionsIT {
     /** Adding a batch never reveals how many of its Files are restricted. */
     @Test
     void gasP3_002_batchAddCountsOnlyVisibleFiles() {
-        UUID hiddenOnly = rx.fx.newBatch(rx.admin);
+        // The Editor's own batches (GAS-P3-010: only the creator or MANAGE_PRESERVATION may use a batch), whose
+        // members an Administrator restricted after upload.
+        UUID hiddenOnly = rx.fx.newBatch(rx.editor);
         for (int i = 0; i < 3; i++) {
-            rx.batchFile(rx.admin, hiddenOnly, Restriction.RESTRICTED);
+            rx.restrictedBatchFile(rx.editor, hiddenOnly);
         }
-        UUID empty = rx.fx.newBatch(rx.admin);
-        UUID mixed = rx.fx.newBatch(rx.admin);
-        rx.batchFile(rx.admin, mixed, Restriction.RESTRICTED);
-        ArchivalFile v1 = rx.batchFile(rx.admin, mixed, Restriction.NORMAL);
-        rx.batchFile(rx.admin, mixed, Restriction.RESTRICTED);
-        ArchivalFile v2 = rx.batchFile(rx.admin, mixed, Restriction.NORMAL);
+        UUID empty = rx.fx.newBatch(rx.editor);
+        UUID mixed = rx.fx.newBatch(rx.editor);
+        rx.restrictedBatchFile(rx.editor, mixed);
+        ArchivalFile v1 = rx.batchFile(rx.editor, mixed, Restriction.NORMAL);
+        rx.restrictedBatchFile(rx.editor, mixed);
+        ArchivalFile v2 = rx.batchFile(rx.editor, mixed, Restriction.NORMAL);
 
         CaptureSession s = rx.session("Batches");
         CaptureSessionService.AddResult hidden = rx.records().sessions().addBatch(rx.editor, s.captureSessionId(), hiddenOnly);

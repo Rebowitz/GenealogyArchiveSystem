@@ -159,9 +159,22 @@ public final class CaptureSessionService {
         return history.forObject(actor, CaptureSessionRepository.OBJECT_TYPE, sessionId);
     }
 
+    /**
+     * The upload batches the actor may choose from (GAS-P3-010): the accepted Phase 2 rule for batch metadata -
+     * the batch's creator, or anyone with MANAGE_PRESERVATION. Other users' batch identifiers, dates, uploaders and
+     * notes are never listed; the filter applies before the limit.
+     */
     public List<UploadBatchSummary> recentBatches(Actor actor) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
-        return ctx.sessions().recentBatches(50);
+        return ctx.sessions().recentBatches(
+                AccessPolicy.allows(actor, Permission.MANAGE_PRESERVATION) ? null : actor.userId(), 50);
+    }
+
+    /** Phase 2's batch rule (IngestionService.batch): creator or MANAGE_PRESERVATION. */
+    private boolean maySeeBatch(Actor actor, UUID batchId) {
+        return ctx.sessions().batchCreator(batchId)
+                .filter(by -> by.equals(actor.userId()) || AccessPolicy.allows(actor, Permission.MANAGE_PRESERVATION))
+                .isPresent();
     }
 
     // ---- membership ------------------------------------------------------------------------------
@@ -174,7 +187,9 @@ public final class CaptureSessionService {
      */
     public AddResult addBatch(Actor actor, UUID sessionId, UUID batchId) {
         AccessPolicy.require(actor, Permission.EDIT_RECORDS);
-        List<UUID> visible = ctx.sessions().filesOfBatch(batchId).stream()
+        // GAS-P3-010: a batch the actor may not see answers exactly like one that does not exist (no Files).
+        List<UUID> members = maySeeBatch(actor, batchId) ? ctx.sessions().filesOfBatch(batchId) : List.of();
+        List<UUID> visible = members.stream()
                 .filter(id -> ctx.files().find(id).filter(f -> RecordAccess.canSee(actor, f)).isPresent())
                 .toList();
         Counts c = add(actor, sessionId, visible);
