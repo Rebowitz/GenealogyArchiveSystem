@@ -254,8 +254,11 @@ class Phase3Audit2CorrectionsIT {
         List<UploadBatchSummary> editorView = rx.records().sessions().recentBatches(rx.editor);
         assertThat(editorView).extracting(UploadBatchSummary::batchId).containsExactly(mine);
         assertThat(editorView).allSatisfy(b -> assertThat(b.createdByLabel()).isEqualTo("editor1"));
-        assertThat(rx.records().sessions().recentBatches(other)).extracting(UploadBatchSummary::batchId)
-                .contains(theirsMixed, theirsHidden, theirsEmpty).doesNotContain(mine);
+        // The other Editor has 58 batches: they see their own 50 newest (the limit), never this Editor's.
+        assertThat(rx.records().sessions().recentBatches(other)).hasSize(50).extracting(UploadBatchSummary::batchId)
+                .doesNotContain(mine);
+        assertThat(rx.records().sessions().recentBatches(other))
+                .allSatisfy(b -> assertThat(b.createdByLabel()).isEqualTo("editor2"));
         // Administrators (MANAGE_PRESERVATION) keep access to every batch: the 50 newest, here all the other user's.
         assertThat(rx.records().sessions().recentBatches(rx.admin)).hasSize(50)
                 .allSatisfy(b -> assertThat(b.createdByLabel()).isEqualTo("editor2"));
