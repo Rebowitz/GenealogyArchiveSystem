@@ -1,4 +1,9 @@
-# Phase 3 — response to the first independent Codex audit
+# Phase 3 — responses to the independent Codex audits
+
+This file keeps the complete history of both correction cycles: cycle 1 (first audit, `8b0f142`) below, then
+cycle 2 (re-audit, `12cdd70`) at the end.
+
+## Cycle 1 — response to the first independent Codex audit
 
 | | |
 |---|---|
@@ -129,3 +134,70 @@ The Java tests themselves run only in CI.
 - `Phase3SchemaIT`'s upgrade count rises from 2 to 3 for V0023.
 
 No other assertion was changed or removed.
+
+---
+
+# Second independent audit (re-audit of `12cdd70`) — correction cycle 2
+
+| | |
+|---|---|
+| Audited head | `12cdd703507f8ce211b7a3daad462c62c9cefbbb` |
+| Verdict | **REVISIONS REQUIRED** |
+| Independently closed by Codex | GAS-P3-001, 002, 005, 006, 007, 008, 009. They are not reopened. The only change touching them is that the GAS-P3-002 tests now use authorized batches (see GAS-P3-010). |
+| Remaining | GAS-P3-003 (PARTIALLY CORRECTED), GAS-P3-004 (PARTIALLY CORRECTED), GAS-P3-010 (OPEN). All three are BLOCKING. |
+| Corrected implementation SHA | `16f41b8` (corrections and tests), plus `b9bf869` (fix to one new test assertion; see below) |
+| CI-tested SHA | `b9bf8690bdfd57257495de6f78605b021512b4a1`, CI run **42544922421** |
+| Final documentation-only head | the commit adding this section, which adds documentation only (adds only this section and the PR hand-off) |
+| Status | All three are **builder-corrected, pending independent verification** |
+
+**Source document.** The full re-audit report (`phase-3-independent-reaudit-12cdd70.md`) was not among the files the
+owner provided in this session. These corrections follow the owner's second correction assignment, which states
+each finding, the required correction and the mandatory tests. Codex should check them against the full report.
+
+### GAS-P3-003 — BLOCKING — run contributions attributed to the File and the Record
+| | |
+|---|---|
+| Root cause | The cycle-1 projection counted an applied File whenever the File was visible. It counted Records separately and kept the run whenever either count was non-zero. So a run whose only Record became restricted, with its Files still NORMAL, was still listed with its applied count. |
+| Corrected source files | `records/GroupingService.java` (`runs`), `data/GroupingRunRepository.java` (`contributions` replaces `appliedFiles`) |
+| Implementation | A contribution is one row the run applied: (File, the Record it was applied to), read from the permanent worksheet marks. For a reader without both restricted-File and restricted-Record visibility, a contribution counts only if the reader may see both, now. Every reader-facing figure comes from that single set: applied rows; created and extended Records (distinct visible Records among the authorized contributions, split by whether this run created them); and whether the run is shown at all, since a run with no authorized contribution is omitted along with its timestamps and state. Held, conflicted and ungrouped counts stay omitted. Stored `grouping_run` rows and the Administrator view are unchanged. The per-File "Grouped" indicator is unchanged. |
+| Regression tests | `Phase3Audit2CorrectionsIT`: `gasP3_003_runOfOnlyARestrictedRecordDisappears` (mandatory tests 1, 4 and 5: Editor and Viewer, Administrator accounting, stored row unchanged, "Grouped" kept); `gasP3_003_mixedRunCountsOnlyAuthorizedContributions` (tests 2 and 5: a hidden Record with NORMAL Files plus one hidden File in a visible Record; un-restricting restores the count at once); `gasP3_003_extendedRecordFollowsItsVisibility`. `RecordsWebIT.gasP3_003_010_sessionPageHidesRestrictedRunsAndOthersBatches` (test 3 over HTTP, for a fresh Viewer and Editor). |
+| Residual limitation | None known. |
+
+### GAS-P3-004 — BLOCKING — later-chunk classification source
+| | |
+|---|---|
+| Root cause | Under the approved rule, a new Record takes the first classification in its group. It was computed from the whole cached group at planning time and written in chunk 1, before the supplying row, which can sit in a later chunk, had its worksheet version, File authorization or lifecycle checked. |
+| Corrected source files | `records/GroupingService.java` (`applyGroup`, `applyChunk`) |
+| Implementation | The plan now carries the classification-source row instead of the bare value; the selection rule is unchanged. In the transaction that creates the Record (only there, because classification is used only at creation), before anything is written, that row is locked in the usual order (worksheet rows before Files). Its classification is used only if the row is unchanged since planning (same version, not applied, same session) and its File, share-locked, is visible to the person applying and ACTIVE. A changed row or a lifecycle change is a conflict: the group is left whole for the next run, which plans again from current data. A hidden File holds the group. Either way nothing is written: no Record, no history, no "DEED". The Record's other creation input, the session's Source, comes from the session row already locked in that transaction. Later chunks only add links from their own rows, which are already validated. Committed chunks, durable group identity, the 1,000-row transaction bound and unlimited Record size are unchanged. |
+| Regression tests | `Phase3Audit2CorrectionsIT`: `gasP3_004_hiddenLaterChunkClassificationSourceIsNotUsed`, the mandatory scenario: a 1,001-row group, rows 1–1,000 blank and row 1,001 DEED, row 1,001's File restricted at AFTER_PLAN, applied by an Editor. No Record or history anywhere has DEED, no Record is created, nothing is applied or completed, and 1,000 rows are held. An Administrator then applies it as DEED, with all 1,001 links in order. `gasP3_004_changedLaterChunkClassificationSourceIsAConflict`: the source is changed to DTRUST at AFTER_PLAN, giving 1,001 conflicted rows and no Record; the next run uses DTRUST. `gasP3_004_deletedClassificationSourceIsAConflict`. The `GroupingIT` 2,345-row and 1,001-row tests are unchanged. |
+| Residual limitation | None known. |
+
+### GAS-P3-010 — BLOCKING — upload-batch metadata authorization
+| | |
+|---|---|
+| Root cause | `recentBatches` listed every user's batches (UUID, date, uploader, note) and `addBatch` accepted any batch. The accepted Phase 2 rule (`IngestionService.batch`: creator or MANAGE_PRESERVATION, otherwise "not found") was not applied. |
+| Corrected source files | `records/CaptureSessionService.java` (`recentBatches`, `addBatch`, `maySeeBatch`), `data/CaptureSessionRepository.java` (`recentBatches(createdBy, limit)` filtered in SQL before the limit, `batchCreator`) |
+| Implementation | The picker lists only the actor's own batches, or every batch for MANAGE_PRESERVATION (Administrators), filtered before the 50-row limit. `addBatch` applies the same rule: another user's batch, whether mixed, hidden-only or empty, expands to no Files, which is exactly what a nonexistent batch does. GAS-P3-002's visible-only expansion and counting are unchanged within an authorized batch. Ingestion permissions and the batch-detail rule are unchanged. Cross-user batch selection is not needed by an approved workflow: researchers add their own uploads, and Administrators add any. So no cross-user projection was added. |
+| Regression tests | `Phase3Audit2CorrectionsIT.gasP3_010_batchPickerFollowsTheBatchRule` (mandatory tests 1, 2, 3 and 5: own batch listed even when another user has 58 newer ones; another user's mixed, hidden-only and empty batches are never listed; the Administrator lists all). `gasP3_010_otherUsersBatchesAnswerLikeNonexistentOnes` (tests 3 and 6: answers identical to a random UUID; the Administrator adds a mixed batch with counts (2, 0, 0); a hidden-only batch answers like an empty one even for its creator). `RecordsWebIT.gasP3_003_010_…` (test 4: the Editor's and Viewer's session HTML has no other-user batch UUID, uploader name or note, while the Administrator's has all three). |
+| Effect on closed tests | `Phase3AuditCorrectionsIT.gasP3_002_…` and `RecordsWebIT.gasP3_001_002_003_…` had the Editor add batches the Administrator created, which the accepted rule now treats as nonexistent. They now use the Editor's own batches, with members restricted by an Administrator after upload. Their GAS-P3-002 assertions are unchanged: hidden-only equals empty, a mixed batch counts only visible Files, and explicit IDs follow hidden-equals-nonexistent. |
+| Residual limitation | An Editor cannot add another user's batch as a unit. They can add that user's visible Files by ID or range, as before. |
+
+### Focused and full CI evidence (cycle 2)
+CI run **42544922421** on `b9bf8690bdfd57257495de6f78605b021512b4a1`. Each job's full log was inspected.
+
+| Job | Tests | Fail / Err / Skip | Phase3Audit2CorrectionsIT | Phase3AuditCorrectionsIT | GroupingIT | Phase3SchemaIT | RecordsWebIT | Smoke-check helpers | Packaged smoke | Native service | WorkerProcessKillIT |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| ubuntu-24.04 / PostgreSQL 16 (128927829542) | 701 | 0 / 0 / 0 | 8 | 13 | 20 | 9 | 4 | passed | passed | systemd passed | passed |
+| ubuntu-24.04 / PostgreSQL 18 (128927829533) | 701 | 0 / 0 / 0 | 8 | 13 | 20 | 9 | 4 | passed | passed | systemd passed | passed |
+| windows-2025 / PostgreSQL 16 (128927829340) | 701 | 0 / 0 / 0 | 8 | 13 | 20 | 9 | 4 | passed | passed | Windows service passed | passed |
+| windows-2025 / PostgreSQL 18 (128927829532) | 701 | 0 / 0 / 0 | 8 | 13 | 20 | 9 | 4 | passed | passed | Windows service passed | passed |
+
+Every test in every listed class passed. There are 701 tests per job: 692 after cycle 1, plus 8 in
+`Phase3Audit2CorrectionsIT` and 1 in `RecordsWebIT`. All Phase 0–2 tests still run, as do the cycle-1 correction
+tests and the V0020→V0023 upgrade tests.
+
+**Earlier cycle-2 run.** Run 42544204664 on `16f41b8` failed one new assertion. The 3 other tests in its class,
+and the full suite on both Linux jobs, passed. `gasP3_010_batchPickerFollowsTheBatchRule` expected the other
+Editor's three oldest batches in a picker correctly limited to the 50 newest, and that Editor had 58. `b9bf869`
+asserts instead that those 50 newest are all the other Editor's and never the first Editor's. No production code
+changed.

@@ -7,6 +7,11 @@
 > correction report supersedes it where they differ: reader-projected worksheet rows and run summaries,
 > chunk-time authorization, cutoff validation, the Citation parent freeze, link-note history, V0023 and the
 > smoke status check. The corrected implementation was verified by CI run 42533095750 (692 tests per job).
+>
+> **Second audit.** The re-audit of `12cdd70` closed GAS-P3-001, 002, 005, 006, 007, 008 and 009. It returned
+> GAS-P3-003 and GAS-P3-004 as partially corrected and opened GAS-P3-010 (upload-batch metadata authorization).
+> The cycle-2 corrections are in the same correction report and are **builder-corrected, pending independent
+> verification**. They were verified by CI run 42544922421 on `b9bf869` (701 tests per job).
 
 Prepared by the implementation agent for independent review. **Phase 3 is not accepted.** Formal acceptance
 requires an independent Codex audit, correction of confirmed findings and owner approval. The Phase 3 PR is a
