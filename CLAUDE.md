@@ -77,5 +77,8 @@ Write the full report to `docs/PHASE-N-COMPLETION.md` (N = current phase), cover
   report path and the test pass/fail totals per platform.
 - Explain in chat, in two or three sentences each: BLOCKING items, unresolved
   specification questions, and deviations from specification. These need an owner decision.
+- Audit findings belong to the auditor: record responses and fix commits in the
+  `PHASE-N-*CORRECTIONS.md` files, but never alter the finding text. Your own findings
+  go in `docs/issues.md`; when both describe the same problem, cross-reference rather than copy.
 
 **Final rule:** Preserve the evidence, preserve the uncertainty, preserve the provenance, preserve the identity, and keep the researcher's ordinary work simple.
