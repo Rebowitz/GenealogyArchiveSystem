@@ -1,13 +1,74 @@
 # Phase 4 owner-decision register (People, Dates and Places)
 
-**Status: PROPOSED. No decision below is approved.** Each entry gives the question, the alternatives, their
-tradeoffs and a recommendation, citing its governing text. Implementation waits until the owner approves this
-register (with any changes) and separately authorizes Phase 4 coding. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
+**Status: APPROVED by the owner on 2026-11-15**, for all 30 decisions, with the choices below. The approval includes
+the applicable architectural refinements in [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md).
+**D4-28 was approved as modified** and **D4-30 as B (deferral)**.
 
-The **⚠** mark flags a choice that affects historical semantics, identity, provenance, uncertainty or security
-(CLAUDE.md, "stop and report the design question").
+Approval of the decisions does **not** authorize implementation. Phase 4 coding still requires a separate owner
+instruction. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
+
+**How to read this register:**
+- *Approved decisions* (immediately below) is the governing record.
+- The original entries (D4-01…D4-24) and Revisions 1–3 that follow are the **decision trail**, preserved
+  unchanged. Where a trail entry says "PROPOSED", "Recommended" or offers alternatives, the approved record
+  governs.
+- The **⚠** mark flags a choice that affects historical semantics, identity, provenance, uncertainty or security.
 
 ---
+
+## Approved decisions (owner, 2026-11-15)
+
+| ID | Chosen | Approved content (including refinements) | Superseded or not chosen |
+|---|---|---|---|
+| D4-01 | A | The gate is the plan §9.1/§9.1a matrix. Full items pass in Phase 4; Partial and Foundation items pass their Phase 4 part and are re-tested in the named phase. | B (all P, D, L and C tests in full) |
+| D4-02 | A | Friendly IDs `P` (5 digits), `PL` (5), `M` (5), `CP` (4). `PR` stays reserved for Property. | B (Person and Place only) |
+| D4-03 | A | Person, Place, Mention and Collective Reference are ACTIVE or DELETED (recoverable, restore only; D3-12). **No MERGED_INTO**, because D4-09 is A. | B (purge) |
+| D4-04 ⚠ | B + refinements | Historical Date is: `expression` (correctable with history); `interpreted_expression`; `form` (POINT, BEFORE, AFTER, BETWEEN, FROM_TO, FROM, TO, UNKNOWN, NOT_INTERPRETED); per-point year/month/day, `modifier` (EXACT, ABOUT, ESTIMATED, CALCULATED), `uncertain` and `dual_year`; `calendar` (UNSPECIFIED, GREGORIAN, JULIAN); `year_start` (UNSPECIFIED, JANUARY_1, MARCH_25). Validation is per clarifications §2.2. A dual year gives the MARCH_25 reading, and an explicit JANUARY_1 with a dual year is refused. An explicit pre-1582 GREGORIAN is proleptic and noted. Unsupported year-start styles are never mapped. | A (minimal set); the original single date-level `qualifier` column; immutable expression |
+| D4-05 ⚠ | A + refinements | An owned `historical_date` table and nullable `archival_record.record_date_id` and `filing_date_id`; the text stays authoritative. Stored bounds are the **calendar-unit envelope** in JDN (`earliest_jdn`, `latest_jdn`; NULL = open). It is computed per date with the Julian and Gregorian algorithms (never a constant offset) and is never moved by modifiers or "?". Phase 7 tolerance is query-time only (clarifications §2.3, §2.6). | B (inline columns); C (defer); the original `earliest_day`/`latest_day`; the withdrawn "at most 13 days" statement |
+| D4-06 ⚠ | A + refinements | A deterministic parser only proposes (grammar and refusals per clarifications §2.5). Confirmation records origin, actor, time and `interpreted_expression`. No background, import or migration parsing. The parser always proposes `year_start` UNSPECIFIED. | B (parse on save); C (no parser) |
+| D4-07 ⚠ | A + refinements | No vital-event fields. Relationship periods are labelled "period as entered" and never synchronised with Phase 6 Events. Test status is per clarifications §6.2. | B (interim vital dates); C |
+| D4-08 ⚠ | A | Phase 4 relationships are researcher-entered and interpretive, ACTIVE or WITHDRAWN. Competing relationships coexist. Phase 5 attaches Evidence and never rewrites them. | B; C |
+| D4-09 ⚠ | A + refinements | Persons always coexist. Person-identity proposals are PROPOSED, RESOLVED or REJECTED (**no SUPERSEDED**). RESOLVED changes no data; there is no merge and no stored or inferred transitivity; contradictions are flagged, never blocked (clarifications §3.5). | B (controlled merge); C; the original "SUPERSEDED" state for identity proposals |
+| D4-10 | A | `name_as_written` is required and is the authority; optional parts; type; valid-from/to dates; provenance (Record, Citation, Mention, note). | B; C |
+| D4-11 | A | Seeds are the spec-named values only. Relationship types: the seven listed. Parentage qualifiers are fixed by the specification. Name types: BIRTH, MARRIED, NICKNAME, VARIANT. **Place-type seeds: see open item U-1.** | broader genealogical seed set |
+| D4-12 ⚠ | B | A Role-backed Mention (`mention.record_role_id`, wording read from `party_as_written`); free Mentions carry their own wording. Identity flows only through Candidate Resolution. `record_role` is unchanged. No Mentions are created by migration. **Several Mentions per Role are allowed** (D4-16 refinement). | A (`person_id` on Role); C (copied wording) |
+| D4-13 ⚠ | A + refinements | Typed nullable candidate FKs, exactly one set. At most one RESOLVED per Mention (partial unique index), and one non-terminal row per (Mention, candidate). States and transitions as in clarifications §3.2–§3.3, enforced by trigger; attribution is set once. Resolving does not close other proposals. SUPERSEDED happens only as part of Resolve to another candidate. Every candidate write bumps the Mention's `row_version`. | B (polymorphic target) |
+| D4-14 | A + refinements | `collective_reference` (Role-backed or wording-backed, anchor Mention and phrase, `stated_count` with `count_as_written`), `collective_named_mention`, and `collective_member` (PROPOSED, RESOLVED or REJECTED; several RESOLVED; no SUPERSEDED). The count is not a limit; membership creates nothing else (clarifications §4). | B (wording only) |
+| D4-15 | A | Reuse EDIT_RECORDS and MANAGE_VOCABULARIES. Add VIEW_RESTRICTED_PEOPLE (Administrator only). | B (EDIT_PEOPLE_PLACES) |
+| D4-16 ⚠ | A + refinements | **Policy S (complete suppression).** NORMAL or RESTRICTED on Person, Mention, Collective Reference and person-identity proposal; Places carry no restriction. The invariant (no NORMAL object targets a RESTRICTED Person, nor a NORMAL collective a RESTRICTED anchor or named Mention) is enforced by service and by deferred commit-time triggers. Hidden equals nonexistent on every path (clarifications §5.2–§5.4). The original text's "no propagation" means **no automatic propagation**; the only cascade is the explicit D4-27 operation. Lifting a restriction never cascades. | B (none until Phase 9); C (per Name and relationship); policy R (redacted placeholders) |
+| D4-17 | A | Explicit `living_status` UNKNOWN, LIVING or DECEASED, never inferred. | B |
+| D4-18 ⚠ | A + refinements | Jurisdictional units are Places. `place_type` carries a category (LOCALITY, JURISDICTIONAL, OTHER). `jurisdiction_link` is time-bounded, with `jurisdiction_kind` (CIVIL, ECCLESIASTICAL, JUDICIAL, MILITARY, OTHER), `basis` (RECOGNISED, CLAIMED, DISPUTED, UNKNOWN) and provenance. For a jurisdictional Place, "physical Place" means the unit. **No formation link in Phase 4** (D4-30). | B (separate Jurisdiction entity); the Revision 1 "optional `place_derivation_link`" |
+| D4-19 | A | No Source-to-jurisdiction link in Phase 4; `jurisdiction_text` stays as written. | B |
+| D4-20 | A | `approximate_location` text plus optional latitude and longitude with a precision note. No GIS. | B |
+| D4-21 | A | A plain case-insensitive contains lookup over documented Names and Place Names. Alphabetical, no ranking; restricted Persons are excluded before limits. | B |
+| D4-22 | A | No sex or gender field in Phase 4. | B |
+| D4-23 | A | SIBLING carries no qualifier. | B |
+| D4-24 ⚠ | A | "Create Person or Place from this Mention" is a separate, explicit action that records the new object, an initial Name and an attributed RESOLVED decision. | B |
+| D4-25 ⚠ | A | An UNSPECIFIED calendar is never assumed or narrowed by era. Both readings are kept, and the difference is computed for the actual date. | — |
+| D4-26 ⚠ | A | "YYYY-YYYY" is proposed as BETWEEN, with FROM_TO offered at confirmation. Never decided silently. | — |
+| D4-27 ⚠ | A | The restriction protocol of clarifications §5.5: persisted preview; one-transaction confirmation with revalidation (any difference means STALE, nothing applied); global lock order; deferred integrity triggers; idempotent, retryable confirmation; a single-transaction job path above the interactive limit; an absolute ceiling; never chunked. It is distinct from prohibited automatic propagation. Numeric defaults: see open item U-3. | — |
+| D4-28 ⚠ | **Modified** | **No universal cut-off.** Explicitly recorded year-start conventions are respected in any year. An UNSPECIFIED year start keeps both the 1 January and 25 March readings **in every period**. No convention is inferred from jurisdiction, period, Record, Source or Place. Dual-year semantics are retained (a dual year gives the MARCH_25 reading). Jurisdiction-specific, sourced calendar conventions are a possible **later-phase enhancement**, not Phase 4 functionality (clarifications §2.3). | The proposed `MARCH_25_LAST_YEAR = 1750` (Revision 2) |
+| D4-29 | A | Re-proposing a rejected candidate (Mention, identity pair or collective member) creates a new attributed row and requires a rationale. The earlier rejection is shown and never blocks. | — |
+| D4-30 ⚠ | **B** | Structured county-formation and boundary-change relationships are **deferred to Phase 6**. Phase 4 keeps dated jurisdiction-containment relationships and sourced historical notes. **Notes are never automatically converted into structured assertions.** | A (`place_derivation_link` in Phase 4) |
+
+### Open items found in the consistency review (not decided here)
+
+These need owner direction. None of them blocks recording the approvals above.
+
+| ID | Item | Why it is open |
+|---|---|---|
+| U-1 | **Place-type seed set.** D4-11's table offers "None seeded, or COUNTY and STATE only"; approval A ("spec-named seeds only") does not pick between them. The approved D4-18 also needs a category on each place type. | COUNTY and STATE are named by L-002 and would be JURISDICTIONAL. With no seeds at all, an Administrator must create a type before the first Place, **if** a type is mandatory, and whether it is mandatory is not stated anywhere. |
+| U-2 | **Place-name types.** The plan and clarifications use HISTORICAL, CURRENT and VARIANT, but no decision lists place-name types or says whether they are a vocabulary. | L-001 names "historical and current" names; VARIANT is not spec-named. |
+| U-3 | **Numeric defaults in the D4-27 protocol** (preview expiry 30 min, `lock_timeout` 5 s, interactive `statement_timeout` 30 s, interactive limit 1,000 items, job timeout 10 min, ceiling 50,000) were written as "proposed". | It is unclear whether approval A fixes these values or leaves them as configurable defaults to settle in ADR-0012. The plan treats them as configurable defaults pending confirmation. |
+| U-4 | **Search usability of approved D4-28.** Every year-only date, and every date from 1 January to 24 March with no recorded year start, has an envelope about one year wider in every period (examples 1, 3, 27). | This is correct by design. The Phase 7 search design should expect it, and researchers narrow it by recording the convention. No decision is needed now; recorded so it is not mistaken for a defect. |
+| U-5 | **Phase 6 scope carry-forward.** D4-30 assigns formation and boundary-change relationships to Phase 6, but BUILD-SPEC §62's Phase 6 list does not name them. | Phase 6 planning must include them explicitly. |
+
+---
+
+## Decision trail (preserved; superseded where the approved record differs)
+
+
+*Original register (2026-11-15), as written for owner review:*
 
 ### D4-01 — Phase 4 gate and partial coverage
 **Question.** Several People, Date and Place acceptance tests depend on later layers: P-003 needs dates of birth
@@ -320,7 +381,7 @@ C-001 and BI-006 forbid creating a Person merely to save, or silently.
 
 ## Revisions from the architectural clarification (PROPOSED, 2026-11-15)
 
-**Not approved.** These revise the recommendations above; the original options stay recorded for comparison. Full
+**Trail only; superseded by the approved record above.** At the time of writing: not approved. These revise the recommendations above; the original options stay recorded for comparison. Full
 analysis, examples and alternatives: [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md).
 
 | Decision | Revised recommendation (PROPOSED) | Clarification § |
@@ -341,7 +402,7 @@ analysis, examples and alternatives: [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`]
 
 ### Revision 2: final architectural corrections (PROPOSED, 2026-11-15)
 
-**Not approved.** These supersede the matching rows of the table above. See clarifications §2.2–§2.6, §5.5 and §10.
+**Trail only; superseded by the approved record above** (D4-28 was approved as modified, not as written here). At the time of writing: not approved. These supersede the matching rows of the table above. See clarifications §2.2–§2.6, §5.5 and §10.
 
 | Decision | Revised recommendation (PROPOSED) |
 |---|---|
@@ -355,7 +416,7 @@ analysis, examples and alternatives: [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`]
 
 ### Revision 3: supplement (PROPOSED, 2026-11-15)
 
-**Not approved.** See clarifications §1.5 and §10.6.
+**Trail only; superseded by the approved record above** (D4-30 approved as B, Phase 6). At the time of writing: not approved. See clarifications §1.5 and §10.6.
 
 | Decision | Recommendation (PROPOSED) |
 |---|---|

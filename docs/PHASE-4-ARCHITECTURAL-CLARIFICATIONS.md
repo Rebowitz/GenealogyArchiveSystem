@@ -1,6 +1,10 @@
 # Phase 4 architectural clarifications
 
-**Status: PROPOSED. Planning only. No Phase 4 implementation is authorized.**
+**Status: decision record. The owner approved all 30 Phase 4 decisions on 2026-11-15** (see
+[`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md), "Approved decisions"), including the refinements in this document,
+with **D4-28 modified** and **D4-30 = B**. This document keeps its analysis and alternatives as the decision trail.
+Text below that still says "PROPOSED" describes the state at the time it was written. **Where it differs from the
+approved register, the register governs.** Planning only: no Phase 4 implementation is authorized.
 
 | Item | Value |
 |---|---|
@@ -8,6 +12,7 @@
 | Reviews | [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md) and [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md) at `7a68d32`. Neither is approved. |
 | Baseline | `phase-3-accepted` (`c494d6a`) and the accepted Phase 0–3 decisions, particularly D3-04 and the Phase 3 audit corrections GAS-P3-001…010 |
 | Outputs | This analysis (§1–§6), newly found conflicts (§7), proposed decision revisions (§8; also applied, still PROPOSED, in the register) and coverage-matrix updates (§9; also applied in the plan) |
+| Revision 4 | Owner approvals consolidated (2026-11-15): D4-28 modified (no cut-off; §2.3, §2.4, §7 C-14, §10.5 HD-4 and new HD-7); D4-30 approved as deferral to Phase 6 (§1.5). |
 | Revision 3 | Supplement (owner, 2026-11-15): county-formation decision (§1.5, D4-30); regression-test traceability for the six required areas with four added tests (§10.6). |
 | Revision 2 | Phase 4 Final Architectural Corrections (owner, 2026-11-15): date envelope corrected and verified (§2.2–§2.4, new §2.6); restriction transaction protocol (new §5.5); additional regression tests (new §10). Earlier text is replaced in place; the previous version is commit `adb49a5`. |
 
@@ -102,7 +107,7 @@ target and fewer tables. The refinements:
    UI grouping and lookup filters, never inference.
 2. **Link attributes.** `jurisdiction_link` gains `jurisdiction_kind` (CIVIL, ECCLESIASTICAL, JUDICIAL, MILITARY,
    OTHER) and `basis` (RECOGNISED, CLAIMED, DISPUTED, UNKNOWN; default UNKNOWN). Overlaps and disputes coexist.
-3. **Formation links: deferred** (Revision 3; §1.5, D4-30). Scenario (b) is expressed with dated containment
+3. **Formation links: deferred to Phase 6** (approved D4-30; §1.5). Scenario (b) is expressed with dated containment
    links and a sourced note on the jurisdictional Place.
 4. **Two Places when histories diverge.** A Place may be both a locality and a jurisdiction. When their histories
    diverge, the researcher creates two Places and relates them with a dated link of kind `CIVIL` and a note. That
@@ -111,7 +116,12 @@ target and fewer tables. The refinements:
    validity is historical-date based, a cycle is reported as a warning with the conflicting periods, not silently
    prevented, when the dates make it ambiguous.
 
-### 1.5 County-formation relationships: in Phase 4 or deferred? (PROPOSED, new D4-30)
+### 1.5 County-formation relationships: in Phase 4 or deferred? (D4-30, **approved: B, deferred to Phase 6**)
+
+**Owner decision (2026-11-15):** Alternative B. Structured county-formation and boundary-change relationships are
+deferred to **Phase 6**. Phase 4 keeps dated jurisdiction-containment relationships and sourced historical notes.
+Notes are never converted automatically into structured assertions, in Phase 6 or any later phase. The analysis
+below is kept as the decision record.
 
 Revision 3 resolves the "optional" `place_derivation_link` of §1.4 item 3.
 
@@ -126,7 +136,7 @@ from part of Frederick County, 1836". A Place may have several sources, and cycl
 - **The jurisdictional Place's note.** For example: "Formed 1836 from part of Frederick County (Acts of Assembly,
   1836, ch. 61)". Wording is invented.
 
-A structured formation relationship is introduced later, when the owner assigns it to a phase.
+A structured formation relationship is introduced in Phase 6 (approved).
 
 | Criterion | A: include | B: defer |
 |---|---|---|
@@ -136,21 +146,20 @@ A structured formation relationship is introduced later, when the owner assigns 
 | **Genealogical usefulness** | High for one question: "which parent county held records for this area before 1836?", especially for areas with no locality Place yet. | The common form of that question, "where were Millbrook's records in 1835?", is answered by containment. Areas without locality Places rely on the note until the later phase. |
 | **Reversibility** | Hard to retract once data exists: a later boundary-change model must migrate or coexist with it | Easy to add later as an additive migration. Notes are never parsed into structure automatically (UP-006); researchers convert them deliberately. |
 
-**Recommendation: B (defer).** No specification requires formation relationships in Phase 4, and containment links
+**Recommendation: B (defer). Approved.** No specification requires formation relationships in Phase 4, and containment links
 already meet L-002 with full historical accuracy. Building one boundary-change type before the Evidence and Event
 models exist is the larger long-term risk, because it would create a second, competing representation. The cost of
 deferral is real but bounded: the parent-county question for areas without locality Places is answered by notes
 until the later phase. That is recorded as a known limitation, not hidden.
 
-**Consequences if B is approved:**
+**Consequences (B approved):**
 - §1.2(b) and §1.4 item 3 no longer include `place_derivation_link` in Phase 4.
 - `PlaceIT.countyFormationExpressedByContainmentAndNote` verifies scenario (b) with containment links and a note
   only.
-- The Phase 4 plan lists formation and boundary-change relationships as an exclusion. Assigning the later phase is
-  an owner question: Phase 6 is the natural candidate, alongside Events and Organizations (the creating legislature
-  or court).
+- The Phase 4 plan lists formation and boundary-change relationships as a **Phase 6** exclusion. BUILD-SPEC §62's
+  Phase 6 list does not name them, so Phase 6 planning must carry this assignment forward explicitly.
 
-**If the owner chooses A instead,** the table above is the complete Phase 4 scope. It is relationship-only (never an
+*Not chosen:* under Alternative A the table above would have been the complete Phase 4 scope. It is relationship-only (never an
 Event), restricted with neither endpoint (Places are unrestricted, D4-16), and adds `PlaceIT.formationLink*` tests.
 
 ---
@@ -175,8 +184,9 @@ A `historical_date` row is an owned value, one per dated field.
 
 **Calendar**
 - `calendar`: UNSPECIFIED, GREGORIAN or JULIAN.
-- `year_start`: UNSPECIFIED, JANUARY_1 or MARCH_25. Needed for Julian Old-Style years; without it a year-only
-  Julian date would gain false precision.
+- `year_start`: UNSPECIFIED, JANUARY_1 or MARCH_25. Recorded only by the researcher, in any calendar and period;
+  UNSPECIFIED keeps both readings (approved D4-28). Without it, a year-only or early-year date would gain false
+  precision.
 
 **Each point: `p1_…` (and `p2_…` for BETWEEN and FROM_TO)**
 - `year`, `month`, `day`: each nullable. Precision is exactly the parts present.
@@ -212,6 +222,7 @@ and is saved as NOT_INTERPRETED.
 | Ordering | For BETWEEN and FROM_TO, envelope(p1).earliest ≤ envelope(p2).latest. A reversed source ("between 1850 and 1840") is kept as the expression and is not interpretable as written. The researcher records the reading they mean. |
 | Dual year | `dual_year = year + 1`, and only on a point with a year. A dual year is the writer's own statement that the legal year began on 25 March, so it is interpreted with `year_start` MARCH_25. If `year_start` is UNSPECIFIED it is read as MARCH_25 for that point; if the researcher set JANUARY_1, the interpretation is refused as self-contradictory. On a full date from 25 March to 31 December (where the two styles agree) a dual year is accepted with a warning. |
 | Calendar consistency | Any calendar may carry a dual year or `year_start` MARCH_25: the year-start style is independent of the Julian/Gregorian calendar (some regions used 25 March with the Gregorian calendar). An explicit GREGORIAN reading of a date before 15 October 1582 is accepted as *proleptic Gregorian* (as modern transcriptions sometimes give) with a visible note; it is never assumed. |
+| No inferred convention (approved D4-28) | `year_start` is set only by the researcher (or read as MARCH_25 from a dual year). Neither the parser nor any service sets it from the period, the Record, the Source, a jurisdiction or a Place. The parser always proposes UNSPECIFIED; the confirmation screen shows the field and its effect on the envelope. |
 | Year-start styles | Only JANUARY_1 and MARCH_25 are supported. A document known to use another style (1 March, Easter, 25 December, the Pisan reckoning) is kept as its expression, or the researcher enters explicit points; the system never maps it to a supported style. |
 | Nothing interpreted for UNKNOWN or NOT_INTERPRETED | all point fields NULL |
 
@@ -249,10 +260,13 @@ Days are Julian Day Numbers: calendar-neutral integers.
 **Algorithm** (pure, deterministic, unit-tested; implemented once in the `dates` package):
 1. **Readings of a point.** Enumerate the readings the stored fields leave open:
    - calendar: {GREGORIAN} or {JULIAN} if stated; {GREGORIAN, JULIAN} if UNSPECIFIED;
-   - year start: {JANUARY_1} or {MARCH_25} if stated; MARCH_25 if a dual year is present;
-     {JANUARY_1, MARCH_25} if UNSPECIFIED **and** the written year is at or before the configured
-     `MARCH_25_LAST_YEAR` (proposed 1750: the last legal year in Britain and its colonies to begin on 25 March; see
-     D4-28); otherwise {JANUARY_1}.
+   - year start (approved D4-28):
+     - {JANUARY_1} or {MARCH_25} when the researcher recorded that convention. It is respected as recorded, for any
+       year.
+     - {MARCH_25} when a dual year is present (the documented dual-year semantics, §2.2).
+     - {JANUARY_1, MARCH_25} when UNSPECIFIED, **in every period**.
+     There is no cut-off year. No convention is inferred from the date, the Record, the Source, the jurisdiction or
+     the Place. The earlier proposed `MARCH_25_LAST_YEAR = 1750` was not approved and has been removed.
    Readings whose day does not exist in that calendar (29 February 1700 exists only in the Julian calendar) are
    dropped. If no reading remains, the interpretation is invalid (§2.2).
 2. **Unit span of a reading.** Year only: the whole legal year (1 Jan to 31 Dec, or 25 Mar to 24 Mar of the next
@@ -288,48 +302,67 @@ for interpretation, because historical adoption dates vary by region and a fixed
 **Why the unspecified calendar is never narrowed to one reading by era.** Gregorian dates are historically impossible
 before 15 October 1582, but modern transcriptions and indexes do sometimes convert old dates to proleptic Gregorian,
 and the archive cannot know which a typed date is. Narrowing by era would therefore be a guess. For an UNSPECIFIED
-calendar both readings are kept; the researcher removes one by stating the calendar. (Owner may decide otherwise:
-D4-25.)
+calendar both readings are kept; the researcher removes one by stating the calendar (approved D4-25).
 
-### 2.4 Worked examples (values verified by calculation)
+**Later-phase enhancement, not Phase 4 (approved D4-28).** Jurisdiction-specific, *sourced* calendar and year-start
+conventions are a possible later enhancement. An example would be a documented rule, with its citation, that a
+jurisdiction used 25 March until a stated year. Even then, such a rule could only *offer* a convention for the
+researcher to record; it would not apply it silently. Phase 4 contains no such rule table and no default convention.
+
+### 2.4 Worked examples (values verified by calculation; revised for approved D4-28)
 
 Envelopes are shown as proleptic-Gregorian dates with the stored JDNs in brackets. "1840–1850?" means the envelope
 overlaps 1 Jan 1840 to 31 Dec 1850 (JDN 2 393 106 … 2 397 122). Every value below was computed with the §2.3
-algorithm and the fixed points above; the same table is the `HistoricalDateTest` fixture.
+algorithm and the fixed points above, and the same table is the `HistoricalDateTest` fixture.
+
+"ys" is `year_start`. Under approved D4-28, an UNSPECIFIED year start keeps both the 1 January and the 25 March
+readings **in every period**. So year-only dates, and dates from 1 January to 24 March, widen until the researcher
+records the convention. Rows marked "a" show the same expression with an explicitly recorded JANUARY_1, to show
+that an explicit convention is respected.
 
 | # | Expression as written | Stored interpretation (confirmed) | Envelope | 1840–1850? | Never stored as |
 |---|---|---|---|---|---|
-| 1 | `12 March 1847` | POINT; 1847-03-12 EXACT; calendar UNSPECIFIED | 1847-03-12 … 1847-03-24 [2395733 … 2395745] (Julian reading is 12 days later) | yes | — |
-| 2 | `12 March 1847` | as #1, calendar GREGORIAN | 1847-03-12 [2395733 … 2395733] | yes | — |
-| 3 | `March 1847` (D-001) | POINT; 1847-03; UNSPECIFIED | 1847-03-01 … 1847-04-12 [2395722 … 2395764] | yes | 1847-03-01 |
-| 4 | `abt 1847` (D-002) | POINT; 1847 ABOUT; UNSPECIFIED | 1847-01-01 … 1848-01-12 [2395663 … 2396039]; `approximate` | yes, exact overlap (tolerance not needed) | 1847 EXACT; a widened year range |
-| 5 | `bef 1847` (D-003) | BEFORE; 1847 | open … 1848-01-12 [NULL … 2396039] | yes (possible) | an exact or "between" date |
-| 6 | `aft 1847` | AFTER; 1847 | 1847-01-01 … open [2395663 … NULL] | yes (possible) | — |
-| 7 | `1845-1849` (D-003) | BETWEEN (FROM_TO offered, D4-26); 1845, 1849 | 1845-01-01 … 1850-01-12 [2394933 … 2396770] | yes | 1847 (midpoint) |
+| 1 | `12 March 1847` | POINT; 1847-03-12 EXACT; calendar and ys UNSPECIFIED | 1847-03-12 … 1848-03-24 [2395733 … 2396111]. Readings are 12 Mar 1847 and 12 Mar 1848, each Gregorian or Julian. | yes | — |
+| 1a | `12 March 1847` | as #1, ys JANUARY_1 | 1847-03-12 … 1847-03-24 [2395733 … 2395745] (the Julian reading is 12 days later) | yes | — |
+| 2 | `12 March 1847` | calendar GREGORIAN, ys UNSPECIFIED | 1847-03-12 … 1848-03-12 [2395733 … 2396099] | yes | — |
+| 2a | `12 March 1847` | GREGORIAN, ys JANUARY_1 | 1847-03-12 [2395733 … 2395733] | yes | — |
+| 3 | `March 1847` (D-001) | POINT; 1847-03; calendar and ys UNSPECIFIED | 1847-03-01 … 1848-04-05 [2395722 … 2396123] | yes | 1847-03-01 |
+| 3a | `March 1847` | as #3, ys JANUARY_1 | 1847-03-01 … 1847-04-12 [2395722 … 2395764] | yes | — |
+| 4 | `abt 1847` (D-002) | POINT; 1847 ABOUT; UNSPECIFIED | 1847-01-01 … 1848-04-05 [2395663 … 2396123]; `approximate` | yes, envelope overlap (no tolerance needed) | 1847 EXACT; a range widened for "about" |
+| 4a | `abt 1847` | as #4, ys JANUARY_1 | 1847-01-01 … 1848-01-12 [2395663 … 2396039]; `approximate` | yes | — |
+| 5 | `bef 1847` (D-003) | BEFORE; 1847; UNSPECIFIED | open … 1848-04-05 [NULL … 2396123] | yes (possible) | an exact or "between" date |
+| 6 | `aft 1847` | AFTER; 1847; UNSPECIFIED | 1847-01-01 … open [2395663 … NULL] | yes (possible) | — |
+| 7 | `1845-1849` (D-003) | BETWEEN (FROM_TO offered, D4-26); 1845, 1849; UNSPECIFIED | 1845-01-01 … 1850-04-05 [2394933 … 2396853] | yes | 1847 (midpoint) |
 | 8 | `from 1845 to 1849` | FROM_TO; 1845, 1849 | same as #7; different meaning | yes | — |
-| 9 | `bet. abt 1840 and 1845?` | BETWEEN; p1 1840 ABOUT; p2 1845 uncertain | 1840-01-01 … 1846-01-12 [2393106 … 2395309]; `approximate`, `uncertain_any` | yes | — |
-| 10 | `12 Feb 1720/21` (D-005) | POINT; 1720-02-12, dual 1721; JULIAN; year start read as MARCH_25 | 1721-02-23 [2349696 … 2349696] | no | 1720-02-12 or 1721-02-12 Gregorian |
+| 9 | `bet. abt 1840 and 1845?` | BETWEEN; p1 1840 ABOUT; p2 1845 uncertain; UNSPECIFIED | 1840-01-01 … 1846-04-05 [2393106 … 2395392]; `approximate`, `uncertain_any` | yes | — |
+| 10 | `12 Feb 1720/21` (D-005) | POINT; 1720-02-12, dual 1721; JULIAN; the dual year gives the MARCH_25 reading | 1721-02-23 [2349696 … 2349696] | no | 1720-02-12 or 1721-02-12 Gregorian |
 | 10b | `12 Feb 1720/21` | as #10, calendar UNSPECIFIED | 1721-02-12 … 1721-02-23 [2349685 … 2349696] | no | — |
-| 11 | `1720`, Julian source, year start not stated | POINT; 1720; JULIAN; year start UNSPECIFIED (≤ 1750, so both styles) | 1720-01-12 … 1721-04-04 [2349288 … 2349736] | no | 1720-01-01 … 1720-12-31 |
-| 11b | `1720`, Julian, researcher states 25 March | as #11, year start MARCH_25 | 1720-04-05 … 1721-04-04 [2349372 … 2349736] | no | — |
-| 11c | `1720`, nothing stated | POINT; 1720; calendar and year start UNSPECIFIED | 1720-01-01 … 1721-04-04 [2349277 … 2349736] | no | — |
-| 12 | `1847?` | POINT; 1847 uncertain | as #4 [2395663 … 2396039]; `uncertain_any` | yes | 1847 certain |
-| 13 | `the 3d day of March in the year 1803` | parser proposes POINT 1803-03-03, UNSPECIFIED; saved only on confirmation | 1803-03-03 … 1803-03-15 [2379653 … 2379665] | no | — |
+| 11 | `1720`, Julian source, ys not recorded | POINT; 1720; JULIAN; ys UNSPECIFIED | 1720-01-12 … 1721-04-04 [2349288 … 2349736] | no | 1720-01-01 … 1720-12-31 |
+| 11a | `1720`, Julian, researcher records 1 January | ys JANUARY_1 | 1720-01-12 … 1721-01-11 [2349288 … 2349653] | no | — |
+| 11b | `1720`, Julian, researcher records 25 March | ys MARCH_25 | 1720-04-05 … 1721-04-04 [2349372 … 2349736] | no | — |
+| 11c | `1720`, nothing recorded | calendar and ys UNSPECIFIED | 1720-01-01 … 1721-04-04 [2349277 … 2349736] | no | — |
+| 12 | `1847?` | POINT; 1847 uncertain; UNSPECIFIED | as #4 [2395663 … 2396123]; `uncertain_any` | yes | 1847 certain |
+| 13 | `the 3d day of March in the year 1803` | parser proposes POINT 1803-03-03, calendar and ys UNSPECIFIED; saved only on confirmation | 1803-03-03 … 1804-03-15 [2379653 … 2380031] | no | — |
 | 14 | `3/4/1803` | no proposal; NOT_INTERPRETED | none | not by date | 4 March or 3 April |
 | 15 | `in the fifth year of the reign of King George II` | no proposal (regnal) | none until interpreted | not by date | a guessed year |
 | 16 | `Spring 1847` | no proposal (seasons not modelled) | none until interpreted | not by date | 1847-03-01 |
 | 17 | `unknown` | UNKNOWN | none | not by date | — |
-| 18 | `from 1840` | FROM; 1840 | 1840-01-01 … open [2393106 … NULL] (a FROM period's start is p1's span; its end is open) | yes | — |
-| 19 | `12 Feb 1720`, Julian, year start not stated | POINT; 1720-02-12; JULIAN; year start UNSPECIFIED | 1720-02-23 … 1721-02-23 [2349330 … 2349696]: two possible days, a year apart; the days between are envelope only | no | either single day |
-| 20 | `March 1720`, Julian, year start not stated | POINT; 1720-03; JULIAN; UNSPECIFIED | 1720-03-12 … 1721-04-04 [2349348 … 2349736] | no | — |
-| 21 | `1 March 1500` | POINT; UNSPECIFIED calendar | 1500-03-01 … 1500-03-11 [2268983 … 2268993] (difference 10 days) | no | — |
-| 22 | `29 Feb 1700` | POINT; UNSPECIFIED; only the Julian reading exists | 1700-03-11 [2342042 … 2342042] | no | an invalid Gregorian day |
-| 23 | `10 May 2200` (calendar unstated) | POINT; UNSPECIFIED | 2200-05-10 … 2200-05-25 [2524723 … 2524738] (difference 15 days) | no | — |
+| 18 | `from 1840` | FROM; 1840; UNSPECIFIED | 1840-01-01 … open [2393106 … NULL] (start from p1's envelope; end open) | yes | — |
+| 19 | `12 Feb 1720`, Julian, ys not recorded | POINT; 1720-02-12; JULIAN; ys UNSPECIFIED | 1720-02-23 … 1721-02-23 [2349330 … 2349696]. Two possible days, a year apart; the days between are envelope only. | no | either single day |
+| 20 | `March 1720`, Julian, ys not recorded | POINT; 1720-03; JULIAN; ys UNSPECIFIED | 1720-03-12 … 1721-04-04 [2349348 … 2349736] | no | — |
+| 21 | `1 March 1500` | POINT; calendar and ys UNSPECIFIED | 1500-03-01 … 1501-03-11 [2268983 … 2269358] | no | — |
+| 21a | `1 March 1500` | ys JANUARY_1 | 1500-03-01 … 1500-03-11 [2268983 … 2268993] (calendar difference 10 days) | no | — |
+| 22 | `29 Feb 1700` | POINT; UNSPECIFIED. Only the Julian 1 January reading exists: 29 Feb is not a Gregorian day in 1700, and the 25 March reading (29 Feb 1701) does not exist in either calendar. | 1700-03-11 [2342042 … 2342042] | no | an invalid day |
+| 23 | `10 May 2200` | POINT; UNSPECIFIED | 2200-05-10 … 2200-05-25 [2524723 … 2524738] (difference 15 days; 25 March–31 December dates are unaffected by year start) | no | — |
 | 24 | `10 May 250` | POINT; UNSPECIFIED | 0250-05-10 [1812500 … 1812500] (calendars agree in the 3rd century) | no | — |
-| 25 | `10 May 150` | POINT; UNSPECIFIED | 0150-05-09 … 0150-05-10 [1775975 … 1775976] (Julian reading is one day *earlier*) | no | — |
+| 25 | `10 May 150` | POINT; UNSPECIFIED | 0150-05-09 … 0150-05-10 [1775975 … 1775976] (the Julian reading is one day *earlier*) | no | — |
+| 26 | `10 May 1847` | POINT; UNSPECIFIED | 1847-05-10 … 1847-05-22 [2395792 … 2395804] (no year-start widening: the styles agree from 25 March) | yes | — |
+| 27 | `1952`, Gregorian, ys not recorded | POINT; 1952; GREGORIAN; ys UNSPECIFIED | 1952-01-01 … 1953-03-24 [2434013 … 2434461]. Widening applies in every period because no convention is inferred from the date. | no | — |
+| 27a | `1952`, Gregorian, researcher records 1 January | ys JANUARY_1 | 1952-01-01 … 1952-12-31 [2434013 … 2434378] | no | — |
 
-Examples 21–25 exist to show the difference is computed, not assumed: it is negative, zero, 10, 13 or 15 days
-depending on the date.
+Examples 21a and 23–25 show that the calendar difference is computed, not assumed: depending on the date it is
+negative, zero, 10, 13 or 15 days. Examples 1/1a, 4/4a, 11/11a and 27/27a show that a recorded convention is
+respected, and that an unrecorded one is preserved as uncertainty rather than resolved by period.
 
 ### 2.5 Parser and confirmation (PROPOSED, revised D4-06)
 - **What the parser recognises.** A deterministic grammar for English forms only:
@@ -784,7 +817,7 @@ concurrent editing. It fails visibly (STALE) rather than applying something unre
 | ID | Conflict | Effect | Proposed resolution (PROPOSED) |
 |---|---|---|---|
 | **C-1** | The **one-RESOLVED-per-Mention** rule (D4-13) against **hidden-equals-nonexistent** (D3-04) once restricted Persons exist (D4-16) | A non-admin's resolve would either collide with a hidden RESOLVED row (a leak through the error) or supersede an Administrator's restricted decision (a hidden mutation) | Mention restriction plus the invariant in §5.2: NORMAL Mentions never target restricted Persons. Restricting a linked Person restricts its Mentions in the same transaction, after a preview. |
-| **C-2** | Rule 4 of §5.2 is a form of propagation, but D3-04 says "no automatic propagation" and SEC-005 is Phase 9 | Needs owner sanction | It is deliberate, previewed and explicit, so not automatic. Owner to confirm (revised D4-16). |
+| **C-2** | Rule 4 of §5.2 is a form of propagation, but D3-04 says "no automatic propagation" and SEC-005 is Phase 9 | Needs owner sanction | It is deliberate, previewed and explicit, so not automatic. **Approved** (D4-16 A, D4-27 A). |
 | **C-3** | Policy S requires **several Mentions per Role** | Possible duplicate Mentions for one Role, seen together by Administrators | No uniqueness of Mention per Role. Administrator UI labels them. Normal (non-restricted) workflows reuse the Role's visible Mention. |
 | **C-4** | Calendar UNSPECIFIED: assuming Gregorian (say, for dates after 1752 in British-colonial sources) would manufacture certainty | Envelopes wider than "obvious" by the actual Julian/Gregorian difference for that date (computed, not a constant: −1 to 73 days over years 1–9999; 10–13 days for 1500–2099) | Never assume. Keep both readings; the researcher may state the calendar (§2.3). *Revision 2: the earlier "up to 13 days" was wrong.* |
 | **C-5** | D-003 calls "1845-1849" a *range*, but sources also use the form for a *period* | Parser choice | The parser proposes BETWEEN. The confirmation screen offers FROM_TO. Never decided silently. |
@@ -796,7 +829,7 @@ concurrent editing. It fails visibly (STALE) rather than applying something unre
 | C-11 (known) | ACCEPTANCE-SPEC PR-008 example "Structure **S001**", while `S` is Source (Phase 3) | Phase 6 prefix | Phase 6 chooses another prefix; spec examples are illustrative. |
 | **C-12** (Rev. 2) | Restriction is per object, so restricting a Mention hides it **whole**, including its NORMAL candidates | Non-administrators lose that Mention from *other* Persons' pages | The preview shows this collateral (§5.5.2). The alternative, splitting the Mention, would rewrite source interpretation and is not proposed. |
 | **C-13** (Rev. 2) | Strict revalidation (any change means STALE) against a Person whose links change constantly | Confirmation could be repeatedly invalidated | Accepted at v1 scale. It fails visibly and never applies an unreviewed set. |
-| **C-14** (Rev. 2) | Year-start widening for UNSPECIFIED needs a cut-off year; 1750 is the British/colonial last 25 March legal year, a **regional** fact | Sources from regions that kept 25 March later would be under-widened after 1750 | A configurable `MARCH_25_LAST_YEAR` (D4-28). An explicit MARCH_25 is accepted for any year. Owner chooses the value. |
+| **C-14** (Rev. 2; **resolved by approved D4-28**) | Year-start widening for an UNSPECIFIED year start needed a cut-off year; the proposed 1750 was a **regional** fact | A universal cut-off would under-widen sources from regions with other histories | **Approved:** no cut-off. An UNSPECIFIED year start keeps both readings in every period; recorded conventions are respected; nothing is inferred from jurisdiction or period. Jurisdiction-specific, sourced calendar conventions are a possible later-phase enhancement, not Phase 4. |
 | **C-15** (Rev. 2) | BUILD-SPEC §12 lists no year-start styles other than the calendar; non-supported styles (1 March, Easter, 25 December) | Not representable structurally | Kept as the expression or entered as explicit points; never mapped (§2.2). |
 
 ---
@@ -820,8 +853,8 @@ These revisions are applied, still marked PROPOSED, in [`PHASE-4-DECISIONS.md`](
 | D4-25 (new, Rev. 2) | Calendar UNSPECIFIED is never assumed Gregorian or Julian, nor narrowed by era; both readings are kept and the difference is computed for the actual date (C-4). |
 | D4-26 (new) | Forms such as "1845-1849" are proposed as BETWEEN, with FROM_TO offered at confirmation (C-5). |
 | D4-27 (new, Rev. 2) | Restricting a linked Person follows the §5.5 protocol: persisted preview, single-transaction confirmation with revalidation (any difference means STALE), global lock order, deferred integrity triggers, idempotent retry, a job path that is still one transaction, an absolute ceiling, never chunked. Distinct from prohibited automatic propagation. |
-| D4-28 (new, Rev. 2) | `MARCH_25_LAST_YEAR` (proposed 1750) bounds year-start widening for UNSPECIFIED year start (C-14). |
-| D4-30 (new, Rev. 3) | Defer `place_derivation_link` (Alternative B, §1.5). Jurisdiction change in Phase 4 uses dated containment links plus sourced notes; the later phase is an owner assignment. |
+| D4-28 (new, Rev. 2; **approved as modified**) | *Proposed:* `MARCH_25_LAST_YEAR` (1750). *Approved instead:* no cut-off; recorded conventions respected; UNSPECIFIED keeps both readings in every period; no inference from jurisdiction or period; dual-year semantics kept (§2.3). |
+| D4-30 (new, Rev. 3; **approved B**) | Defer `place_derivation_link` to **Phase 6** (§1.5). Jurisdiction change in Phase 4 uses dated containment links plus sourced notes. Notes are never converted automatically. |
 | D4-29 (new, Rev. 2) | Re-proposing a previously rejected candidate (Mention, identity pair or collective member) creates a new attributed row and **requires a rationale**; the earlier rejection is shown, never blocks (§10.2). |
 
 ## 9. Proposed updates to the requirement-to-test matrix
@@ -830,7 +863,7 @@ These updates are applied, still PROPOSED, in [`PHASE-4-PLAN.md`](PHASE-4-PLAN.m
 
 | Requirement | Test | Phase 4 coverage |
 |---|---|---|
-| D-001…D-005 | `HistoricalDateTest`: the worked examples of §2.4 (25 rows with JDNs after Revision 2) as table-driven cases (stored fields, envelope, "never stored as") | Full (D-005 round trip in Phase 8) |
+| D-001…D-005 | `HistoricalDateTest`: the worked examples of §2.4 (37 rows with JDNs after Revision 4) as table-driven cases (stored fields, envelope, "never stored as") | Full (D-005 round trip in Phase 8) |
 | §12 "never more precision" | `HistoricalDateTest.envelopeNeverNarrowerThanStatedUnit` (property-based over generated dates), `…yearStartWidening`, `…unspecifiedCalendarWidening` | Full |
 | A-006 (dates) | `HistoricalDateIT.parserProposalNotStoredUntilConfirmed`, `…noParsingOnMigrationOrImport`, `…correctedExpressionMarksInterpretationStale` | Full |
 | C-003…C-005 | `CandidateResolutionIT.transitionsOnlyAsSpecified` (trigger), `…resolveDoesNotCloseOtherProposals`, `…reversalKeepsAttribution` | Full |
@@ -911,10 +944,11 @@ never rely on timing alone.
 
 | ID | Expected |
 |---|---|
-| HD-1 | Every row of §2.4, including the JDNs, as table-driven cases |
+| HD-1 | Every row of §2.4 (revised for approved D4-28), including the JDNs, as table-driven cases |
 | HD-2 | Calendar fixed points of §2.3, cross-checked against `java.time` (Gregorian) and pure-Julian `GregorianCalendar` for every day of 1–9999 at a sampled stride, and for every day of 1500–2100 |
 | HD-3 | Property-based: for random valid interpretations, the envelope contains the span of every enumerated reading, and changing a modifier or the uncertain flag never changes the envelope |
-| HD-4 | Year start: MARCH_25 legal-year spans; a dual year forces MARCH_25; a dual year with an explicit JANUARY_1 is refused; widening stops after the configured `MARCH_25_LAST_YEAR` |
+| HD-4 | Year start (approved D4-28): MARCH_25 legal-year spans; a dual year gives the MARCH_25 reading; a dual year with an explicit JANUARY_1 is refused; an explicit JANUARY_1 or MARCH_25 is respected in every year; UNSPECIFIED widens in every year (examples 1, 27). No cut-off constant exists. |
+| HD-7 | **No inferred convention** (approved D4-28): the same expression and interpretation stored on Records whose Sources, jurisdiction text, linked Places or periods differ produce byte-identical `year_start`, `calendar` and envelope. A parser proposal never sets `year_start` (always UNSPECIFIED). |
 | HD-5 | Day validity per calendar: 29 Feb 1700 is valid in Julian, invalid in Gregorian, and has a Julian-only reading when the calendar is UNSPECIFIED |
 | HD-6 | The integrity scan recomputes envelopes and reports a deliberately corrupted row without repairing it |
 
