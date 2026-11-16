@@ -280,16 +280,32 @@ register governs, then this ADR.
 
   Unrestricting never cascades (SEC-005). There is no automatic propagation (D3-04); the explicit, previewed
   operation is the only cascade.
-- **Global lock order:**
-  1. the operation;
-  2. Phase 3 objects (Record, Role);
-  3. Persons (`FOR SHARE` to link, `FOR UPDATE` to restrict);
-  4. Mentions;
-  5. collectives;
-  6. identity proposals;
-  7. child rows.
+- **Global lock order (Cl. §5.5.3, revised for PR4-R3).** There is one total order over (level, UUID) for every
+  transaction that locks archival rows:
 
-  Within a level, rows are locked in UUID order. All writers use this order.
+  | Level | Rows |
+  |---|---|
+  | L0 | the restriction operation |
+  | L1 | the accepted Phase 3 chain: session → worksheet rows → Files → Record (Roles, Citations and links are covered by the Record lock; Phase 4 takes Record `FOR SHARE`) |
+  | L2 | Persons, then Places |
+  | L3 | Mentions |
+  | L4 | collectives |
+  | L5 | identity proposals |
+  | L6 | child rows and history |
+  | L7 | reference rows, locked only implicitly by foreign-key checks |
+
+  The rules:
+  - acquisition is monotonic, and levels may be skipped;
+  - a row is locked at its final strength the first time (no `SHARE` → `UPDATE` upgrade);
+  - parents are locked explicitly before any write whose foreign keys reference them;
+  - no L0–L6 lock is taken after an explicit L7 lock.
+
+  Every writer's sequence is specified (W1–W14). The confirmation takes **no** L1 lock: its closure is independent
+  of Record state, and it writes no Record or Role row. It re-verifies the closure after acquiring the item locks.
+  A `LockSequence` helper records and, in test builds, enforces the order (LO-1…LO-7).
+- **Open issue GAS-P4-PLAN-001 (owner decision).** Removing a Phase 3 Record Role that has Role-backed Mentions
+  or collectives is affected by the new foreign keys, including a possible disclosure of hidden objects. See
+  [`issues.md`](../issues.md).
 - **Consistent reads.** Pages combining these visibilities read one `REPEATABLE READ READ ONLY` snapshot.
 - **Configuration (U-3, resolved).** Installation configuration with these defaults:
 
@@ -381,6 +397,7 @@ These meanings must survive export, backup and transfer without reinterpretation
   - `CollectiveRestrictionLifecycleIT` CL-1…CL-11;
   - `PersonRestrictionOperationIT` RO-1…RO-18 (RO-18: configuration bounds, including the 50,000 cap);
   - `PeopleRestrictionIT` 1–11;
+  - `LockSequenceTest` and `LockOrderIT` LO-1…LO-7 (PR4-R3);
   - `ProhibitedInferenceIT` 1–20.
 - **Implementation gate.** Final independent architectural review of this ADR and the three Phase 4 documents,
   then a separate owner instruction.

@@ -498,6 +498,7 @@ These rows add to or replace the rows above where they cover the same requiremen
 | Supplement area 4: counts, identifiers and history hidden | CL-5, CL-10, CL-11; `PeopleRestrictionIT` 1, 2, 3, 8, 9, 10; RO-14 | Full |
 | Supplement area 5: concurrent relationship or Mention creation during restriction | RO-15, RO-16, RO-5, RO-3, CR-6 | Full |
 | Supplement area 6: failed restriction leaves the prior state intact | RO-17, RO-2, RO-9, RO-10, RO-12 | Full |
+| PR4-R3: one global lock order for every writer (Cl. §5.5.3, W1–W14) | `LockSequenceTest` LO-1…LO-3 (recorded sequences, runtime guard, no unregistered locks); `LockOrderIT` LO-4…LO-7 (pairwise races including the job path and Phase 3 Record paths, Phase 3 unaffected, closure growth, implicit foreign-key locks) | Full |
 | L-002, D4-30 (Rev. 3) | `PlaceIT.countyFormationExpressedByContainmentAndNote` | Full (formation links deferred) |
 
 ### 9.2 Negative tests for prohibited historical inference (`ProhibitedInferenceIT`)
@@ -560,11 +561,11 @@ Names, Persons, Places, resolutions) and that no Change History entry of a forbi
 | WP | Content | Gate |
 |---|---|---|
 | WP0 | Decisions and U-1…U-3 approved (2026-11-15). [ADR-0012](architecture/ADR-0012-people-dates-places.md) and its data-dictionary drafts are written. Run the prefix compatibility check in WP1. | **Final independent architectural review** of ADR-0012 and the three Phase 4 documents, then a **separate implementation authorization** |
-| WP1 | Historical Date model, JDN calendar algorithms, envelope, parser and validation (unit-heavy); V0024 | `HistoricalDateTest` HD-1…HD-7 green; prohibited-inference items 10, 11, 18 |
+| WP1 | Historical Date model, JDN calendar algorithms, envelope, parser and validation (unit-heavy); the `LockSequence` helper with the Phase 3 locks registered at L1 (LO-1…LO-3); V0024 | `HistoricalDateTest` HD-1…HD-7 green; LO-1…LO-3 for Phase 3 paths; prohibited-inference items 10, 11, 18 |
 | WP2 | People: Person, Names, relationships, identity proposals; V0025 | P-001…P-007, P-009, P-010; prohibited-inference items 1–5, 8, 12, 13, 20 |
 | WP3 | Places: Place, Names, jurisdiction links (kind, basis); V0026; no formation links | L-001…L-003; `PlaceIT` D4-18 scenarios; `countyFormationExpressedByContainmentAndNote`; items 15, 19 |
 | WP4 | Mentions, Candidate Resolution, collective references, Record Role links, Record date interpretation, restriction tables and deferred invariant triggers; V0027 | C-001…C-006, A-006, P-008; CR-1…CR-7, RP-1…RP-8; items 6, 7, 9, 14, 16, 17 |
-| WP5 | Browser workflows, restriction (policy S and the D4-27 protocol), history visibility | `PeopleWebIT`, `PlacesWebIT`, `PeopleRestrictionIT` 1–11, CL-1…CL-11, RO-1…RO-18 |
+| WP5 | Browser workflows, restriction (policy S and the D4-27 protocol), history visibility | `PeopleWebIT`, `PlacesWebIT`, `PeopleRestrictionIT` 1–11, CL-1…CL-11, RO-1…RO-18, LO-4…LO-7 |
 | WP6 | Reference fixture, full CI matrix, completion report (`PHASE-4-COMPLETION.md`), draft PR, then stop for the independent Codex audit | All four jobs green, every job's results checked individually |
 
 The phase gate (§62) is all of §9.1 marked Full, plus §9.2, passing on every job. **No merge, acceptance or tag
@@ -605,6 +606,7 @@ notes:
 | U-3 | D4-27 numeric values | **Resolved:** configurable installation settings `people.restriction.*` with defaults 30 min, 5 s, 30 s, 1,000, 10 min, 50,000; validated by `check-config` (ADR-0012 §8). The ceiling is capped at 50,000; raising it needs an approved ADR revision (PR4-R1). Tests set their own values within the cap. |
 | U-4 | Year-start widening in every period (approved behaviour) | Phase 7 search design; no Phase 4 change |
 | U-5 | Phase 6 must explicitly carry formation and boundary-change relationships | Phase 6 planning |
+| GAS-P4-PLAN-001 | **Open (owner decision):** removing a Phase 3 Record Role that has Role-backed Mentions or collectives. Options A, B and C are in [`issues.md`](issues.md). | Blocks WP4 (Role-backed Mentions) until decided |
 
 ### 11.3 Acceptance risks
 | Risk | Effect | Mitigation |

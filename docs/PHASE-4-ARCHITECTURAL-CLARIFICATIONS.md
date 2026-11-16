@@ -12,6 +12,7 @@ approved register, the register governs.** Planning only: no Phase 4 implementat
 | Reviews | [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md) and [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md) at `7a68d32`. Neither is approved. |
 | Baseline | `phase-3-accepted` (`c494d6a`) and the accepted Phase 0–3 decisions, particularly D3-04 and the Phase 3 audit corrections GAS-P3-001…010 |
 | Outputs | This analysis (§1–§6), newly found conflicts (§7), proposed decision revisions (§8; also applied, still PROPOSED, in the register) and coverage-matrix updates (§9; also applied in the plan) |
+| Revision 6 | Review finding PR4-R3 (2026-11-15): one total lock order for every writer (§5.5.3: levels, rules, per-writer sequences W1–W14, the reason the confirmation takes no L1 lock); closure re-verification after locking (§5.5.5 step 4a); lock-order tests LO-1…LO-7 (§10.7). |
 | Revision 5 | U-1…U-3 resolved (2026-11-15): place types COUNTY and STATE seeded, type optional; place-name type vocabulary HISTORICAL, CURRENT, VARIANT; D4-27 values are configurable installation settings with the §5.5 defaults (§5.5.1, §5.5.5, §5.5.8). ADR-0012 written. |
 | Revision 4 | Owner approvals consolidated (2026-11-15): D4-28 modified (no cut-off; §2.3, §2.4, §7 C-14, §10.5 HD-4 and new HD-7); D4-30 approved as deferral to Phase 6 (§1.5). |
 | Revision 3 | Supplement (owner, 2026-11-15): county-formation decision (§1.5, D4-30); regression-test traceability for the six required areas with four added tests (§10.6). |
@@ -660,20 +661,81 @@ objects on restricted Records are included**: restoring or unrestricting them la
 example: "M00303 also has candidate P00140; non-administrators will no longer see this Mention on P00140's page."
 Restriction is per object, so hiding a Mention hides it whole (conflict C-12).
 
-#### 5.5.3 Global lock order
+#### 5.5.3 Global lock order (revised for review finding PR4-R3)
 
-Every Phase 4 write that touches these objects acquires row locks in this order. Within a level, rows are locked in
-ascending UUID order.
+**One total order** governs every transaction that locks Phase 3 or Phase 4 archival rows. It covers interactive
+services, the restriction confirmation and background jobs.
 
-| Level | Rows | Lock |
+| Level | Rows | Lock modes used | Taken by |
+|---|---|---|---|
+| L0 | `restriction_operation` | `FOR UPDATE` | restriction confirmation and cancel only |
+| L1 | **The accepted Phase 3 chain, unchanged:** capture session → worksheet rows → Files → **Archival Record**. Record Role, Citation and File-link rows are protected by their Record's lock and are never locked separately by Phase 4. | Record `FOR UPDATE` (Phase 3 edits, lifecycle, restriction, Citations, roles, links); Record **`FOR SHARE`** (Phase 4 writes to a Mention or collective anchored on that Record) | Phase 3 paths; Phase 4 Mention and collective writers |
+| L2 | **Persons**, then **Places** (each in ascending UUID) | `FOR SHARE` to create or change any row that references the Person or Place; `FOR UPDATE` to change the row itself (restriction, lifecycle, display name, note) | link writers; Person and Place editors; restriction confirmation |
+| L3 | Mentions | `FOR SHARE` when a write only *references* the Mention (collective anchor, named-Mention link); `FOR UPDATE` when its candidates or its own fields change | candidate and Mention writers; collective writers; confirmation |
+| L4 | Collective references | `FOR UPDATE` | collective and member writers; confirmation |
+| L5 | Person-identity proposals | `FOR UPDATE` | identity-proposal writers; confirmation |
+| L6 | Child rows: `candidate_resolution`, `collective_member`, `collective_named_mention`, `person_name`, `person_relationship`, `jurisdiction_link`, `place_name`, `restriction_operation_item`, Change History | inserted or updated after their parents | all writers |
+| L7 | Reference rows: `app_user`, vocabulary rows, friendly-ID series | implicit `FOR KEY SHARE` from foreign-key checks only | all writers (implicitly) |
+
+**Rules every writer follows:**
+1. **Monotonic acquisition.** A transaction acquires blocking row locks in non-decreasing (level, UUID) order.
+   - It may skip levels it does not need.
+   - It never acquires a lock at a lower level, or a lower UUID within a level, after a higher one.
+2. **Final strength first.** A row is locked at the strongest mode the transaction will need, the first time it
+   is locked. There is **no upgrade** from `FOR SHARE` to `FOR UPDATE` within a transaction, because two sharers
+   upgrading would deadlock.
+3. **Parents before implicit locks.** Before inserting or updating a row whose foreign keys reference an L1–L5 row,
+   the writer already holds an explicit lock on that row. The implicit `FOR KEY SHARE` that PostgreSQL takes for
+   the foreign-key check is therefore weaker than a lock already held and never waits.
+4. **L7 is terminal.** Phase 4 never locks L7 rows explicitly. Their only implicit lock, `FOR KEY SHARE`, conflicts
+   only with `FOR UPDATE` or key-changing updates of those rows. Codes and keys are immutable, so key-changing
+   updates do not happen. The one accepted explicit L7 lock, the enabled-administrator check
+   (`AppUserRepository.lockEnabledAdministrators`), runs in user-administration transactions that acquire no L0–L6
+   lock afterwards. Any future transaction that locks an L7 row explicitly must follow the same rule.
+5. **Job bookkeeping is outside the order.** The background-job claim, lease and progress updates (ADR-0008) run
+   in their own short transactions. The confirmation job's work transaction holds no `background_job` lock.
+
+Because every waiting edge points from a lower (level, UUID) key to a higher one, the wait-for graph among these
+transactions cannot contain a cycle. Deadlock handling (§5.5.6) remains as a defence, not as a mechanism the design
+relies on.
+
+**Acquisition sequence for every relevant writer:**
+
+| # | Writer | Sequence (→ = then) |
 |---|---|---|
-| L0 | `restriction_operation` | taken only by confirm and cancel |
-| L1 | Phase 3 objects (Record, Record Role) when the write needs them | as Phase 3 |
-| L2 | **Person** rows | `FOR SHARE` by any write that creates or changes a link to the Person (candidate, member, identity proposal, relationship); `FOR UPDATE` by a change to the Person's own restriction or lifecycle |
-| L3 | Mentions | `FOR UPDATE` |
-| L4 | Collective references | `FOR UPDATE` |
-| L5 | Identity proposals | `FOR UPDATE` |
-| L6 | Inserted or updated child rows | after their parents |
+| W1 | Create, edit, delete or restore a Mention (free or Role-backed) | L1 Record `SHARE` → L3 Mention `UPDATE` (on create, the new row) → L6 history |
+| W2 | Propose, resolve, reject, supersede or re-propose a candidate on Mention M for Person X (or Place X) | L1 M's Record `SHARE` → L2 X `SHARE` → L3 M `UPDATE` → L6 candidate rows and history. For supersede, the replaced row's candidate is **not** locked: only its row state (L6) changes. |
+| W3 | Create, edit, delete or restore a collective; set its anchor | L1 Record `SHARE` → L3 anchor Mention `SHARE` → L4 collective `UPDATE` → L6 |
+| W4 | Propose, resolve or reject a collective member X | L1 collective's Record `SHARE` → L2 X `SHARE` → L4 collective `UPDATE` → L6 member row |
+| W5 | Add or remove a named-Mention link | L1 Record `SHARE` → L3 Mention `SHARE` → L4 collective `UPDATE` → L6 link row |
+| W6 | Propose, resolve or reject an identity proposal for X, Y | L2 X, Y `SHARE` (UUID order) → L5 proposal `UPDATE` → L6 |
+| W7 | Create, correct or withdraw a relationship between X and Y | L2 X, Y `SHARE` (UUID order) → L6 relationship row `UPDATE` |
+| W8 | Add or correct a Name; change the preferred Name | L2 Person (`UPDATE` if the display pointer or Person row changes, else `SHARE`) → L6 Name row |
+| W9 | Edit a Person; delete or restore; unrestrict a Person | L2 Person `UPDATE` → L6 |
+| W10 | **Restriction confirmation** (interactive or job) | L0 operation `UPDATE` → L2 P `UPDATE` → (compute closure) → L3 Mentions `UPDATE` → L4 collectives `UPDATE` → L5 proposals `UPDATE` (each in UUID order) → (re-verify closure) → L6 items and history. **No L1 lock:** see below. |
+| W11 | Restrict or unrestrict a single Mention, collective or proposal | Mention: L1 Record `SHARE` → L2 its candidate Persons `SHARE` → L3 Mention `UPDATE`. Collective: L1 Record `SHARE` → L2 member Persons `SHARE` → L3 anchor and named Mentions `SHARE` → L4 collective `UPDATE`. Proposal: L2 both Persons `SHARE` → L5 `UPDATE`. |
+| W12 | Phase 3 Record paths (edit, delete, restore, restrict, roles, Citations, File links, grouping) | **Unchanged** explicit locks: L1 only, in the accepted Phase 3 order. Phase 4 adds no explicit lock to these transactions; hiding Mentions of a deleted or restricted Record is computed at read time. **One implicit addition:** removing a Record Role (a physical `DELETE` in Phase 3) makes PostgreSQL's foreign-key check take `FOR KEY SHARE` on the Mentions and collectives that reference the Role (L3/L4). That is after L1, so it is monotonic. The *semantics* of removing a Role that has Mentions are an open owner question (issue GAS-P4-PLAN-001). |
+| W13 | Place writes; jurisdiction links; Place Names | Place `UPDATE`, or for a link, both Places `SHARE` in UUID order (L2) → L6 |
+| W14 | Restriction preview, cancel, expiry marking | Preview: no locks (one read-only snapshot), then insert. Cancel or expire: L0 only. |
+
+**Why the confirmation takes no L1 lock, and why that is safe.**
+- **Its decisions never depend on Record state.** The closure deliberately includes Mentions and collectives on
+  deleted and restricted Records (§5.5.2).
+- **It never writes a Record or Role row,** and it never changes a foreign-key column that references one, so
+  PostgreSQL takes no implicit lock on L1 rows.
+- **Skipping L1 complies with rule 1.** It skips a level; it does not reverse the order.
+- **A Phase 3 Record path waits for the confirmation only in Role removal,** through the implicit L3/L4 foreign-key
+  lock above, and that wait is in increasing order. Every other Phase 3 path takes no Phase 4 lock.
+- **A Phase 4 writer holding a Record `SHARE` lock may wait for the confirmation** (on a Person or Mention), but the
+  confirmation never waits for that Record. So no cycle can form.
+
+**Closure stability under the held locks.** After step 4 of §5.5.5, nothing can change the closure:
+- every path that could add an item (W2, W3, W4, W5, W6 and W11, for P or for a locked Mention) needs a lock the
+  confirmation now holds;
+- relationships and Names with P are also stable, because W7 and W8 need P.
+
+The confirmation therefore re-runs the closure query once **after** acquiring the item locks (step 4a), and
+compares it with the preview.
 
 **Every** candidate, member or identity-proposal write bumps its parent's `row_version`. That includes propose,
 resolve, reject and supersede. The same ordering is used by the interactive service and by the background job.
@@ -707,9 +769,14 @@ resolve, reject and supersede. The same ordering is used by the interactive serv
      refuse a NORMAL link.
 3. **Recompute the affected set** with the same closure function, under the P lock. The set of (type, id) must equal
    the preview's items exactly. If it does not, go to step 7.
-4. **Lock every RESTRICT item** at L3–L5, in order, `FOR UPDATE`. Each `row_version` must equal its
-   `row_version_at_preview`. Informational items are compared by presence and `row_version`. If any differs, go to
-   step 7.
+4. **Lock every RESTRICT item** at L3, then L4, then L5, each level in ascending UUID order, `FOR UPDATE`. No L1
+   lock is taken, and no lock at a lower level is taken after this point (§5.5.3, W10). Each `row_version` must
+   equal its `row_version_at_preview`. Informational items (relationships and Names, which are stable under the P
+   lock) are compared by presence and `row_version`. If any differs, go to step 7.
+   - **4a. Re-verify the closure** with the same query, now that the item locks are held. It must still equal the
+     preview's items. A closure that grew between step 3 and step 4, for example through an anchor change that
+     committed just before its Mention was locked, therefore becomes STALE here, rather than failing the
+     commit-time trigger.
 5. **Apply.** All of these happen in the same transaction:
    - each RESTRICT item becomes RESTRICTED, with its `row_version` incremented and system-set attribution
      (`updated_by` is the confirming Administrator);
@@ -979,3 +1046,18 @@ areas.
 | 4 | Member counts, identifiers and historical records hidden where required | **CL-5** (counts, CP ID and UUID, history, writes), CL-10 (stated count and wording), **CL-11** (visible member's page and history), `PeopleRestrictionIT` 1, 2, 3, 8, 9 and 10 (§5.4), RO-14 (operation history hidden) | Equality with a "never existed" archive is the assertion throughout |
 | 5 | Concurrent relationship or Mention creation during Person restriction | **RO-15** (relationships), **RO-16** (Mentions), RO-5 (generic link writer and lock order), CR-6 (resolve against restriction), RO-3 (link after preview) | Both orderings tested for each |
 | 6 | Failed restriction transactions leave the previous consistent state intact | **RO-17** (all failure kinds, full before/after comparison), RO-2 (partial-progress fault injection), RO-9 (lock timeout and deadlock), RO-10 (deferred trigger), RO-12 (job path) | — |
+
+### 10.7 Lock-order conformance (`LockOrderIT`, `LockSequenceTest`; review finding PR4-R3)
+
+These tests demonstrate that every writer W1–W14 of §5.5.3 obeys the same order. They run on PostgreSQL 16 and 18,
+on Windows and Linux.
+
+| ID | Test | Expected |
+|---|---|---|
+| LO-1 | **Recorded sequences** (`LockSequenceTest`, unit, with a recording `LockSequence` helper through which every repository lock call passes) | For each writer W1–W14, including the confirmation's interactive and job paths, the recorded (level, UUID, mode) sequence equals the §5.5.3 table and is non-decreasing. |
+| LO-2 | **Runtime guard** | In test builds the `LockSequence` helper throws on any lower-level acquisition after a higher one, and on any `SHARE` → `UPDATE` upgrade of the same row. A deliberately mis-ordered test path is rejected. Every integration suite runs with the guard on. |
+| LO-3 | **No unregistered locks** (`ArchitectureTest` addition) | Every `FOR UPDATE` and `FOR SHARE` statement in the `data` package for Phase 3 and Phase 4 archival tables is reached only through `LockSequence`. Phase 3 statements are registered at L1 in their accepted order, without behaviour change. |
+| LO-4 | **Pairwise races** (`LockOrderIT`) | For each conflicting pair, 50 barrier-synchronised iterations with automatic deadlock retry **disabled** and `deadlock_timeout` lowered: zero `40P01` errors, and the invariant holds at every commit. The pairs: confirmation (W10) × each of W1–W9 and W11; confirmation via the **job path** × W2 and W4; Phase 3 Record delete, restrict and edit (W12) × W1–W5 and W11; Place delete (W13) × W2 for a Place candidate; W6 × W7 on the same Persons in both argument orders. |
+| LO-5 | **Phase 3 path unaffected** | While a confirmation holds P and the Mentions on Record R, Phase 3 edits, lifecycle changes and restriction of R complete without waiting. Role removal on R (the only Phase 3 path with an implicit Phase 4 lock) either waits and then completes, or is refused under the outcome of GAS-P4-PLAN-001, and never deadlocks. All Phase 3 race tests pass unchanged. |
+| LO-6 | **Closure growth** | W3 sets a collective's anchor to a Mention in the closure, racing the confirmation. The outcome is either W3 first, with the confirmation STALE at step 3 or 4a, or the confirmation first, with W3 refused by the invariant. The commit-time trigger never fires. |
+| LO-7 | **Implicit foreign-key locks** | With `pg_locks` inspection during W1–W11, every implicit `FOR KEY SHARE` on an L1–L5 row is held only on a row the transaction had already locked explicitly. Implicit locks on L7 rows never wait in the races of LO-4. |
