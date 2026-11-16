@@ -162,6 +162,7 @@ public final class ArchivalFileRepository {
     }
 
     public Optional<ArchivalFile> lock(UUID fileId) {
+        LockSequence.acquire(LockSequence.Level.L1_PHASE3, "archival_file", fileId, LockSequence.Mode.UPDATE);
         jdbc.sql("SELECT file_id FROM gas.archival_file WHERE file_id = :id FOR UPDATE").param("id", fileId)
                 .query(UUID.class).optional();
         return find(fileId);
@@ -173,6 +174,7 @@ public final class ArchivalFileRepository {
      * work under the File's current authorization (GAS-P3-004).
      */
     public Optional<ArchivalFile> lockShared(UUID fileId) {
+        LockSequence.acquire(LockSequence.Level.L1_PHASE3, "archival_file", fileId, LockSequence.Mode.SHARE);
         jdbc.sql("SELECT file_id FROM gas.archival_file WHERE file_id = :id FOR SHARE").param("id", fileId)
                 .query(UUID.class).optional();
         return find(fileId);

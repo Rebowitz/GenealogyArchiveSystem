@@ -101,6 +101,7 @@ public final class ArchivalRecordRepository {
     }
 
     public Optional<ArchivalRecord> lock(UUID id) {
+        LockSequence.acquire(LockSequence.Level.L1_PHASE3, "archival_record", id, LockSequence.Mode.UPDATE);
         return jdbc.sql(RECORD_SELECT + " WHERE r.record_id = :id FOR UPDATE OF r").param("id", id).query(RECORD).optional();
     }
 

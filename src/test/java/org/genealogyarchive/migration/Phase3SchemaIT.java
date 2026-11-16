@@ -25,6 +25,9 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  */
 class Phase3SchemaIT {
 
+    /** Pinned to the accepted Phase 3 schema (V0023); later phases are checked in their own schema ITs. */
+    private static final String PHASE_3 = "0023";
+
     private static final String VOLUME = "11111111-1111-4111-8111-111111111111";
 
     private TestDatabase db;
@@ -113,7 +116,7 @@ class Phase3SchemaIT {
             before.add(query(sql));
         }
 
-        SchemaMigrator current = new SchemaMigrator(ds);
+        SchemaMigrator current = SchemaMigrator.upTo(ds, PHASE_3);
         assertThat(current.status().state()).isEqualTo(SchemaStatus.State.BEHIND);
         SchemaMigrator.MigrationReport report = current.migrate();
 
@@ -136,7 +139,7 @@ class Phase3SchemaIT {
 
     @Test
     void phase3AddsOnlyRecordTables() {
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, PHASE_3).migrate();
         assertThat(tables()).containsExactlyInAnyOrder(
                 "relation flyway_schema_history kind=r",
                 "relation schema_identity kind=r",
@@ -179,7 +182,7 @@ class Phase3SchemaIT {
     /** D3-07 prefixes; D3-08 seeds: only the values the specifications name. */
     @Test
     void friendlySeriesAndSeedVocabulariesAreRegistered() throws Exception {
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, PHASE_3).migrate();
         assertThat(query("SELECT object_type, prefix, min_digits FROM gas.friendly_id_series ORDER BY object_type"))
                 .contains("archival_record|R|5", "repository|RP|4", "source|S|5", "capture_session|CS|4", "citation|CT|5",
                         "archival_file|F|5");
@@ -191,7 +194,7 @@ class Phase3SchemaIT {
     /** A-001, A-002, A-003, R-006, CT-003, D3-12: identity is permanent; incomplete Records are valid. */
     @Test
     void recordIdentityIsPermanentAndIncompleteRecordsAreValid() throws Exception {
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, PHASE_3).migrate();
         execute("INSERT INTO archival_record (record_id, friendly_number, created_at) VALUES "
                 + "('30000000-0000-4000-8000-000000000001', 1842, now())");
         execute("UPDATE archival_record SET classification_code = 'DEED' WHERE friendly_number = 1842");
@@ -210,7 +213,7 @@ class Phase3SchemaIT {
 
     @Test
     void repositoriesSourcesSessionsAndCitationsArePermanent() throws Exception {
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, PHASE_3).migrate();
         execute("INSERT INTO repository (repository_id, friendly_number, name, created_at) VALUES "
                 + "('10000000-0000-4000-8000-000000000001', 1, 'County Clerk', now())");
         // O-003: a Source without a Repository.
@@ -233,7 +236,7 @@ class Phase3SchemaIT {
     /** Plan section 10.1: a Citation's targets and original locator never change; the current locator may. */
     @Test
     void citationTargetsAndOriginalLocatorAreImmutable() throws Exception {
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, PHASE_3).migrate();
         execute("INSERT INTO source (source_id, friendly_number, title, created_at) VALUES "
                 + "('20000000-0000-4000-8000-000000000001', 1, 'Deed Book 12', now())");
         execute("INSERT INTO source (source_id, friendly_number, title, created_at) VALUES "
@@ -250,7 +253,7 @@ class Phase3SchemaIT {
     /** Plan section 10.2: a value is stored exactly in VALUE mode; INHERIT and BLANK carry none. */
     @Test
     void overrideModesAreTriState() throws Exception {
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, PHASE_3).migrate();
         seedFileInSession();
         execute("UPDATE file_capture_context SET researcher_mode = 'BLANK'");
         execute("UPDATE file_capture_context SET researcher_mode = 'VALUE', override_researcher = 'R. Andrews'");
@@ -265,7 +268,7 @@ class Phase3SchemaIT {
     /** ADR-0011 s.4: a grouped row stays grouped; runs, chunks and group identities are permanent. */
     @Test
     void groupingIsPermanent() throws Exception {
-        new SchemaMigrator(ds).migrate();
+        SchemaMigrator.upTo(ds, PHASE_3).migrate();
         seedFileInSession();
         execute("INSERT INTO archival_record (record_id, friendly_number, created_at) VALUES "
                 + "('30000000-0000-4000-8000-000000000001', 1, now())");
@@ -325,7 +328,7 @@ class Phase3SchemaIT {
         execute("UPDATE file_capture_context SET page_designation = '227'");
         List<String> before = query("SELECT * FROM gas.file_capture_context");
 
-        SchemaMigrator.MigrationReport report = new SchemaMigrator(ds).migrate();
+        SchemaMigrator.MigrationReport report = SchemaMigrator.upTo(ds, PHASE_3).migrate();
         assertThat(report.fromVersion()).isEqualTo("0022");
         assertThat(report.migrationsApplied()).isEqualTo(1);
         assertThat(query("SELECT * FROM gas.file_capture_context")).as("upgrade changes no row").isEqualTo(before);

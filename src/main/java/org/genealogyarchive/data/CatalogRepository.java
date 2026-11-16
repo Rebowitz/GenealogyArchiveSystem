@@ -60,6 +60,7 @@ public final class CatalogRepository {
     }
 
     public Optional<Repository> lockRepository(UUID id) {
+        LockSequence.acquire(LockSequence.Level.L1_PHASE3, "repository", id, LockSequence.Mode.UPDATE);
         return jdbc.sql("SELECT " + REPOSITORY_COLUMNS + " FROM gas.repository WHERE repository_id = :id FOR UPDATE")
                 .param("id", id).query(REPOSITORY).optional();
     }
@@ -106,6 +107,7 @@ public final class CatalogRepository {
     }
 
     public Optional<Source> lockSource(UUID id) {
+        LockSequence.acquire(LockSequence.Level.L1_PHASE3, "source", id, LockSequence.Mode.UPDATE);
         return jdbc.sql("SELECT " + SOURCE_COLUMNS + " FROM gas.source WHERE source_id = :id FOR UPDATE").param("id", id)
                 .query(SOURCE).optional();
     }

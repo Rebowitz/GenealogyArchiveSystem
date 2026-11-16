@@ -1,0 +1,41 @@
+# Parser proposals (clarifications s.2.5; D4-06, D4-26). Columns: expression | form | first point | second point
+# ('NONE' in the form column means no proposal). Every proposal has calendar and year start UNSPECIFIED (HD-7).
+12 March 1847                          | POINT   | 1847-03-12           | -
+March 1847                             | POINT   | 1847-03              | -
+abt 1847                               | POINT   | 1847;ABOUT           | -
+about March 1847                       | POINT   | 1847-03;ABOUT        | -
+c. 1850                                | POINT   | 1850;ABOUT           | -
+ca 1850                                | POINT   | 1850;ABOUT           | -
+circa 1850                             | POINT   | 1850;ABOUT           | -
+est. 1830                              | POINT   | 1830;ESTIMATED       | -
+cal 1790                               | POINT   | 1790;CALCULATED      | -
+bef 1847                               | BEFORE  | 1847                 | -
+before 3 May 1847                      | BEFORE  | 1847-05-03           | -
+aft 1847                               | AFTER   | 1847                 | -
+after June 1850                        | AFTER   | 1850-06              | -
+1845-1849                              | BETWEEN | 1845                 | 1849
+from 1845 to 1849                      | FROM_TO | 1845                 | 1849
+bet. abt 1840 and 1845?                | BETWEEN | 1840;ABOUT           | 1845;?
+between 1840 and 1845                  | BETWEEN | 1840                 | 1845
+12 Feb 1720/21                         | POINT   | 1720-02-12;dual=1721 | -
+12 Feb 1720/1721                       | POINT   | 1720-02-12;dual=1721 | -
+1720/21                                | POINT   | 1720;dual=1721       | -
+1847?                                  | POINT   | 1847;?               | -
+the 3d day of March in the year 1803   | POINT   | 1803-03-03           | -
+3rd day of March 1803                  | POINT   | 1803-03-03           | -
+March 12, 1847                         | POINT   | 1847-03-12           | -
+Sept. 3, 1803                          | POINT   | 1803-09-03           | -
+1847-03-12                             | POINT   | 1847-03-12           | -
+1720                                   | POINT   | 1720                 | -
+29 Feb 1700                            | POINT   | 1700-02-29           | -
+3/4/1803                               | NONE    | -                    | -
+in the fifth year of the reign of King George II | NONE | -          | -
+Spring 1847                            | NONE    | -                    | -
+unknown                                | NONE    | -                    | -
+from 1840                              | NONE    | -                    | -
+12 Feb 1720/22                         | NONE    | -                    | -
+31 Feb 1847                            | NONE    | -                    | -
+bet 1850 and 1840                      | NONE    | -                    | -
+the third day of March 1803            | NONE    | -                    | -
+12                                     | NONE    | -                    | -
+Michaelmas 1790                        | NONE    | -                    | -

@@ -122,6 +122,10 @@
                     <includes>
                         <include>**/*Test.java</include>
                     </includes>
+                    <!-- Phase 4: the global row-lock order guard is on for every test run (ADR-0012 s.8; LO-2). -->
+                    <systemPropertyVariables>
+                        <gas.lockOrderGuard>true</gas.lockOrderGuard>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <!-- Phase-Gate Suite: PostgreSQL integration tests (mvnw verify). Requires GAS_TEST_DB_* variables. -->
@@ -132,6 +136,9 @@
                     <includes>
                         <include>**/*IT.java</include>
                     </includes>
+                    <systemPropertyVariables>
+                        <gas.lockOrderGuard>true</gas.lockOrderGuard>
+                    </systemPropertyVariables>
                 </configuration>
                 <executions>
                     <execution>

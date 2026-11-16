@@ -78,6 +78,7 @@ public final class CaptureSessionRepository {
 
     /** Locks the session row for the caller's transaction (serialises grouping and membership changes). */
     public Optional<CaptureSession> lock(UUID id) {
+        LockSequence.acquire(LockSequence.Level.L1_PHASE3, "capture_session", id, LockSequence.Mode.UPDATE);
         return jdbc.sql("SELECT " + SESSION_COLUMNS + " FROM gas.capture_session WHERE capture_session_id = :id FOR UPDATE")
                 .param("id", id).query(SESSION).optional();
     }
@@ -113,6 +114,7 @@ public final class CaptureSessionRepository {
     }
 
     public Optional<CaptureRow> lockRow(UUID fileId) {
+        LockSequence.acquire(LockSequence.Level.L1_PHASE3, "file_capture_context", fileId, LockSequence.Mode.UPDATE);
         return jdbc.sql("SELECT " + ROW_COLUMNS + " FROM gas.file_capture_context WHERE file_id = :f FOR UPDATE")
                 .param("f", fileId).query(ROW).optional();
     }

@@ -1,0 +1,41 @@
+# The worked examples of PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md s.2.4 (37 rows; HD-1). Independently
+# recalculated by the reviewer (37/37). Columns, separated by '|':
+#   id | form | calendar | year start | first point | second point | earliest JDN | latest JDN | overlaps 1840-1850 | approximate | uncertain
+# A point is YEAR[-MM[-DD]] followed by optional ;ABOUT ;ESTIMATED ;CALCULATED ;? ;dual=YEAR. '-' means none or open.
+1   | POINT           | UNSPECIFIED | UNSPECIFIED | 1847-03-12            | -        | 2395733 | 2396111 | true  | false | false
+1a  | POINT           | UNSPECIFIED | JANUARY_1   | 1847-03-12            | -        | 2395733 | 2395745 | true  | false | false
+2   | POINT           | GREGORIAN   | UNSPECIFIED | 1847-03-12            | -        | 2395733 | 2396099 | true  | false | false
+2a  | POINT           | GREGORIAN   | JANUARY_1   | 1847-03-12            | -        | 2395733 | 2395733 | true  | false | false
+3   | POINT           | UNSPECIFIED | UNSPECIFIED | 1847-03               | -        | 2395722 | 2396123 | true  | false | false
+3a  | POINT           | UNSPECIFIED | JANUARY_1   | 1847-03               | -        | 2395722 | 2395764 | true  | false | false
+4   | POINT           | UNSPECIFIED | UNSPECIFIED | 1847;ABOUT            | -        | 2395663 | 2396123 | true  | true  | false
+4a  | POINT           | UNSPECIFIED | JANUARY_1   | 1847;ABOUT            | -        | 2395663 | 2396039 | true  | true  | false
+5   | BEFORE          | UNSPECIFIED | UNSPECIFIED | 1847                  | -        | -       | 2396123 | true  | false | false
+6   | AFTER           | UNSPECIFIED | UNSPECIFIED | 1847                  | -        | 2395663 | -       | true  | false | false
+7   | BETWEEN         | UNSPECIFIED | UNSPECIFIED | 1845                  | 1849     | 2394933 | 2396853 | true  | false | false
+8   | FROM_TO         | UNSPECIFIED | UNSPECIFIED | 1845                  | 1849     | 2394933 | 2396853 | true  | false | false
+9   | BETWEEN         | UNSPECIFIED | UNSPECIFIED | 1840;ABOUT            | 1845;?   | 2393106 | 2395392 | true  | true  | true
+10  | POINT           | JULIAN      | UNSPECIFIED | 1720-02-12;dual=1721  | -        | 2349696 | 2349696 | false | false | false
+10b | POINT           | UNSPECIFIED | UNSPECIFIED | 1720-02-12;dual=1721  | -        | 2349685 | 2349696 | false | false | false
+11  | POINT           | JULIAN      | UNSPECIFIED | 1720                  | -        | 2349288 | 2349736 | false | false | false
+11a | POINT           | JULIAN      | JANUARY_1   | 1720                  | -        | 2349288 | 2349653 | false | false | false
+11b | POINT           | JULIAN      | MARCH_25    | 1720                  | -        | 2349372 | 2349736 | false | false | false
+11c | POINT           | UNSPECIFIED | UNSPECIFIED | 1720                  | -        | 2349277 | 2349736 | false | false | false
+12  | POINT           | UNSPECIFIED | UNSPECIFIED | 1847;?                | -        | 2395663 | 2396123 | true  | false | true
+13  | POINT           | UNSPECIFIED | UNSPECIFIED | 1803-03-03            | -        | 2379653 | 2380031 | false | false | false
+14  | NOT_INTERPRETED | UNSPECIFIED | UNSPECIFIED | -                     | -        | -       | -       | false | false | false
+15  | NOT_INTERPRETED | UNSPECIFIED | UNSPECIFIED | -                     | -        | -       | -       | false | false | false
+16  | NOT_INTERPRETED | UNSPECIFIED | UNSPECIFIED | -                     | -        | -       | -       | false | false | false
+17  | UNKNOWN         | UNSPECIFIED | UNSPECIFIED | -                     | -        | -       | -       | false | false | false
+18  | FROM            | UNSPECIFIED | UNSPECIFIED | 1840                  | -        | 2393106 | -       | true  | false | false
+19  | POINT           | JULIAN      | UNSPECIFIED | 1720-02-12            | -        | 2349330 | 2349696 | false | false | false
+20  | POINT           | JULIAN      | UNSPECIFIED | 1720-03               | -        | 2349348 | 2349736 | false | false | false
+21  | POINT           | UNSPECIFIED | UNSPECIFIED | 1500-03-01            | -        | 2268983 | 2269358 | false | false | false
+21a | POINT           | UNSPECIFIED | JANUARY_1   | 1500-03-01            | -        | 2268983 | 2268993 | false | false | false
+22  | POINT           | UNSPECIFIED | UNSPECIFIED | 1700-02-29            | -        | 2342042 | 2342042 | false | false | false
+23  | POINT           | UNSPECIFIED | UNSPECIFIED | 2200-05-10            | -        | 2524723 | 2524738 | false | false | false
+24  | POINT           | UNSPECIFIED | UNSPECIFIED | 250-05-10             | -        | 1812500 | 1812500 | false | false | false
+25  | POINT           | UNSPECIFIED | UNSPECIFIED | 150-05-10             | -        | 1775975 | 1775976 | false | false | false
+26  | POINT           | UNSPECIFIED | UNSPECIFIED | 1847-05-10            | -        | 2395792 | 2395804 | true  | false | false
+27  | POINT           | GREGORIAN   | UNSPECIFIED | 1952                  | -        | 2434013 | 2434461 | false | false | false
+27a | POINT           | GREGORIAN   | JANUARY_1   | 1952                  | -        | 2434013 | 2434378 | false | false | false

@@ -49,9 +49,19 @@ class ArchitectureTest {
                     BASE + ".files..", BASE + ".platform..", BASE + ".config..", BASE + ".domain..",
                     BASE + ".identity..", BASE + ".access..", BASE + ".history..", BASE + ".archive..",
                     BASE + ".security..", BASE + ".storage..", BASE + ".jobs..", BASE + ".preservation..",
-                    BASE + ".records..")
+                    BASE + ".records..", BASE + ".dates..")
             .should().dependOnClassesThat().resideInAnyPackage(
                     BASE + ".web..", BASE + ".ops..", BASE + ".boot..", BASE + ".cli..", BASE + ".worker..");
+
+    /**
+     * Phase 4: the Historical Date model, calendar arithmetic, envelope, validation and parser are plain Java
+     * (ADR-0012 s.2): no framework, no persistence, no I/O concerns, so their meaning cannot depend on the host.
+     */
+    @ArchTest
+    static final ArchRule historicalDatesArePlainJava = noClasses()
+            .that().resideInAnyPackage(BASE + ".dates..")
+            .should().dependOnClassesThat().resideInAnyPackage("org.springframework..", "java.sql..", "javax.sql..",
+                    BASE + ".data..", BASE + ".web..", BASE + ".platform..", BASE + ".config..", BASE + ".files..");
 
     /** Path, file-service, platform and configuration code is plain Java: testable without Spring. */
     @ArchTest
