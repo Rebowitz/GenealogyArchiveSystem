@@ -1,12 +1,18 @@
 # ADR-0012: People, Historical Dates, Places and Candidate Resolution (Phase 4)
 
 ## Status
-**Prepared for final independent architectural review (2026-11-15).**
+**Accepted — architectural planning, November 15, 2026.**
+- The independent architectural planning review accepted this ADR and the Phase 4 planning documents on
+  2026-11-15. Findings PR4-R1…PR4-R5 are closed, and issue GAS-P4-PLAN-001 is resolved as Option C. See
+  [`PHASE-4-PLAN-REVIEW-CORRECTIONS.md`](../PHASE-4-PLAN-REVIEW-CORRECTIONS.md).
+- This accepted architecture is the **governing Phase 4 planning baseline**, subject to the established authority
+  order (archival invariants, then ACCEPTANCE-SPEC, then BUILD-SPEC, then the approved decisions). Any substantive
+  architectural change requires a separate review.
 - All 30 Phase 4 decisions are approved by the owner, with D4-28 modified and D4-30 = B. Open items U-1…U-3 were
   also resolved by the owner on 2026-11-15. See [`PHASE-4-DECISIONS.md`](../PHASE-4-DECISIONS.md).
 - This ADR records the architecture those decisions produce.
-- **Phase 4 implementation is not authorized.** It requires this ADR to pass the final independent review and a
-  separate owner instruction.
+- **Architectural acceptance is not implementation authorization.** Phase 4 implementation is not authorized;
+  it requires a separate owner instruction.
 - Merge, formal acceptance and tagging require separate owner approval.
 
 ## Context
@@ -432,8 +438,9 @@ These meanings must survive export, backup and transfer without reinterpretation
   - `LockSequenceTest` and `LockOrderIT` LO-1…LO-7 (PR4-R3);
   - `RecordRoleWithdrawalIT` RW-1…RW-11 (GAS-P4-PLAN-001);
   - `ProhibitedInferenceIT` 1–20.
-- **Implementation gate.** Final independent architectural review of this ADR and the three Phase 4 documents,
-  then a separate owner instruction.
+- **Implementation gate.** The final independent architectural review of this ADR and the Phase 4 planning
+  documents is **satisfied** (accepted 2026-11-15). What remains is a separate owner instruction authorizing
+  implementation.
 
 ## Consequences
 - **Uncertainty is stored, not resolved.** Dates keep every reading they leave open, and identity and membership

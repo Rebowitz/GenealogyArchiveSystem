@@ -4,8 +4,8 @@
 |---|---|
 | Review | Independent review: initial findings on the Phase 4 planning documents |
 | Reviewed head | `99b9e3e` |
-| Corrected head | `d06c14c` (documentation only) |
-| Status of every finding | **builder-corrected, pending independent verification.** Only the reviewer can close a finding, and only the owner can authorize Phase 4 implementation. |
+| Corrected heads | `d06c14c` (PR4-R1, PR4-R2), `a6d1d9f` and `129d2a1` (PR4-R3, GAS-P4-PLAN-001), `d821b4d` (PR4-R4), `28b36cd` (PR4-R5); final verification at `28b36cd`. All documentation only. |
+| Status of every finding | **All findings CLOSED by the reviewer** (PR4-R1…PR4-R5), and GAS-P4-PLAN-001 RESOLVED (Option C). **Phase 4 architectural planning review: ACCEPTED, 2026-11-15.** Each section below keeps the status recorded at the time of its response. Only the owner can authorize Phase 4 implementation. |
 
 Each finding is quoted exactly as the reviewer gave it. Only the response, the changes and the commit are the
 builder's.
@@ -247,3 +247,12 @@ the authority.
 
 **This is acceptance of the Phase 4 architectural plan, not authorization to implement it.** No merge, tag,
 migration, application code or test execution is authorized. Implementation requires a separate owner instruction.
+
+## Status recorded after owner approval (2026-11-15)
+
+- ADR-0012 status: **Accepted — architectural planning, November 15, 2026.**
+- Plan WP0 gate: the independent architectural review is **satisfied**.
+- The accepted architecture is the governing Phase 4 planning baseline, subject to the established hierarchy of
+  specifications and approved decisions. Any substantive architectural change requires a separate review.
+- **Architectural acceptance is not implementation authorization.** No merge, tag, migration, application code or
+  test is authorized.

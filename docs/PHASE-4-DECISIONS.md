@@ -1,6 +1,6 @@
 # Phase 4 owner-decision register (People, Dates and Places)
 
-**Status: APPROVED by the owner on 2026-11-15**, for all 30 decisions and open items U-1…U-3, with the choices below. Architecture: [ADR-0012](architecture/ADR-0012-people-dates-places.md), prepared for final independent review. The approval includes
+**Status: APPROVED by the owner on 2026-11-15**, for all 30 decisions and open items U-1…U-3, with the choices below. Architecture: [ADR-0012](architecture/ADR-0012-people-dates-places.md), accepted (architectural planning) on 2026-11-15. The approval includes
 the applicable architectural refinements in [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md).
 **D4-28 was approved as modified** and **D4-30 as B (deferral)**.
 
@@ -65,8 +65,9 @@ decisions.
 | U-4 | Search usability of approved D4-28 (envelopes about one year wider when the convention is unrecorded) | Note: approved behaviour; the Phase 7 search design must expect it. |
 | U-5 | Phase 6 must carry formation and boundary-change relationships (not in BUILD-SPEC §62's Phase 6 list) | Note: a Phase 6 planning obligation. |
 
-The architecture is recorded in [ADR-0012](architecture/ADR-0012-people-dates-places.md), prepared for the final
-independent architectural review.
+The architecture is recorded in [ADR-0012](architecture/ADR-0012-people-dates-places.md), **accepted — architectural
+planning, 2026-11-15** ([review record](PHASE-4-PLAN-REVIEW-CORRECTIONS.md)). This is not implementation
+authorization.
 
 ---
 

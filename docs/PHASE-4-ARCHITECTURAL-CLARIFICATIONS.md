@@ -4,7 +4,9 @@
 [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md), "Approved decisions"), including the refinements in this document,
 with **D4-28 modified** and **D4-30 = B**. This document keeps its analysis and alternatives as the decision trail.
 Text below that still says "PROPOSED" describes the state at the time it was written. **Where it differs from the
-approved register, the register governs.** Planning only: no Phase 4 implementation is authorized.
+approved register, the register governs.** The independent architectural planning review accepted this document,
+with ADR-0012 and the plan, on 2026-11-15 ([review record](PHASE-4-PLAN-REVIEW-CORRECTIONS.md)). Planning only: no
+Phase 4 implementation is authorized.
 
 | Item | Value |
 |---|---|

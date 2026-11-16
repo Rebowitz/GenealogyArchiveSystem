@@ -1,6 +1,6 @@
 # Phase 4 Implementation Plan — People, Dates and Places
 
-**Status: aligned with the owner-approved decision register (2026-11-15). Planning only; no Phase 4 implementation is authorized.**
+**Status: accepted architectural planning baseline (independent review accepted 2026-11-15), aligned with the owner-approved decision register. Planning only; no Phase 4 implementation is authorized.**
 
 | Item | Value |
 |---|---|
@@ -8,7 +8,7 @@
 | Accepted baseline | Tag `phase-3-accepted` → commit `c494d6a` (Phase 3 merge, PR #6); `main` = `20d68c1` (adds only CLAUDE.md documentation commits) |
 | Branch | `phase-4-plan` from `main` `20d68c1` (planning documents only) |
 | Governing order | archival invariants → ACCEPTANCE-SPEC v1.1 → BUILD-SPEC v1.1 → approved Phase 0–3 decisions → accepted implementation → convenience |
-| Companion documents | [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md): the owner-decision register, D4-01…D4-30 and U-1…U-3, **approved 2026-11-15** (D4-28 modified, D4-30 = B). [`ADR-0012`](architecture/ADR-0012-people-dates-places.md): the architecture, prepared for final independent review. [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md): the detailed semantics ("Cl. §n"). |
+| Companion documents | [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md): the owner-decision register, D4-01…D4-30 and U-1…U-3, **approved 2026-11-15** (D4-28 modified, D4-30 = B). [`ADR-0012`](architecture/ADR-0012-people-dates-places.md): the architecture, **accepted — architectural planning, 2026-11-15**. [`PHASE-4-PLAN-REVIEW-CORRECTIONS.md`](PHASE-4-PLAN-REVIEW-CORRECTIONS.md): the review record. [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md): the detailed semantics ("Cl. §n"). |
 
 Where this plan depends on a choice the specifications leave open, it names the approved decision (**D4-nn**).
 The consistency review's items are in §11.2: U-1…U-3 are resolved; U-4 and U-5 are notes for Phases 7 and 6.
@@ -86,10 +86,10 @@ BUILD-SPEC §62:
 - **Explicit tables, never EAV (§10, §60).** Every concept has its own table and typed foreign keys. Candidate
   Resolution uses typed, nullable target columns with a CHECK that exactly one is set, not a free-form
   `(entity_type, entity_id)` pair (D4-13).
-- **ADR-0012 (prepared; awaiting independent acceptance).** [`ADR-0012`](architecture/ADR-0012-people-dates-places.md):
+- **ADR-0012 (accepted — architectural planning, 2026-11-15).** [`ADR-0012`](architecture/ADR-0012-people-dates-places.md):
   People, Dates, Places and Candidate Resolution, written from the approved register in the same form as ADR-0011,
-  including data-dictionary drafts for the Phase 8 export. It is awaiting the final independent architectural
-  review.
+  including data-dictionary drafts for the Phase 8 export. It is the governing Phase 4 planning baseline. Any
+  substantive architectural change requires a separate review.
 
 ---
 
@@ -566,7 +566,7 @@ Names, Persons, Places, resolutions) and that no Change History entry of a forbi
 
 | WP | Content | Gate |
 |---|---|---|
-| WP0 | Decisions and U-1…U-3 approved (2026-11-15). [ADR-0012](architecture/ADR-0012-people-dates-places.md) and its data-dictionary drafts are written. Run the prefix compatibility check in WP1. | **Final independent architectural review** of ADR-0012 and the three Phase 4 documents, then a **separate implementation authorization** |
+| WP0 | Decisions and U-1…U-3 approved (2026-11-15). [ADR-0012](architecture/ADR-0012-people-dates-places.md) and its data-dictionary drafts are written. Run the prefix compatibility check in WP1. | **Final independent architectural review: SATISFIED** (accepted 2026-11-15; PR4-R1…PR4-R5 closed; GAS-P4-PLAN-001 resolved). **Remaining: a separate owner implementation authorization.** |
 | WP1 | Historical Date model, JDN calendar algorithms, envelope, parser and validation (unit-heavy); the `LockSequence` helper with the Phase 3 locks registered at L1 (LO-1…LO-3); V0024 | `HistoricalDateTest` HD-1…HD-7 green; LO-1…LO-3 for Phase 3 paths; prohibited-inference items 10, 11, 18 |
 | WP2 | People: Person, Names, relationships, identity proposals; V0025 | P-001…P-007, P-009, P-010; prohibited-inference items 1–5, 8, 12, 13, 20 |
 | WP3 | Places: Place, Names, jurisdiction links (kind, basis); V0026; no formation links | L-001…L-003; `PlaceIT` D4-18 scenarios; `countyFormationExpressedByContainmentAndNote`; items 15, 19 |
