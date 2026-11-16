@@ -144,7 +144,7 @@ authority. IDs (SR2-n) are the builder's, for cross-reference only.
 | ID | Finding (review) | Rev 3 | Revision 3.1 action | After 3.1 |
 |---|---|---|---|---|
 | SR2-1 | SA-R1 closed as a direction; overall freedom depends on SA-R3, PO-1 and PO-2 | FULL | none | ADDRESSED (design); the global theorem stays conditional (proposal §5) |
-| SR2-2 | SA-R2 closed with boundary clarifications (§5) | PARTIAL | §4.6 implementation boundaries, overlapping roots, publisher rollback (see SR2-60…66) | ADDRESSED (design) |
+| SR2-2 | SA-R2 closed with boundary clarifications (§5) | PARTIAL | §4.6 implementation boundaries, overlapping roots, publisher rollback (see SR2-66…73; **[3.2] pointer corrected** from "SR2-60…66") | ADDRESSED (design) |
 | SR2-3 | SA-R3 open: I-ADV false; shared generation and path writes; trigger writes | PARTIAL | matrix rows P14b, P17, D5b, U2 corrected; ledger K8, K8b, K19, K20; P2-8c extended | ADDRESSED (design), subject to PO-A…PO-D and D-LP-8 |
 | SR2-4 | SA-R4 closed as a direction; implementation and Phase 3 assertions required | FULL | LP-4d added | ADDRESSED (design) |
 | SR2-5 | SA-R5 partial: parent re-lock conflict; pending batches; public keys; explicit locks on supposedly excluded tables | PARTIAL | §6: `privateNew` limited to ledger-private tables; ownership context derived from held locks; equal-replacement plan; table and level binding | ADDRESSED (design) |
@@ -298,7 +298,7 @@ authority. IDs (SR2-n) are the builder's, for cross-reference only.
 | SR2-113 | D-LP-7 conditionally acceptable | FULL | linearization rule | DECISION |
 | SR2-114 | D-LP-8 active now | FULL (Option C) | P2-8c extended | DECISION |
 | SR2-115 | §11 (1): withdraw the readiness implication; PO-1 contradicted; PO-2 not established | PARTIAL (withdrawn, but not stated as "contradicted / not established") | proposal header states it | ADDRESSED |
-| SR2-116 | §11 (2)–(8) | as rows above | as above | as above |
+| SR2-116 | §11 (2)–(8). **[3.2] Expanded; this row resolves nothing on its own:** (2) writer matrix → SR2-10…51; (3) uniqueness ledger → SR2-52…65; (4) catalog references → SR2-14…21 and SR2-B1 / D-LP-9; (5) guard → SR2-84…88; (6) closure → SR2-66…73; (7) `add` authorization and counts → SR2-74…83; (8) tests → SR2-89…105 | see the referenced rows | see the referenced rows | the status of each referenced row |
 
 #### Builder finding during reconciliation
 
@@ -306,17 +306,134 @@ authority. IDs (SR2-n) are the builder's, for cross-reference only.
 |---|---|---|---|---|
 | SR2-B1 | **Revision 3's rule TR (c), (d) and lemma L7 were wrong.** The accepted administrator check (`UserService.update` → `lockEnabledAdministrators`, one statement, several rows FOR UPDATE ascending) waits on later administrators while holding earlier ones. With history foreign keys this forms A → T1 → T2 → A. | Executed on local PostgreSQL 16 against the real `app_user`, `change_history` and administrator-check SQL: 40P01 (proposal §11.5) | TR and L7 revised; PO-E withdrawn; **new decision D-LP-9** (first-statement advisory key for role and enable changes); LP-14 | **DECISION D-LP-9.** The defect exists in accepted code; recorded in `docs/issues.md` as GAS-P4-003 |
 
-**R3-OPEN-1 closed by reconciliation.** Every finding above has been individually accounted for. This closes the
-reconciliation item only. It does not close any finding the reviewer owns, WP1-R1 or GAS-P4-002.
+**R3-OPEN-1 closed by reconciliation.** The register above has **111 populated numeric SR2 rows** (SR2-1…SR2-116,
+with **SR2-7, SR2-8, SR2-9, SR2-38 and SR2-39 unused**) **plus SR2-B1**: 112 rows in all. **[3.2] Correction:**
+the 3.1 checkpoint said "110 individual findings (SR2-1 to SR2-115)" plus one aggregate. The accurate count is above.
+- The unused IDs are gaps in the builder's numbering, not omitted findings.
+- SR2-116 is an aggregate cross-reference, not seven independent resolutions.
+- SR2-B1 is an additional discovery, not a resolution.
+- "ADDRESSED" in this register means a **design reconciliation** answer, not independent architectural closure and
+  not implementation closure. The third assessment's Appendix A gives the independent disposition of every row (see
+  the next section).
+
+This closes the reconciliation item only. It does not close any finding the reviewer owns, WP1-R1 or GAS-P4-002.
 
 **What remains open:**
 - **Decisions:** D-LP-1…D-LP-9, including D-LP-8 with P2-8a…f and the new D-LP-9.
 - **Proof obligations:** PO-A…PO-D, unproven until their tests run on an implementation.
 - **Tests:** every corrected-path test is a specification only.
 
-**Status:** revision 3.1 submitted (reconciled with the second review). WP1-R1 and GAS-P4-002 are not closed.
-Awaiting a third independent assessment and owner decisions D-LP-1…D-LP-9. WP1 is not
-accepted; WP2 remains on HOLD.
+
+### Third independent architectural assessment (revision 3.1 → revision 3.2)
+
+| | |
+|---|---|
+| Assessment | `Phase-4-WP1-Third-Architectural-Assessment.md`, 16 November 2026, reviewed head `2227b10` |
+| Disposition received | PROPOSAL REQUIRES REVISION. WP1-R1, GAS-P4-002, GAS-P4-003 OPEN; WP1 unaccepted; WP2 HOLD. |
+| Direction | Phase 4 WP1 — Locking-Protocol Revision 3.2 Direction |
+| Result | proposal revision 3.2 (same file) |
+
+The assessment's text is not altered; findings are cited by section. IDs T3-n are the builder's, for
+cross-reference only. **Response column:** what revision 3.2 does. **Status:** RESPONDED (a design or specification
+answer, awaiting independent assessment) or OPEN (with the reason).
+
+**Independent statuses recorded as the assessor gave them (§3), not changed by this response:**
+
+| Finding | Assessor's status | Builder note |
+|---|---|---|
+| SA-R1 | CLOSED, architectural direction only | none |
+| SA-R2 | CLOSED, architectural direction only | none |
+| SA-R3 | PARTIAL | answered by T3-10…T3-32 |
+| SA-R4 | CLOSED, architectural direction only | none |
+| SA-R5 | PARTIAL | answered by T3-48…T3-54 |
+| SA-R6 | PARTIAL | answered by T3-55…T3-70 |
+
+None of these closes WP1-R1 or certifies a production change.
+
+| ID | Assessment section and finding | Response (revision 3.2) | Status |
+|---|---|---|---|
+| T3-1 | §3: the register count is 111 numeric rows plus SR2-B1; five IDs unused | Corrected in the reconciliation text above | RESPONDED |
+| T3-2 | §3: SR2-116 is an aggregate; expand it | Row expanded into the seven references; it resolves nothing on its own | RESPONDED |
+| T3-3 | §3: "ADDRESSED" ≠ independent closure; named rows need qualification | Register text now says "design reconciliation"; Appendix A dispositions adopted as the independent status (T3-71) | RESPONDED |
+| T3-4 | §3, Appendix A: SR2-2's pointer should be SR2-66…73 | Corrected | RESPONDED |
+| T3-10 | §4 R3-R1 (1): quarantine intent not covered by CR-1 | Intent inventoried separately (proposal §4.9 Wa1) as exception E3 and lemma A4: one autocommit statement, the destination key embeds the operation id, callers hold that operation's advisory, fk KS on O and volume only (no fk on `content_id`). Durable intent-before-move kept; no transaction spans measurement or rename. | RESPONDED |
+| T3-11 | §4 R3-R1 (2): standalone NOT_PROTECTED, LINK_OR_REPARSE, UNREADABLE, `observeUnresolved` and `observeExisting` | §4.9 We5 and We6; exceptions E2 and E1; lemma A3 with the finding and observation keys and the scan, finding and operation fks. Classified as content-scoped, not operation-only. | RESPONDED |
+| T3-12 | §4: the contentless `attest` fast path is a named exception, not an owner path | §4.9 Wd3, exception E5, lemma A4; CR-3 text | RESPONDED |
+| T3-13 | P2-8a: classify intent and every reconciliation entry point; PO-B for `releaseTargetsAt` | Wa1, Wa2, Wa3; PO-B (§5.1) proves source identity per source class | RESPONDED; PO-B conditional on INV-U for attested sources |
+| T3-14 | P2-8b: re-read the generation under Ct | Wb1 | RESPONDED |
+| T3-15 | P2-8c: include completion, stopped-repair conversion, `markVacated`, `newRecord`/classify/refuse in the operative table | Wc1…Wc7 in the operative table; no "single statement therefore safe" substitution for fk or trigger statements | RESPONDED |
+| T3-16 | P2-8d: release, both attest branches, close, delegated settlement; identity read versus revalidated | Wd1…Wd5, with entry identity and revalidation columns | RESPONDED |
+| T3-17 | P2-8e: extend or exempt the other finding, observation and verification writes | We1…We6 | RESPONDED |
+| T3-18 | P2-8f: branch on actual persisted content identity; contentless ingest; private publication | §4.9 preamble (the lock returns MISSING, so CR-3 applies), Wf1…Wf3 | RESPONDED |
+| T3-19 | §4: modified Option C; distinguish six groups from window count | Six groups change 15 windows; Phase 2 total 18 windows under 9 items (proposal §4.9, §7) | RESPONDED |
+| T3-20 | §5 PO-A: `renewReceivers` is not single-O | Lemma A2 (disjoint receiving sets) | RESPONDED; conditional (A2) |
+| T3-21 | PO-A: I5 does not meet the O/event premise | Lemma A3 | RESPONDED |
+| T3-22 | PO-A: event and inserted-row fks, triggers, REQUIRED joining | Lemma A1 proof (columns written, fk columns, K4); guard G9 | RESPONDED |
+| T3-23 | PO-A: CR-2 "only O" wording; event key and terminal fks as stated exceptions | CR-2 rewritten | RESPONDED |
+| T3-24 | PO-A: forbid joining a resource-holding transaction; LP-10b audits SQL, not flags; LP-10g controller | G9; LP-10b; LP-10g | RESPONDED |
+| T3-25 | PO-B: prove qualifying identity for generation retirement and settlement, including historical, vacated and unresolved paths | §5.1 with fact F1 (GENERATION owner rows are never deleted) | RESPONDED; generation and own-target cases source-supported; attested case conditional on INV-U |
+| T3-26 | PO-B: intermediate versions of blocked UPDATEs; handoffs | §5.1 handoff and blocked-UPDATE rows | RESPONDED |
+| T3-27 | PO-B tests: real triggers, matching and non-matching, handoff, rollback, controller locks excluded | LP-10e (i)–(iv) | RESPONDED (future test) |
+| T3-28 | PO-C: both owner keys, release DELETE and claim INSERT triggers, generation PK and CURRENT, later holder waits | §5.2 S1, S2, S3 | RESPONDED |
+| T3-29 | PO-C: CREATE_NEW is not SQL proof; "terminal holder" applies only to `createOwned`; `commitNewContent` needs a private-path proof | §5.2 S1 (terminal), S3 (INV-P) | RESPONDED; conditional on INV-P |
+| T3-30 | PO-C tests: an uncommitted SQL claim, external removal, commit and rollback, the owner key | LP-10f rewritten; LP-10h scoped | RESPONDED (future test) |
+| T3-31 | PO-D: every existing-content caller (incl. `newRecord`); cross-content exclusion | §5.3 | RESPONDED; conditional on INV-P |
+| T3-32 | PO-D tests: actual path, independent operations, commit and rollback, returned existing record | LP-10d (unchanged ID; contract per §10 common rules) | RESPONDED (future test) |
+| T3-33 | §6: worksheet key and DELETE retain the key | K1; guard G3 | RESPONDED |
+| T3-34 | §6: batch/item first-wait needs a harmless holder lifecycle | K3 and lemma A4 analogue: the receive insert's later waits are fk KS on parent F (blocked only by restriction or destruction holders, which never wait on receivers) and on terminal rows | RESPONDED |
+| T3-35 | §6: findings have no OPEN constraint; observation PK and scan/finding fks are separate | Lemma A3 | RESPONDED |
+| T3-36 | §6: "one scan at a time" must not be an asserted lock | Lemma A3 no longer needs it (an observation-key holder is a terminal autocommit statement) | RESPONDED |
+| T3-37 | §6: deferred `file_operation.file_id` fk at COMMIT; check every writer that sets it | §5.2 S3, §4.9 Wf3; FD (File held); A1 windows set no fk column; LP common rule "commit-time outcomes collected" | RESPONDED |
+| T3-38 | §6: deferred V0016 checks are reads; V0017 effects inventoried separately | §5.1 and §5.2 | RESPONDED |
+| T3-39 | §7: put the key before any database lock; reject an outer transaction | §4.10 position and entry contract; guard G11 | RESPONDED |
+| T3-40 | §7: a documented, collision-free key | (7340, 1) two-int4 key; builder-executed key-space check (proposal §11.6) | RESPONDED |
+| T3-41 | §7: READ COMMITTED; a fresh read in a subsequent statement | §4.10 | RESPONDED |
+| T3-42 | §7: `create` and CLI `create-admin` participate, or a proven insert-only exception | Insert-only exception documented with its waits | RESPONDED |
+| T3-43 | §7: identity columns immutable; target NKU compatible with history KS | §4.10 | RESPONDED |
+| T3-44 | §7: preserve the precedence chain and history | §4.10 precedence row | RESPONDED |
+| T3-45 | §7: restrict the entry point to its unit of work | entry contract; G11 | RESPONDED |
+| T3-46 | §7: last-administrator invariant and bootstrap | §4.10 | RESPONDED |
+| T3-47 | §7: NOWAIT is not an equivalent fix; two-transaction A → P → A | NOWAIT withdrawn as an equivalent; the schedule was **reproduced** by the builder (40P01, local PostgreSQL 16; proposal §11.7), with the D-LP-9(a) variant completing without deadlock | RESPONDED; builder-executed, not CI |
+| T3-48 | §8 (1): which shared keys are instrumented; multi-index statements; delegated trigger keys | §6.2 G2, G3, G7 and the instrumented-key list | RESPONDED |
+| T3-49 | §8 (2): row locks versus uniqueness positions; `privateNew` must not discard a shared key | §6.1 state; G4 | RESPONDED |
+| T3-50 | §8 (3): TAKEN is a passed position | G2 | RESPONDED |
+| T3-51 | §8 (4): statement exceptions, savepoints, REQUIRED nesting, reset | §6.2 statement exceptions and nesting; G12 | RESPONDED |
+| T3-52 | §8 (5): session advisory ownership across transactions; cross-thread; real release | G8 (registry survives reset; `handOff`; deregister on real unlock) | RESPONDED |
+| T3-53 | §8 (6): reject single-resource entry with earlier resources | G9 | RESPONDED |
+| T3-54 | §8 (7): one contract for L1p, CR-2, CR-3 and fast paths | G10 | RESPONDED |
+| T3-55 | §9 LP-1a/b | Unchanged (already adequate) | RESPONDED |
+| T3-56 | LP-2a/b/c | Unchanged; LP-2c exists | RESPONDED |
+| T3-57 | LP-3/3b: slots 6, 8, 9; both claimant variants | Wording corrected; variants retained | RESPONDED |
+| T3-58 | LP-4: replay paths must match accepted validation | LP-4c/4d retained; noted | RESPONDED |
+| T3-59 | LP-5: no forced seam after a shared first lock | common rule "barriers only at reachable seams" | RESPONDED |
+| T3-60 | LP-6, LP-7 | Unchanged (DB; synthetic) | RESPONDED |
+| T3-61 | LP-8: ownership-survives-reset; invalid single-resource entry | LP-8b additions | RESPONDED |
+| T3-62 | LP-9a: P < D; reverse order separately | LP-9a precondition; LP-9c | RESPONDED |
+| T3-63 | LP-9b extension | Retained | RESPONDED |
+| T3-64 | LP-10a and baseline | Retained | RESPONDED |
+| T3-65 | LP-10b: audit SQL, triggers and fks | Rewritten | RESPONDED |
+| T3-66 | LP-10c/d: actual shared keys, grant order, rollback, returned record | Covered by common rules and §5.3; contracts unchanged in ID | RESPONDED |
+| T3-67 | LP-10e/f/h | Rewritten (§10) | RESPONDED |
+| T3-68 | LP-10g: controller-held Ct; observe both waits; release | Rewritten | RESPONDED |
+| T3-69 | LP-13: incompatible holdings; both orders; terminal chain | Rewritten (i)–(iii) | RESPONDED |
+| T3-70 | LP-14: BASE; queueing with a second role change; last-admin, create-admin, password reset, history; four jobs | LP-14a and LP-14b (i)–(vi) | RESPONDED |
+| T3-70b | §9: BASE list (LP-1b and LP-2b are ACC; LP-10a-baseline; add LP-14 BASE) | Corrected | RESPONDED |
+| T3-71 | Appendix A: independent dispositions of every SR2 row (D, C, P, O) | **Adopted** as the independent status of each SR2 row. The rows marked P are answered by T3-10…T3-70; C rows depend on the named invariants; O rows await owner decisions. | RESPONDED |
+| T3-72 | §10: D-LP-1…D-LP-9 recommendations | Proposal §8 shows the assessor's recommendation beside the builder's for each | RESPONDED; DECISION (owner) |
+| T3-73 | §11 (7): stale statements: §4.8 administrator "none after first statement"; L6 administrator exception; "all advisory acquisitions remain try-locks"; §13.2 D-LP-1…8 wording; the six/seven count | All corrected in proposal §4.8, §5 (L6, preamble), §13.2, §0, §3.3 and §7 | RESPONDED |
+| T3-74 | §11 (8) and §12: owner decisions; preserve Phase 0–3 contracts | Proposal §7 preamble and §8 | DECISION (owner) |
+| T3-75 | §12: WP1-R2 and WP1-R3 not finally closed | Acknowledged; no closure claimed | RESPONDED |
+
+**Remaining open:**
+- **Decisions:** D-LP-1…D-LP-9.
+- **Lemmas and obligations:** A1–A4 and PO-B…PO-D, with their invariants INV-U, INV-P and A2's disjointness. These
+  are source-supported or conditional, and unproven by execution.
+- **Tests:** every ACC test is a future test.
+- **Issues:** WP1-R1, GAS-P4-002 and GAS-P4-003 are not closed.
+
+**Status:** revision 3.2 submitted (responds to the third assessment). WP1-R1, GAS-P4-002 and GAS-P4-003 are not
+closed. Awaiting owner decisions D-LP-1…D-LP-9 and an independent assessment. WP1 is not accepted; WP2 remains on
+HOLD.
 
 ---
 

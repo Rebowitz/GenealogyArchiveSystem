@@ -82,7 +82,9 @@ TO.
 | | |
 |---|---|
 | Found | 2026-11-16, registering the Phase 3 row locks (LO-1 to LO-3) |
-| Status | **OPEN, escalated.** The independent WP1 audit showed that the premise below is wrong across sessions (finding WP1-R1, BLOCKING). The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3.1, reconciled with the second Stage A review (D-LP-1…D-LP-9; Scenarios A–D; Option C for preservation rows), and is not implemented. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
+| Status | **OPEN, escalated.** **SUPERSEDED ASSERTION:** the deadlock-freedom premise stated below (L1 is safe because session-first locking serialises it) is **wrong across sessions and subsystems** and must not be relied on; see WP1-R1 (BLOCKING), Scenarios A–D and GAS-P4-003. The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3.2 (D-LP-1…D-LP-9; modified Option C), and is not implemented. Not closed by specification. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
+
+> **Superseded assertion (kept for the record, do not rely on it):** the text below describes the original premise.
 
 **Cause.**
 - Clarifications §5.5.3 rule 1 says rows within one level are locked in ascending UUID order. It also defines L1
@@ -116,7 +118,7 @@ lock; UUID ordering applies from L2 upward."
 |---|---|
 | Found | 2026-11-16, reconciling lock-protocol revision 3 with the second Stage A review |
 | Phase | Defect in accepted code (user administration); found during Phase 4 WP1 |
-| Status | **OPEN, needs owner decision D-LP-9.** Not fixed; no production code changed. |
+| Status | **OPEN, needs owner decision D-LP-9.** Not fixed; no production code changed. **[3.2]** The third assessment recommends amended option (a), specified in proposal §4.10. NOWAIT is withdrawn as an equivalent: a two-transaction cycle (password reset of the role change's target) was reproduced locally (proposal §11.7). Closure requires implementation and service-level LP-14b on all four CI configurations. |
 | Related | Second-review reconciliation SR2-B1 (`PHASE-4-WP1-AUDIT-CORRECTIONS.md`); proposal §3.2 rule TR, §5 L7, §11.5 |
 
 **Cause.**
@@ -138,8 +140,9 @@ lock; UUID ordering applies from L2 upward."
 administrator-check SQL, with a stand-in row for the T1/T2 resource: 40P01 (proposal §11.5). Not yet in CI
 (planned LP-14).
 
-**Proposed fix (D-LP-9, not applied).** A transaction-scoped blocking advisory lock on one fixed key as the first
-statement of every role or enabled change; a plain read of the enabled administrators; then the target update (NO
-KEY UPDATE, compatible with KEY SHARE). Alternatives: FOR UPDATE NOWAIT with a visible "try again" conflict; or keep
-it and accept the risk.
+**Proposed fix (D-LP-9(a), not applied; proposal §4.10).** Key `pg_advisory_xact_lock(7340, 1)` (two-int4 space,
+collision-free with existing keys) as the first statement of `UserService.update`, outermost transaction only; a
+fresh plain read of the enabled administrators in a later statement; then the target update (NO KEY UPDATE,
+compatible with KEY SHARE). `create` and CLI `create-admin` have a documented insert-only exception. **NOWAIT alone is
+not a fix** (proposal §11.7). Keeping the current design is an explicit risk decision only.
 
