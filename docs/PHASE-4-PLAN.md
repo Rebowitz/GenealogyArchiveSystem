@@ -45,6 +45,7 @@ BUILD-SPEC §62:
 | **Phase 7** | Global search, fuzzy search, OCR discovery, import templates, preview, bulk import (BI-003…BI-006), bulk operations including BI-007 | A simple find-by-documented-name lookup to choose candidates (D4-21). It never ranks, matches or resolves anything. |
 | **Phase 8** | Backup, restore, Complete Archive Export, Transfer Packages (EX-007, EX-008, TP-003) | The data model must export these meanings faithfully: date precision and qualifier, Proposed vs Resolved, unresolved Mentions, retired IDs. The data dictionary entries are drafted with the ADR. |
 | **Phase 9** | Comprehensive restriction management, restriction propagation (SEC-005), living-person policy | Phase 4 objects follow the Phase 3 restriction pattern so nothing leaks (D4-15, D4-16). |
+| **Later phase, owner to assign** (D4-30, PROPOSED) | Structured county-formation and boundary-change relationships (`place_derivation_link`) | Jurisdiction change is kept as dated containment links plus sourced notes on the jurisdictional Place. Notes are never auto-converted later (UP-006). |
 | **Still deferred** | F-006 and F-007 (File consolidation, P2-G, D3-03); BI-007 (bulk reclassification, D3-11) | Not built and not claimed. |
 
 ### Not changed in Phase 4
@@ -429,7 +430,14 @@ These rows add to or replace the rows above where they cover the same requiremen
 | C-004, SEC-008 (Rev. 2) | `CandidateResolutionConcurrencyIT` CR-1…CR-7 (§10.1) | Full |
 | C-005, A-006 (Rev. 2) | `CandidateReproposalIT` RP-1…RP-8 (§10.2) | Full |
 | P-008, SEC-004 (Rev. 2) | `CollectiveRestrictionLifecycleIT` CL-1…CL-10 (§10.3) | Full |
-| SEC-004, D4-27 (Rev. 2) | `PersonRestrictionOperationIT` RO-1…RO-14 (§10.4) | Full |
+| SEC-004, D4-27 (Rev. 2, 3) | `PersonRestrictionOperationIT` RO-1…RO-17 (§10.4, §10.6) | Full |
+| Supplement area 1: concurrent resolution of one Mention | CR-1, CR-2, CR-3, CR-4, CR-5, CR-7 | Full |
+| Supplement area 2: re-proposal of a rejected candidate | RP-1…RP-8 | Full |
+| Supplement area 3: restricted or deleted collectives keep membership and history | CL-1, CL-2, CL-3, CL-4, CL-6, CL-9 | Full |
+| Supplement area 4: counts, identifiers and history hidden | CL-5, CL-10, CL-11; `PeopleRestrictionIT` 1, 2, 3, 8, 9, 10; RO-14 | Full |
+| Supplement area 5: concurrent relationship or Mention creation during restriction | RO-15, RO-16, RO-5, RO-3, CR-6 | Full |
+| Supplement area 6: failed restriction leaves the prior state intact | RO-17, RO-2, RO-9, RO-10, RO-12 | Full |
+| L-002, D4-30 (Rev. 3) | `PlaceIT.countyFormationExpressedByContainmentAndNote` | Full (formation links deferred) |
 
 ### 9.2 Negative tests for prohibited historical inference (`ProhibitedInferenceIT`)
 

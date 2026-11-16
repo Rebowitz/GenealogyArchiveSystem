@@ -352,3 +352,12 @@ analysis, examples and alternatives: [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`]
 | **D4-27 ⚠** | The restriction protocol of clarifications §5.5: persisted preview with item `row_version`s; one-transaction confirmation; recompute and compare, where any difference means STALE and nothing is applied; global lock order (Person before Mention before collective before identity proposal, UUID order within each); deferred integrity triggers; idempotent, retryable confirmation; large operations run as one job transaction; an absolute ceiling; never chunked. |
 | **D4-28 ⚠ (new)** | `MARCH_25_LAST_YEAR`, proposed 1750, bounds year-start widening for an UNSPECIFIED year start. This is a regional fact; the owner chooses the value. |
 | **D4-29 (new)** | Re-proposing a rejected candidate creates a new attributed row and requires a rationale. The earlier rejection is shown and never blocks. |
+
+### Revision 3: supplement (PROPOSED, 2026-11-15)
+
+**Not approved.** See clarifications §1.5 and §10.6.
+
+| Decision | Recommendation (PROPOSED) |
+|---|---|
+| D4-18 ⚠ | As in Revision 1, with formation links removed from Phase 4 (see D4-30) |
+| **D4-30 ⚠ (new): county-formation relationships** | **Options:** **A**, include a minimal dated, sourced `place_derivation_link` (WHOLLY, PARTLY or UNKNOWN) in Phase 4; **B**, defer it and keep jurisdiction change as dated containment links plus sourced notes. **Recommendation: B.** No specification requires it in Phase 4; containment meets L-002 accurately; and modelling formation alone, before Evidence and Events exist, risks a competing second representation of boundary changes later. **Cost of B:** the parent-county question for areas without locality Places is answered only by notes until the later phase. **Owner question:** which phase receives formation and boundary-change relationships (Phase 6 is the natural candidate). |

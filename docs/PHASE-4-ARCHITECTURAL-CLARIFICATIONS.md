@@ -8,6 +8,7 @@
 | Reviews | [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md) and [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md) at `7a68d32`. Neither is approved. |
 | Baseline | `phase-3-accepted` (`c494d6a`) and the accepted Phase 0–3 decisions, particularly D3-04 and the Phase 3 audit corrections GAS-P3-001…010 |
 | Outputs | This analysis (§1–§6), newly found conflicts (§7), proposed decision revisions (§8; also applied, still PROPOSED, in the register) and coverage-matrix updates (§9; also applied in the plan) |
+| Revision 3 | Supplement (owner, 2026-11-15): county-formation decision (§1.5, D4-30); regression-test traceability for the six required areas with four added tests (§10.6). |
 | Revision 2 | Phase 4 Final Architectural Corrections (owner, 2026-11-15): date envelope corrected and verified (§2.2–§2.4, new §2.6); restriction transaction protocol (new §5.5); additional regression tests (new §10). Earlier text is replaced in place; the previous version is commit `adb49a5`. |
 
 Every example below is invented. The place names used for illustration (Frederick County, Clarke County,
@@ -48,7 +49,7 @@ in 1838 but remains Frederick County.
 
 | Model A | Model B |
 |---|---|
-| PL00002's identity is the administrative unit. Its changing extent shows through its dated incoming links (localities joining or leaving), an optional dated "formed from part of" link (§1.4) and a boundary note. Nothing about PL00002 changes. | J0002's identity is the administrative unit; its extent shows the same way. |
+| PL00002's identity is the administrative unit. Its changing extent shows through its dated incoming links (localities joining or leaving) and a sourced note ("formed 1836 from part of …"). A structured formation link is deferred (§1.5, D4-30). Nothing about PL00002 changes. | J0002's identity is the administrative unit; its extent shows the same way. |
 
 Equivalent in expressive power. Model A needs one documented interpretation: for a JURISDICTIONAL Place, "physical
 Place" (§13) means the unit, not a fixed area. §13 already makes Place identity independent of coordinates, so
@@ -88,7 +89,7 @@ Model A handles it with the existing Place Mention. Model B needs a parallel res
 | Identity | Unit identity survives renames and boundary changes. One object when a town is both a locality and a municipality, and the researcher may model them as two Places if their histories diverge. | Two objects are always required for a place that is also a jurisdiction; researchers must decide which identity a source means. |
 | Historical accuracy | Equal. Dated, sourced, contradictory links are possible in both. | Equal, with marginally clearer type separation. |
 | Temporal relationships | One link table; containment between units and localities uses the same mechanism. | Two link tables, kept consistent. |
-| Schema complexity | 3 tables (place, place_name, jurisdiction_link) plus an optional derivation link | 5–6 tables (adding jurisdiction, its names and its parent link) |
+| Schema complexity | 3 tables (place, place_name, jurisdiction_link); formation links deferred (§1.5) | 5–6 tables (adding jurisdiction, its names and its parent link) |
 | Mentions and resolution (§3) | One PLACE target | A JURISDICTION target as well, used ambiguously |
 | Phase 6 Organizations (O-005) | "County Court of Frederick" (Organization) links to PL00002 as its jurisdiction; the courthouse is a Structure; the Repository is separate. All distinct. | Same, linking to J0002 |
 | Fit with spec wording | §11 "Jurisdiction relationship/history" fits directly. §13 "separate … Jurisdiction" is met by the separate link concept and the JURISDICTIONAL category. | §13 fits directly; §11's "relationship/history" fits less well. |
@@ -101,15 +102,56 @@ target and fewer tables. The refinements:
    UI grouping and lookup filters, never inference.
 2. **Link attributes.** `jurisdiction_link` gains `jurisdiction_kind` (CIVIL, ECCLESIASTICAL, JUDICIAL, MILITARY,
    OTHER) and `basis` (RECOGNISED, CLAIMED, DISPUTED, UNKNOWN; default UNKNOWN). Overlaps and disputes coexist.
-3. **Optional formation links.** `place_derivation_link` (Place "formed wholly or partly from" Place, dated, sourced)
-   records county formation for scenario (b). It is a relationship, never an Event. The owner may defer it, and
-   scenario (b) still works without it.
+3. **Formation links: deferred** (Revision 3; §1.5, D4-30). Scenario (b) is expressed with dated containment
+   links and a sourced note on the jurisdictional Place.
 4. **Two Places when histories diverge.** A Place may be both a locality and a jurisdiction. When their histories
    diverge, the researcher creates two Places and relates them with a dated link of kind `CIVIL` and a note. That
    is an explicit choice, never automatic.
 5. **Integrity.** No self-link. Cycles are checked by the service across overlapping validity periods. Because
    validity is historical-date based, a cycle is reported as a warning with the conflicting periods, not silently
    prevented, when the dates make it ambiguous.
+
+### 1.5 County-formation relationships: in Phase 4 or deferred? (PROPOSED, new D4-30)
+
+Revision 3 resolves the "optional" `place_derivation_link` of §1.4 item 3.
+
+**Alternative A: include it in Phase 4.** One minimal table,
+`place_derivation_link(derived_place_id, source_place_id, extent WHOLLY | PARTLY | UNKNOWN, effective_date →
+historical_date, citation_text, note, attribution, row_version, lifecycle)`. It records "Clarke County was formed
+from part of Frederick County, 1836". A Place may have several sources, and cycles are reported as warnings.
+
+**Alternative B: defer it.** Phase 4 keeps jurisdiction change in two places:
+- **Dated containment links.** Millbrook lies within Frederick until 1836 and within Clarke from 1836, each link
+  with `basis` and a source citation.
+- **The jurisdictional Place's note.** For example: "Formed 1836 from part of Frederick County (Acts of Assembly,
+  1836, ch. 61)". Wording is invented.
+
+A structured formation relationship is introduced later, when the owner assigns it to a phase.
+
+| Criterion | A: include | B: defer |
+|---|---|---|
+| **Governing specifications** | Not required. BUILD-SPEC §11 asks for "Jurisdiction relationship/history" and §13 for "time-dependent jurisdiction relationships". L-002 requires only that historical jurisdiction be represented without changing Place identity, and O-005 that Jurisdiction stay distinct. | Meets every one of those with containment links. Matches §3 (lightweight-first): "minimum structure necessary" and the phase gate (§62), which names no formation relationship. |
+| **Implementation complexity** | Small but not trivial: a table, a vocabulary for extent, cycle and self-link checks, history, export data-dictionary entries (EX-006…EX-008), UI on Place pages, tests | None beyond what Phase 4 already builds |
+| **Historical accuracy** | Records the formation fact itself, separately from where any particular locality lay. But formation is one member of a wider family of boundary changes (annexation, partition, merger, abolition, re-formation). Modelling only formation now designs a fragment of that model before Phase 5 Evidence and Phase 6 Events exist, which risks a second representation of the same fact later. That is the same class of divergence as C-7 (a spouse period against a Marriage Event). | Nothing is falsified or lost: the containment links are exact and the note keeps the wording and citation. The formation fact is less *structured*, not less *accurate*. |
+| **Genealogical usefulness** | High for one question: "which parent county held records for this area before 1836?", especially for areas with no locality Place yet. | The common form of that question, "where were Millbrook's records in 1835?", is answered by containment. Areas without locality Places rely on the note until the later phase. |
+| **Reversibility** | Hard to retract once data exists: a later boundary-change model must migrate or coexist with it | Easy to add later as an additive migration. Notes are never parsed into structure automatically (UP-006); researchers convert them deliberately. |
+
+**Recommendation: B (defer).** No specification requires formation relationships in Phase 4, and containment links
+already meet L-002 with full historical accuracy. Building one boundary-change type before the Evidence and Event
+models exist is the larger long-term risk, because it would create a second, competing representation. The cost of
+deferral is real but bounded: the parent-county question for areas without locality Places is answered by notes
+until the later phase. That is recorded as a known limitation, not hidden.
+
+**Consequences if B is approved:**
+- §1.2(b) and §1.4 item 3 no longer include `place_derivation_link` in Phase 4.
+- `PlaceIT.countyFormationExpressedByContainmentAndNote` verifies scenario (b) with containment links and a note
+  only.
+- The Phase 4 plan lists formation and boundary-change relationships as an exclusion. Assigning the later phase is
+  an owner question: Phase 6 is the natural candidate, alongside Events and Organizations (the creating legislature
+  or court).
+
+**If the owner chooses A instead,** the table above is the complete Phase 4 scope. It is relationship-only (never an
+Event), restricted with neither endpoint (Places are unrestricted, D4-16), and adds `PlaceIT.formationLink*` tests.
 
 ---
 
@@ -772,13 +814,14 @@ These revisions are applied, still marked PROPOSED, in [`PHASE-4-DECISIONS.md`](
 | D4-13 | State meanings and transitions as in §3.2–3.3, enforced by trigger. Resolving does not close other proposals. A deleted candidate is shown, not cleared. |
 | D4-14 | Schema as in §4.2, including `collective_named_mention`, `count_as_written` and Role-backed collectives. Membership is the documented variant (C-6). |
 | D4-16 (Rev. 2) | Policy S. Restriction on Person, Mention, Collective Reference and identity proposal. The NORMAL-never-targets-RESTRICTED invariant. Restricting a linked Person uses a previewed, explicit transaction (C-1, C-2). Several Mentions per Role (C-3). Rev. 2: invariant extended to collective anchors and named Mentions and enforced by deferred commit-time triggers; the full restriction protocol is §5.5. |
-| D4-18 | Model A refined: place type category; link `jurisdiction_kind` and `basis`; optional `place_derivation_link`; a documented reading of "physical Place" (C-9). |
+| D4-18 | Model A refined: place type category; link `jurisdiction_kind` and `basis`; a documented reading of "physical Place" (C-9). Rev. 3: formation links deferred (D4-30). |
 | D4-07 | Unchanged recommendation (A). Relationship periods are labelled "period as entered" (C-7). Test status as in §6.2. |
 | D4-15 | Unchanged (reuse EDIT_RECORDS). VIEW_RESTRICTED_PEOPLE, Administrator only, is needed under D4-16. |
 | D4-25 (new, Rev. 2) | Calendar UNSPECIFIED is never assumed Gregorian or Julian, nor narrowed by era; both readings are kept and the difference is computed for the actual date (C-4). |
 | D4-26 (new) | Forms such as "1845-1849" are proposed as BETWEEN, with FROM_TO offered at confirmation (C-5). |
 | D4-27 (new, Rev. 2) | Restricting a linked Person follows the §5.5 protocol: persisted preview, single-transaction confirmation with revalidation (any difference means STALE), global lock order, deferred integrity triggers, idempotent retry, a job path that is still one transaction, an absolute ceiling, never chunked. Distinct from prohibited automatic propagation. |
 | D4-28 (new, Rev. 2) | `MARCH_25_LAST_YEAR` (proposed 1750) bounds year-start widening for UNSPECIFIED year start (C-14). |
+| D4-30 (new, Rev. 3) | Defer `place_derivation_link` (Alternative B, §1.5). Jurisdiction change in Phase 4 uses dated containment links plus sourced notes; the later phase is an owner assignment. |
 | D4-29 (new, Rev. 2) | Re-proposing a previously rejected candidate (Mention, identity pair or collective member) creates a new attributed row and **requires a rationale**; the earlier rejection is shown, never blocks (§10.2). |
 
 ## 9. Proposed updates to the requirement-to-test matrix
@@ -874,3 +917,24 @@ never rely on timing alone.
 | HD-4 | Year start: MARCH_25 legal-year spans; a dual year forces MARCH_25; a dual year with an explicit JANUARY_1 is refused; widening stops after the configured `MARCH_25_LAST_YEAR` |
 | HD-5 | Day validity per calendar: 29 Feb 1700 is valid in Julian, invalid in Gregorian, and has a Julian-only reading when the calendar is UNSPECIFIED |
 | HD-6 | The integrity scan recomputes envelopes and reports a deliberately corrupted row without repairing it |
+
+### 10.6 Traceability for the six required regression areas (Revision 3)
+
+Four tests are added in Revision 3: CL-11, RO-15, RO-16 and RO-17. They fill gaps found while tracing the six
+areas.
+
+| Added test | Expected |
+|---|---|
+| CL-11 | A *visible* Person P00140 was a member (any state) of CP0012 before CP0012 was restricted. A non-administrator sees on P00140's page and in its history, in object history and in recent changes, and in exports-in-preview where they exist: no membership, no "member of" count, no CP identifier, and no membership transition. Everything equals an archive where CP0012 never existed. |
+| RO-15 | **Relationship creation during restriction.** (a) An Editor creating a relationship with P holds P `FOR SHARE`; the confirmation waits, then goes STALE because the informational set changed, and nothing is applied. (b) Confirmation holds P; the Editor's creation waits, then is answered as for a nonexistent Person. (c) An Administrator may create a relationship with a RESTRICTED P afterwards; it is hidden from non-administrators by the endpoint rule. |
+| RO-16 | **Mention creation during restriction.** (a) A new Mention created with candidate P before the confirmation's P lock makes it STALE. (b) A new NORMAL Mention with candidate P, or a Role-backed Mention resolved to P, arriving during confirmation is refused with the nonexistent answer after the commit. (c) A new Mention *without* P on the same Record is unaffected, and confirmation does not go STALE because of it. |
+| RO-17 | **Failure leaves the previous consistent state intact.** For each failure (fault hook mid-update, lock timeout, deadlock, statement timeout, connection killed mid-transaction, deferred-trigger violation, job-path failure near the end): a full before/after comparison of `person`, `mention`, `collective_*`, `person_identity_proposal`, `candidate_resolution`, `change_history` and `restriction_operation*` is equal except the operation's own state where specified; a non-administrator's pages and lookups are identical before and after; a subsequent retry from the same preview behaves as specified. |
+
+| # | Required area | Tests | Notes |
+|---|---|---|---|
+| 1 | Concurrent attempts to resolve the same Mention to different candidates | **CR-1** (different candidates), CR-2 (same candidate), CR-3 (supersede against reject), **CR-4** (database guarantee without the service), CR-5 (propose against resolve), CR-7 (identity pairs, collective members) | Single winner, SEC-008 conflict for the loser, never an automatic supersede |
+| 2 | Re-proposing a previously rejected candidate through a new, attributed decision | **RP-1** (rejected row immutable), **RP-2** (new row, attribution, rationale per D4-29), RP-3 (earlier rejection shown), RP-4 (one non-terminal row), RP-5, RP-6, RP-7 (identity, members), RP-8 (restricted candidate) | — |
+| 3 | Restricted or deleted collective references preserving membership and history | **CL-1** (delete keeps members and history), **CL-2** (restore identical), CL-3, CL-4 (deleted member Person), **CL-6** (restricted and deleted), CL-9 (closure) | — |
+| 4 | Member counts, identifiers and historical records hidden where required | **CL-5** (counts, CP ID and UUID, history, writes), CL-10 (stated count and wording), **CL-11** (visible member's page and history), `PeopleRestrictionIT` 1, 2, 3, 8, 9 and 10 (§5.4), RO-14 (operation history hidden) | Equality with a "never existed" archive is the assertion throughout |
+| 5 | Concurrent relationship or Mention creation during Person restriction | **RO-15** (relationships), **RO-16** (Mentions), RO-5 (generic link writer and lock order), CR-6 (resolve against restriction), RO-3 (link after preview) | Both orderings tested for each |
+| 6 | Failed restriction transactions leave the previous consistent state intact | **RO-17** (all failure kinds, full before/after comparison), RO-2 (partial-progress fault injection), RO-9 (lock timeout and deadlock), RO-10 (deferred trigger), RO-12 (job path) | — |
