@@ -228,3 +228,22 @@ The reviewer recorded **PR4-R4: CLOSED (documentation level)**, and opened PR4-R
     the matrix but in no work-package gate. It is now in the WP5 gate, the browser work package.
 
 **Status:** builder-corrected, pending independent verification.
+
+---
+
+## Final planning-review disposition (received after `28b36cd`)
+
+The reviewer recorded the following. This is a summary of the reviewer's disposition; the reviewer's own report is
+the authority.
+- **PR4-R5:** CLOSED. **PR4-R1 through PR4-R5:** all CLOSED. **GAS-P4-PLAN-001:** RESOLVED, Option C.
+- **Historical-date examples:** independently recalculated with separate integer Julian and Gregorian
+  calculations. 37 checked, 37 matching, 0 discrepancies. No numerical correction is required.
+- **Security regression-test definitions:** PASS, acceptable for architectural planning. The guarantees must still
+  be demonstrated by implementation and regression tests.
+- **Concurrency protocol documentation:** PASS. Runtime proof of deadlock freedom remains an implementation
+  acceptance requirement (PR4-R3 closure note).
+- **Phase 4 architectural planning review: ACCEPT.** No remaining blocking or major planning issue in the reviewed
+  areas.
+
+**This is acceptance of the Phase 4 architectural plan, not authorization to implement it.** No merge, tag,
+migration, application code or test execution is authorized. Implementation requires a separate owner instruction.
