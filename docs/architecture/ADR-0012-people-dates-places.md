@@ -298,12 +298,16 @@ register governs, then this ADR.
   | `people.restriction.previewExpiry` | `PT30M` | > 0 |
   | `people.restriction.lockTimeout` | `PT5S` | > 0 |
   | `people.restriction.interactiveStatementTimeout` | `PT30S` | > 0 |
-  | `people.restriction.interactiveItemLimit` | `1000` | ≥ 1 |
+  | `people.restriction.interactiveItemLimit` | `1000` | ≥ 1 and ≤ `itemCeiling` |
   | `people.restriction.jobTimeout` | `PT10M` | ≥ `interactiveStatementTimeout` |
-  | `people.restriction.itemCeiling` | `50000` | ≥ `interactiveItemLimit` |
+  | `people.restriction.itemCeiling` | `50000` | ≥ `interactiveItemLimit` and **≤ 50,000** (architectural maximum) |
 
   - The section is optional and is validated by `check-config` as in ADR-0004. Unknown keys and invalid values are
     errors.
+  - **50,000 is the maximum permitted `itemCeiling` under this architecture.** A configured value above it is a
+    validation error, not a warning. The ceiling may be lowered, never raised by configuration. Raising it requires
+    a separately reviewed and approved revision of this ADR, because it changes the bound on single-transaction
+    size and lock duration that the protocol's safety argument relies on.
   - The values are operational. They change no archival meaning, are not archive data, and never travel in
     exports.
   - The archive's generic "busy, try again" message is used for every lock timeout and names no object.
@@ -375,7 +379,7 @@ These meanings must survive export, backup and transfer without reinterpretation
   - `CandidateResolutionConcurrencyIT` CR-1…CR-7;
   - `CandidateReproposalIT` RP-1…RP-8;
   - `CollectiveRestrictionLifecycleIT` CL-1…CL-11;
-  - `PersonRestrictionOperationIT` RO-1…RO-17;
+  - `PersonRestrictionOperationIT` RO-1…RO-18 (RO-18: configuration bounds, including the 50,000 cap);
   - `PeopleRestrictionIT` 1–11;
   - `ProhibitedInferenceIT` 1–20.
 - **Implementation gate.** Final independent architectural review of this ADR and the three Phase 4 documents,

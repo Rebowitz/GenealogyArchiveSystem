@@ -770,7 +770,8 @@ concurrent editing. It fails visibly (STALE) rather than applying something unre
   - P RESTRICTED with NORMAL Mentions still targeting it (the C-1 collision leak), or
   - some Mentions restricted while P is still NORMAL and visible (a disclosure pattern).
   The deferred triggers would reject the first of these anyway.
-- **Absolute ceiling.** `people.restriction.itemCeiling` (default 50,000 items). The operation is refused at preview with the counts and a message
+- **Absolute ceiling.** `people.restriction.itemCeiling` (default and **maximum** 50,000 items; it may be lowered, and
+  raising it requires an approved ADR-0012 revision; PR4-R1). The operation is refused at preview with the counts and a message
   that an owner-approved maintenance procedure is required. This fails visibly; nothing is partially applied.
 
 #### 5.5.9 What the protocol does not do
@@ -944,6 +945,7 @@ never rely on timing alone.
 | RO-12 | Above the interactive limit, confirmation runs as one job transaction (the fault hook near the end leaves nothing changed). Above the ceiling, the operation is refused at preview. |
 | RO-13 | Unrestricting P changes no linked object |
 | RO-14 | One Change History entry per changed object, with `operation_id`, Administrator attribution and the reason. All are hidden from non-administrators. |
+| RO-18 | **Configuration bounds (U-3, PR4-R1).** `check-config` rejects `itemCeiling` above 50,000, `interactiveItemLimit` above `itemCeiling`, and non-positive durations, each as an error with no startup. Values lowered below the defaults are accepted and take effect (preview refusal and job routing follow the configured values). |
 
 ### 10.5 Date envelope (`HistoricalDateTest`, unit, additions)
 

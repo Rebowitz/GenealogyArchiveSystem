@@ -86,8 +86,10 @@ BUILD-SPEC §62:
 - **Explicit tables, never EAV (§10, §60).** Every concept has its own table and typed foreign keys. Candidate
   Resolution uses typed, nullable target columns with a CHECK that exactly one is set, not a free-form
   `(entity_type, entity_id)` pair (D4-13).
-- **ADR-0012 (to be written in WP0).** People, Dates, Places and Candidate Resolution. Written in WP0 from the approved
-  register, in the same form as ADR-0011, including data-dictionary text for the Phase 8 export.
+- **ADR-0012 (prepared; awaiting independent acceptance).** [`ADR-0012`](architecture/ADR-0012-people-dates-places.md):
+  People, Dates, Places and Candidate Resolution, written from the approved register in the same form as ADR-0011,
+  including data-dictionary drafts for the Phase 8 export. It is awaiting the final independent architectural
+  review.
 
 ---
 
@@ -489,7 +491,7 @@ These rows add to or replace the rows above where they cover the same requiremen
 | C-004, SEC-008 (Rev. 2) | `CandidateResolutionConcurrencyIT` CR-1…CR-7 (§10.1) | Full |
 | C-005, A-006 (Rev. 2) | `CandidateReproposalIT` RP-1…RP-8 (§10.2) | Full |
 | P-008, SEC-004 (Rev. 2) | `CollectiveRestrictionLifecycleIT` CL-1…CL-10 (§10.3) | Full |
-| SEC-004, D4-27 (Rev. 2, 3) | `PersonRestrictionOperationIT` RO-1…RO-17 (§10.4, §10.6) | Full |
+| SEC-004, D4-27 (Rev. 2, 3), U-3 | `PersonRestrictionOperationIT` RO-1…RO-18 (Cl. §10.4, §10.6; RO-18 = configuration bounds and the 50,000 cap) | Full |
 | Supplement area 1: concurrent resolution of one Mention | CR-1, CR-2, CR-3, CR-4, CR-5, CR-7 | Full |
 | Supplement area 2: re-proposal of a rejected candidate | RP-1…RP-8 | Full |
 | Supplement area 3: restricted or deleted collectives keep membership and history | CL-1, CL-2, CL-3, CL-4, CL-6, CL-9 | Full |
@@ -541,7 +543,7 @@ Names, Persons, Places, resolutions) and that no Change History entry of a forbi
   Relationship, Place, Mention, resolution, collective, identity proposal, history and guessed IDs;
   `CollectiveRestrictionLifecycleIT` (CL-1…CL-11).
 - **Concurrency and transactions:** `CandidateResolutionConcurrencyIT` (CR-1…CR-7), `CandidateReproposalIT`
-  (RP-1…RP-8), `PersonRestrictionOperationIT` (RO-1…RO-17).
+  (RP-1…RP-8), `PersonRestrictionOperationIT` (RO-1…RO-18).
 - **Browser:** `PeopleWebIT` and `PlacesWebIT` through the real web process, for every role.
 - **Reference Acceptance Archive (§64):** `reference-archive/people-dates-places.yaml`, synthetic and invented
   only. It contains Persons with multiple Names; biological, adoptive, step and guardian relationships; parents
@@ -562,7 +564,7 @@ Names, Persons, Places, resolutions) and that no Change History entry of a forbi
 | WP2 | People: Person, Names, relationships, identity proposals; V0025 | P-001…P-007, P-009, P-010; prohibited-inference items 1–5, 8, 12, 13, 20 |
 | WP3 | Places: Place, Names, jurisdiction links (kind, basis); V0026; no formation links | L-001…L-003; `PlaceIT` D4-18 scenarios; `countyFormationExpressedByContainmentAndNote`; items 15, 19 |
 | WP4 | Mentions, Candidate Resolution, collective references, Record Role links, Record date interpretation, restriction tables and deferred invariant triggers; V0027 | C-001…C-006, A-006, P-008; CR-1…CR-7, RP-1…RP-8; items 6, 7, 9, 14, 16, 17 |
-| WP5 | Browser workflows, restriction (policy S and the D4-27 protocol), history visibility | `PeopleWebIT`, `PlacesWebIT`, `PeopleRestrictionIT` 1–11, CL-1…CL-11, RO-1…RO-17 |
+| WP5 | Browser workflows, restriction (policy S and the D4-27 protocol), history visibility | `PeopleWebIT`, `PlacesWebIT`, `PeopleRestrictionIT` 1–11, CL-1…CL-11, RO-1…RO-18 |
 | WP6 | Reference fixture, full CI matrix, completion report (`PHASE-4-COMPLETION.md`), draft PR, then stop for the independent Codex audit | All four jobs green, every job's results checked individually |
 
 The phase gate (§62) is all of §9.1 marked Full, plus §9.2, passing on every job. **No merge, acceptance or tag
@@ -600,7 +602,7 @@ notes:
 |---|---|---|
 | U-1 | Place-type seeds; mandatory type | **Resolved:** seed COUNTY and STATE (JURISDICTIONAL); `place_type` optional. V0024 seeds them. |
 | U-2 | Place-name types | **Resolved:** `place_name_type` vocabulary seeded HISTORICAL, CURRENT, VARIANT; optional on a name. V0024. |
-| U-3 | D4-27 numeric values | **Resolved:** configurable installation settings `people.restriction.*` with defaults 30 min, 5 s, 30 s, 1,000, 10 min, 50,000; validated by `check-config` (ADR-0012 §8). Tests set their own values. |
+| U-3 | D4-27 numeric values | **Resolved:** configurable installation settings `people.restriction.*` with defaults 30 min, 5 s, 30 s, 1,000, 10 min, 50,000; validated by `check-config` (ADR-0012 §8). The ceiling is capped at 50,000; raising it needs an approved ADR revision (PR4-R1). Tests set their own values within the cap. |
 | U-4 | Year-start widening in every period (approved behaviour) | Phase 7 search design; no Phase 4 change |
 | U-5 | Phase 6 must explicitly carry formation and boundary-change relationships | Phase 6 planning |
 
