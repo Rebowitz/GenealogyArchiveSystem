@@ -8,10 +8,10 @@
 | Accepted baseline | Tag `phase-3-accepted` → commit `c494d6a` (Phase 3 merge, PR #6); `main` = `20d68c1` (adds only CLAUDE.md documentation commits) |
 | Branch | `phase-4-plan` from `main` `20d68c1` (planning documents only) |
 | Governing order | archival invariants → ACCEPTANCE-SPEC v1.1 → BUILD-SPEC v1.1 → approved Phase 0–3 decisions → accepted implementation → convenience |
-| Companion documents | [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md): the owner-decision register, D4-01…D4-30, **approved 2026-11-15** (D4-28 modified, D4-30 = B). [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md): the detailed semantics ("Cl. §n"). |
+| Companion documents | [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md): the owner-decision register, D4-01…D4-30 and U-1…U-3, **approved 2026-11-15** (D4-28 modified, D4-30 = B). [`ADR-0012`](architecture/ADR-0012-people-dates-places.md): the architecture, prepared for final independent review. [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md): the detailed semantics ("Cl. §n"). |
 
 Where this plan depends on a choice the specifications leave open, it names the approved decision (**D4-nn**).
-Items still open after the consistency review are listed in §11.2 as U-1…U-5 and are not decided by this plan.
+The consistency review's items are in §11.2: U-1…U-3 are resolved; U-4 and U-5 are notes for Phases 7 and 6.
 Approval of the decisions does not authorize implementation.
 
 ---
@@ -194,7 +194,8 @@ Conflicting dates coexist because dates are owned by separate statements and are
 
 ### 4.3 Places (D4-18 A with refinements; D4-30 B)
 - **`place`** (`PL`)
-  - `place_type` (vocabulary with `category`: LOCALITY, JURISDICTIONAL or OTHER; seeds: open item U-1)
+  - `place_type`, **optional** (vocabulary with `category`: LOCALITY, JURISDICTIONAL or OTHER; seeds COUNTY and STATE,
+    both JURISDICTIONAL; U-1)
   - `approximate_location` (text), with optional latitude, longitude and precision note (D4-20)
   - lifecycle, note
   - no restriction in Phase 4 (D4-16)
@@ -202,7 +203,8 @@ Conflicting dates coexist because dates are owned by separate statements and are
   Identity never derives from name, jurisdiction or coordinates (§13). For a jurisdictional Place, identity is the
   administrative unit, not a fixed area (C-9).
 - **`place_name`**
-  - `place_id`, `name_as_written`, `name_type` (values: open item U-2)
+  - `place_id`, `name_as_written`, optional `name_type` (vocabulary `place_name_type`, seeds HISTORICAL, CURRENT,
+    VARIANT; U-2)
   - optional valid-from / valid-to Historical Dates
   - provenance and note
   - preferred-name pointer on `place`, as for Person
@@ -368,7 +370,7 @@ cases.
    Calendar and year start default to UNSPECIFIED and are changed only by the researcher (D4-25, D4-28). The screen
    shows how a recorded convention would narrow the envelope.
 8. **Vocabularies page.** Adds name types, relationship types, parentage qualifiers (fixed by spec, D4-11) and
-   place types with their category (seeds U-1).
+   place types with their category, and place-name types (seeds per U-1, U-2).
 9. **Restrict Person (Administrator).** Reason, then a preview of the affected set and collateral, then Confirm. The
    page shows STALE, EXPIRED and busy outcomes plainly (Cl. §5.5).
 
@@ -378,7 +380,7 @@ cases.
 
 | Migration | Content |
 |---|---|
-| V0024 | Vocabularies (name, relationship with category, parentage qualifier, place type with category; spec-named seeds only, D4-11; place-type seeds per U-1) and `historical_date` (§4.1) |
+| V0024 | Vocabularies (person name types, relationship types with category, parentage qualifiers, place types with category, place-name types; spec-named seeds only, D4-11; place types COUNTY and STATE per U-1; place-name types HISTORICAL, CURRENT, VARIANT per U-2) and `historical_date` (§4.1) |
 | V0025 | `person`, `person_name`, `person_relationship`, `person_identity_proposal`; series `P` |
 | V0026 | `place`, `place_name`, `jurisdiction_link` (kind, basis); series `PL`. No formation table (D4-30). |
 | V0027 | `mention`, `candidate_resolution`, `collective_reference`, `collective_named_mention`, `collective_member` (series `M`, `CP`); `restriction_operation` and items; deferred restriction-invariant triggers; `archival_record.record_date_id` and `filing_date_id` |
@@ -555,7 +557,7 @@ Names, Persons, Places, resolutions) and that no Change History entry of a forbi
 
 | WP | Content | Gate |
 |---|---|---|
-| WP0 | Decisions approved (2026-11-15). Resolve open items U-1…U-3; write ADR-0012 and the data-dictionary drafts from the approved register; run the prefix compatibility check | Owner resolution of U-1…U-3 and approval of ADR-0012; **separate implementation authorization** |
+| WP0 | Decisions and U-1…U-3 approved (2026-11-15). [ADR-0012](architecture/ADR-0012-people-dates-places.md) and its data-dictionary drafts are written. Run the prefix compatibility check in WP1. | **Final independent architectural review** of ADR-0012 and the three Phase 4 documents, then a **separate implementation authorization** |
 | WP1 | Historical Date model, JDN calendar algorithms, envelope, parser and validation (unit-heavy); V0024 | `HistoricalDateTest` HD-1…HD-7 green; prohibited-inference items 10, 11, 18 |
 | WP2 | People: Person, Names, relationships, identity proposals; V0025 | P-001…P-007, P-009, P-010; prohibited-inference items 1–5, 8, 12, 13, 20 |
 | WP3 | Places: Place, Names, jurisdiction links (kind, basis); V0026; no formation links | L-001…L-003; `PlaceIT` D4-18 scenarios; `countyFormationExpressedByContainmentAndNote`; items 15, 19 |
@@ -591,15 +593,16 @@ The seven questions originally listed here were resolved by the approved registe
 - restriction and living status: D4-16 A and D4-17 A;
 - sex or gender: D4-22 A (not added).
 
-The consistency review found these **open items**. They are recorded in the register and not decided here:
+The consistency review found five open items. **U-1…U-3 were resolved by the owner on 2026-11-15**; U-4 and U-5 are
+notes:
 
-| ID | Item | Plan impact |
+| ID | Item | Resolution or plan impact |
 |---|---|---|
-| U-1 | Place-type seed set: none, or COUNTY and STATE (D4-11's table offered both); and whether `place_type` is mandatory | V0024 seeds; first-Place workflow |
-| U-2 | Place-name types (HISTORICAL, CURRENT, VARIANT used in examples; none decided) | V0024 or V0026 vocabulary |
-| U-3 | Whether the D4-27 numeric values (expiry, timeouts, limits) are fixed or configurable defaults | ADR-0012; RO-8, RO-9, RO-12 parameters |
-| U-4 | Year-start widening in every period widens many envelopes by about a year (approved behaviour) | Phase 7 search design; no Phase 4 change |
-| U-5 | Phase 6 must explicitly carry formation and boundary-change relationships (not in BUILD-SPEC §62's Phase 6 list) | Phase 6 planning |
+| U-1 | Place-type seeds; mandatory type | **Resolved:** seed COUNTY and STATE (JURISDICTIONAL); `place_type` optional. V0024 seeds them. |
+| U-2 | Place-name types | **Resolved:** `place_name_type` vocabulary seeded HISTORICAL, CURRENT, VARIANT; optional on a name. V0024. |
+| U-3 | D4-27 numeric values | **Resolved:** configurable installation settings `people.restriction.*` with defaults 30 min, 5 s, 30 s, 1,000, 10 min, 50,000; validated by `check-config` (ADR-0012 §8). Tests set their own values. |
+| U-4 | Year-start widening in every period (approved behaviour) | Phase 7 search design; no Phase 4 change |
+| U-5 | Phase 6 must explicitly carry formation and boundary-change relationships | Phase 6 planning |
 
 ### 11.3 Acceptance risks
 | Risk | Effect | Mitigation |

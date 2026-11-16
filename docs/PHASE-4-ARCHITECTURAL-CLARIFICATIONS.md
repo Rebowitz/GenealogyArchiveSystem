@@ -12,6 +12,7 @@ approved register, the register governs.** Planning only: no Phase 4 implementat
 | Reviews | [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md) and [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md) at `7a68d32`. Neither is approved. |
 | Baseline | `phase-3-accepted` (`c494d6a`) and the accepted Phase 0–3 decisions, particularly D3-04 and the Phase 3 audit corrections GAS-P3-001…010 |
 | Outputs | This analysis (§1–§6), newly found conflicts (§7), proposed decision revisions (§8; also applied, still PROPOSED, in the register) and coverage-matrix updates (§9; also applied in the plan) |
+| Revision 5 | U-1…U-3 resolved (2026-11-15): place types COUNTY and STATE seeded, type optional; place-name type vocabulary HISTORICAL, CURRENT, VARIANT; D4-27 values are configurable installation settings with the §5.5 defaults (§5.5.1, §5.5.5, §5.5.8). ADR-0012 written. |
 | Revision 4 | Owner approvals consolidated (2026-11-15): D4-28 modified (no cut-off; §2.3, §2.4, §7 C-14, §10.5 HD-4 and new HD-7); D4-30 approved as deferral to Phase 6 (§1.5). |
 | Revision 3 | Supplement (owner, 2026-11-15): county-formation decision (§1.5, D4-30); regression-test traceability for the six required areas with four added tests (§10.6). |
 | Revision 2 | Phase 4 Final Architectural Corrections (owner, 2026-11-15): date envelope corrected and verified (§2.2–§2.4, new §2.6); restriction transaction protocol (new §5.5); additional regression tests (new §10). Earlier text is replaced in place; the previous version is commit `adb49a5`. |
@@ -105,6 +106,9 @@ Model A handles it with the existing Place Mention. Model B needs a parallel res
 target and fewer tables. The refinements:
 1. **Place type category.** `place_type` has a category (LOCALITY, JURISDICTIONAL, OTHER). The category drives only
    UI grouping and lookup filters, never inference.
+   *Approved (U-1):* only COUNTY and STATE are seeded, and a Place may be untyped. Examples such as "Millbrook
+   (LOCALITY)" assume an administrator-added locality type or no type at all; the category is a property of
+   the type, never required of a Place.
 2. **Link attributes.** `jurisdiction_link` gains `jurisdiction_kind` (CIVIL, ECCLESIASTICAL, JUDICIAL, MILITARY,
    OTHER) and `basis` (RECOGNISED, CLAIMED, DISPUTED, UNKNOWN; default UNKNOWN). Overlaps and disputes coexist.
 3. **Formation links: deferred to Phase 6** (approved D4-30; §1.5). Scenario (b) is expressed with dated containment
@@ -621,7 +625,7 @@ an Administrator, which distinguishes it from the automatic propagation D3-04 pr
 | `state` | PREVIEWED, APPLIED, STALE, EXPIRED or CANCELLED |
 | `reason` | required |
 | `previewed_by`, `previewed_at` | system-set |
-| `expires_at` | proposed: preview plus 30 minutes |
+| `expires_at` | preview plus `people.restriction.previewExpiry` (default 30 minutes; U-3) |
 | `applied_by`, `applied_at` | system-set |
 | `stale_detail` | what differed, if the operation went STALE |
 | `item_count` | number of items |
@@ -689,7 +693,7 @@ resolve, reject and supersede. The same ordering is used by the interactive serv
 
 #### 5.5.5 Confirmation: one transaction
 
-`READ COMMITTED`, with `SET LOCAL lock_timeout` (proposed 5 s) and `statement_timeout` (§5.5.8).
+`READ COMMITTED`, with `SET LOCAL lock_timeout` (`people.restriction.lockTimeout`, default 5 s; U-3) and `statement_timeout` (§5.5.8).
 
 1. **Lock the operation** (L0, `FOR UPDATE`).
    - APPLIED: return its result page. Nothing is re-applied, so a double submit is idempotent.
@@ -755,17 +759,18 @@ A Person whose links change constantly could keep making previews stale. That is
 concurrent editing. It fails visibly (STALE) rather than applying something unreviewed (C-13).
 
 #### 5.5.8 Operations beyond safe transaction bounds
-- **Interactive limit.** Proposed: 1,000 RESTRICT items, or the confirmation exceeding `statement_timeout`
-  (proposed 30 s). Within it, confirmation runs in the web request.
+- **Interactive limit.** `people.restriction.interactiveItemLimit` RESTRICT items (default 1,000), or the
+  confirmation exceeding `people.restriction.interactiveStatementTimeout` (default 30 s). These are configurable
+  installation settings (U-3; ADR-0012 §8). Within it, confirmation runs in the web request.
 - **Above the interactive limit.** Confirmation runs as a **single transaction** inside the Phase 0 background-job
-  mechanism, with a larger configured timeout (proposed 10 minutes). It takes the same steps 1–7 and the same lock
+  mechanism, with `people.restriction.jobTimeout` (default 10 minutes). It takes the same steps 1–7 and the same lock
   order. The Administrator sees the job's progress and outcome. Link writes to P wait or receive the generic busy
   message while it runs.
 - **Never chunked.** Splitting the work into batches would commit intermediate states, either:
   - P RESTRICTED with NORMAL Mentions still targeting it (the C-1 collision leak), or
   - some Mentions restricted while P is still NORMAL and visible (a disclosure pattern).
   The deferred triggers would reject the first of these anyway.
-- **Absolute ceiling.** Proposed: 50,000 items. The operation is refused at preview with the counts and a message
+- **Absolute ceiling.** `people.restriction.itemCeiling` (default 50,000 items). The operation is refused at preview with the counts and a message
   that an owner-approved maintenance procedure is required. This fails visibly; nothing is partially applied.
 
 #### 5.5.9 What the protocol does not do

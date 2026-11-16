@@ -1,6 +1,6 @@
 # Phase 4 owner-decision register (People, Dates and Places)
 
-**Status: APPROVED by the owner on 2026-11-15**, for all 30 decisions, with the choices below. The approval includes
+**Status: APPROVED by the owner on 2026-11-15**, for all 30 decisions and open items U-1…U-3, with the choices below. Architecture: [ADR-0012](architecture/ADR-0012-people-dates-places.md), prepared for final independent review. The approval includes
 the applicable architectural refinements in [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md).
 **D4-28 was approved as modified** and **D4-30 as B (deferral)**.
 
@@ -30,7 +30,7 @@ instruction. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
 | D4-08 ⚠ | A | Phase 4 relationships are researcher-entered and interpretive, ACTIVE or WITHDRAWN. Competing relationships coexist. Phase 5 attaches Evidence and never rewrites them. | B; C |
 | D4-09 ⚠ | A + refinements | Persons always coexist. Person-identity proposals are PROPOSED, RESOLVED or REJECTED (**no SUPERSEDED**). RESOLVED changes no data; there is no merge and no stored or inferred transitivity; contradictions are flagged, never blocked (clarifications §3.5). | B (controlled merge); C; the original "SUPERSEDED" state for identity proposals |
 | D4-10 | A | `name_as_written` is required and is the authority; optional parts; type; valid-from/to dates; provenance (Record, Citation, Mention, note). | B; C |
-| D4-11 | A | Seeds are the spec-named values only. Relationship types: the seven listed. Parentage qualifiers are fixed by the specification. Name types: BIRTH, MARRIED, NICKNAME, VARIANT. **Place-type seeds: see open item U-1.** | broader genealogical seed set |
+| D4-11 | A (+ U-1, U-2) | Seeds are the spec-named values only. Relationship types: the seven listed. Parentage qualifiers are fixed by the specification. Person name types: BIRTH, MARRIED, NICKNAME, VARIANT. **Place types: COUNTY and STATE (JURISDICTIONAL), type optional (U-1). Place-name types: HISTORICAL, CURRENT, VARIANT, as a vocabulary (U-2).** | broader genealogical seed set; no place-type seeds; mandatory place type |
 | D4-12 ⚠ | B | A Role-backed Mention (`mention.record_role_id`, wording read from `party_as_written`); free Mentions carry their own wording. Identity flows only through Candidate Resolution. `record_role` is unchanged. No Mentions are created by migration. **Several Mentions per Role are allowed** (D4-16 refinement). | A (`person_id` on Role); C (copied wording) |
 | D4-13 ⚠ | A + refinements | Typed nullable candidate FKs, exactly one set. At most one RESOLVED per Mention (partial unique index), and one non-terminal row per (Mention, candidate). States and transitions as in clarifications §3.2–§3.3, enforced by trigger; attribution is set once. Resolving does not close other proposals. SUPERSEDED happens only as part of Resolve to another candidate. Every candidate write bumps the Mention's `row_version`. | B (polymorphic target) |
 | D4-14 | A + refinements | `collective_reference` (Role-backed or wording-backed, anchor Mention and phrase, `stated_count` with `count_as_written`), `collective_named_mention`, and `collective_member` (PROPOSED, RESOLVED or REJECTED; several RESOLVED; no SUPERSEDED). The count is not a limit; membership creates nothing else (clarifications §4). | B (wording only) |
@@ -46,22 +46,26 @@ instruction. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
 | D4-24 ⚠ | A | "Create Person or Place from this Mention" is a separate, explicit action that records the new object, an initial Name and an attributed RESOLVED decision. | B |
 | D4-25 ⚠ | A | An UNSPECIFIED calendar is never assumed or narrowed by era. Both readings are kept, and the difference is computed for the actual date. | — |
 | D4-26 ⚠ | A | "YYYY-YYYY" is proposed as BETWEEN, with FROM_TO offered at confirmation. Never decided silently. | — |
-| D4-27 ⚠ | A | The restriction protocol of clarifications §5.5: persisted preview; one-transaction confirmation with revalidation (any difference means STALE, nothing applied); global lock order; deferred integrity triggers; idempotent, retryable confirmation; a single-transaction job path above the interactive limit; an absolute ceiling; never chunked. It is distinct from prohibited automatic propagation. Numeric defaults: see open item U-3. | — |
+| D4-27 ⚠ | A | The restriction protocol of clarifications §5.5: persisted preview; one-transaction confirmation with revalidation (any difference means STALE, nothing applied); global lock order; deferred integrity triggers; idempotent, retryable confirmation; a single-transaction job path above the interactive limit; an absolute ceiling; never chunked. It is distinct from prohibited automatic propagation. The numeric values are configurable installation settings with the U-3 defaults (ADR-0012 §8). | fixed constants |
 | D4-28 ⚠ | **Modified** | **No universal cut-off.** Explicitly recorded year-start conventions are respected in any year. An UNSPECIFIED year start keeps both the 1 January and 25 March readings **in every period**. No convention is inferred from jurisdiction, period, Record, Source or Place. Dual-year semantics are retained (a dual year gives the MARCH_25 reading). Jurisdiction-specific, sourced calendar conventions are a possible **later-phase enhancement**, not Phase 4 functionality (clarifications §2.3). | The proposed `MARCH_25_LAST_YEAR = 1750` (Revision 2) |
 | D4-29 | A | Re-proposing a rejected candidate (Mention, identity pair or collective member) creates a new attributed row and requires a rationale. The earlier rejection is shown and never blocks. | — |
 | D4-30 ⚠ | **B** | Structured county-formation and boundary-change relationships are **deferred to Phase 6**. Phase 4 keeps dated jurisdiction-containment relationships and sourced historical notes. **Notes are never automatically converted into structured assertions.** | A (`place_derivation_link` in Phase 4) |
 
-### Open items found in the consistency review (not decided here)
+### Open items from the consistency review
 
-These need owner direction. None of them blocks recording the approvals above.
+**U-1…U-3 were resolved by the owner on 2026-11-15** and are part of the approved record. U-4 and U-5 are notes, not
+decisions.
 
-| ID | Item | Why it is open |
+| ID | Item | Status |
 |---|---|---|
-| U-1 | **Place-type seed set.** D4-11's table offers "None seeded, or COUNTY and STATE only"; approval A ("spec-named seeds only") does not pick between them. The approved D4-18 also needs a category on each place type. | COUNTY and STATE are named by L-002 and would be JURISDICTIONAL. With no seeds at all, an Administrator must create a type before the first Place, **if** a type is mandatory, and whether it is mandatory is not stated anywhere. |
-| U-2 | **Place-name types.** The plan and clarifications use HISTORICAL, CURRENT and VARIANT, but no decision lists place-name types or says whether they are a vocabulary. | L-001 names "historical and current" names; VARIANT is not spec-named. |
-| U-3 | **Numeric defaults in the D4-27 protocol** (preview expiry 30 min, `lock_timeout` 5 s, interactive `statement_timeout` 30 s, interactive limit 1,000 items, job timeout 10 min, ceiling 50,000) were written as "proposed". | It is unclear whether approval A fixes these values or leaves them as configurable defaults to settle in ADR-0012. The plan treats them as configurable defaults pending confirmation. |
-| U-4 | **Search usability of approved D4-28.** Every year-only date, and every date from 1 January to 24 March with no recorded year start, has an envelope about one year wider in every period (examples 1, 3, 27). | This is correct by design. The Phase 7 search design should expect it, and researchers narrow it by recording the convention. No decision is needed now; recorded so it is not mistaken for a defect. |
-| U-5 | **Phase 6 scope carry-forward.** D4-30 assigns formation and boundary-change relationships to Phase 6, but BUILD-SPEC §62's Phase 6 list does not name them. | Phase 6 planning must include them explicitly. |
+| U-1 | Place-type seed set, and whether a type is mandatory | **Resolved:** seed **COUNTY and STATE** (category JURISDICTIONAL; L-002). **`place_type` is optional**, so a Place can be saved without a type (A-003) and no administrator setup is needed first. |
+| U-2 | Place-name types | **Resolved:** an administrator-extensible vocabulary `place_name_type`, seeded **HISTORICAL, CURRENT and VARIANT** (VARIANT = alternate spelling; BUILD-SPEC §13, L-001). The type is optional on a name. |
+| U-3 | D4-27 numeric values | **Resolved:** configurable **installation configuration**, with defaults preview expiry `PT30M`, lock timeout `PT5S`, interactive statement timeout `PT30S`, interactive limit 1,000 items, job timeout `PT10M`, ceiling 50,000. Validated by `check-config` (ADR-0004). Operational only; no archival meaning; never exported. Keys are in ADR-0012 §8. |
+| U-4 | Search usability of approved D4-28 (envelopes about one year wider when the convention is unrecorded) | Note: approved behaviour; the Phase 7 search design must expect it. |
+| U-5 | Phase 6 must carry formation and boundary-change relationships (not in BUILD-SPEC §62's Phase 6 list) | Note: a Phase 6 planning obligation. |
+
+The architecture is recorded in [ADR-0012](architecture/ADR-0012-people-dates-places.md), prepared for the final
+independent architectural review.
 
 ---
 
