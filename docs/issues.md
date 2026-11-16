@@ -55,3 +55,55 @@ register records the decision.
 
 **Residual note.** Roles removed physically *before* the Phase 4 upgrade cannot be recovered; their Phase 3
 `ROLE_REMOVED` history stays as written.
+
+## GAS-P4-001: MINOR. Envelope of FROM and TO dates (Phase 4 WP1)
+
+| | |
+|---|---|
+| Found | 2026-11-16, implementing WP1 |
+| Status | **FIXED.** Owner decision 2026-11-16; implemented in `3db9c4b`; specification text corrected in the WP1 documentation commit. |
+
+**Cause.** In the accepted clarifications, §2.3 step 5 said "POINT, FROM and TO use p1's envelope", which is a
+closed range. Verified worked example 18 stores `from 1840` as 1840-01-01 … open, an open end. No example covered
+TO.
+
+**Decision (owner).**
+- FROM runs from p1.earliest to an open end.
+- TO runs from an open start to p1.latest.
+- The §2.3 text is corrected to match. Plan §4.1 is aligned.
+
+**Implementation.**
+- `DateEnvelopes`.
+- Test `HistoricalDateTest.openFormsFollowOwnerDecisionGasP4_001`.
+- Example 18 in the 37-row fixture is unchanged.
+
+## GAS-P4-002: MINOR. Internal order of lock level L1 (Phase 4 WP1)
+
+| | |
+|---|---|
+| Found | 2026-11-16, registering the Phase 3 row locks (LO-1 to LO-3) |
+| Status | **OPEN: documentation precision; reported for the reviewer.** No behaviour change. |
+
+**Cause.**
+- Clarifications §5.5.3 rule 1 says rows within one level are locked in ascending UUID order. It also defines L1
+  as "the accepted Phase 3 chain, unchanged".
+- Accepted Phase 3 grouping (`GroupingService.applyChunk`, GAS-P3-004) does not lock in UUID order:
+  - it locks worksheet rows and Files in *plan* order, not UUID order;
+  - in the new-Record branch, it re-locks the classification-source row after the Files.
+- Phase 3's own safety comes from locking the capture session first. Every multi-row path holds the session lock
+  before locking any rows.
+
+**Effect on Phase 4.** None on deadlock freedom.
+- A Phase 4 writer takes at most one L1 lock, on the Record, and takes it first.
+- Phase 3 transactions take no Phase 4 lock.
+- So no wait cycle can cross between them.
+
+**Implementation.**
+- `LockSequence` treats L1 as one opaque level. It does not check Phase 3's internal order there; it does check that
+  no L1 lock follows a lock at a higher level.
+- Above L1, the full rules apply: level order, UUID order and no upgrade.
+- Covered by `LockSequenceTest.lo2_level1KeepsTheAcceptedPhase3OrderUnchecked` and `LockSequenceIT`.
+
+**Proposed wording, not applied** (it is a change to accepted architecture text, so it is for the reviewer and
+owner): §5.5.3 rule 1 would add "Within L1 the accepted Phase 3 order applies, serialised by the capture-session
+lock; UUID ordering applies from L2 upward."

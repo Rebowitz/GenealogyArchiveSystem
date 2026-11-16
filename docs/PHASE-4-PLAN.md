@@ -141,8 +141,8 @@ An owned value object: one row per dated field, never shared between owners.
     This applies **in every period, with no cut-off year**.
 - Drop readings whose day does not exist.
 - Take each reading's unit span in its own calendar, convert it to JDN, and take the minimum and maximum.
-- Apply the form: BEFORE is open start to p1.latest; AFTER is p1.earliest to open end; BETWEEN and FROM_TO run from
-  p1.earliest to p2.latest.
+- Apply the form: BEFORE and TO run from an open start to p1.latest; AFTER and FROM run from p1.earliest to an open
+  end; BETWEEN and FROM_TO run from p1.earliest to p2.latest (FROM and TO per owner decision GAS-P4-001).
 
 **Phase 7 tolerance** is query-time only, configured per modifier, and never written back (Cl. §2.6).
 

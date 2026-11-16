@@ -289,7 +289,9 @@ Days are Julian Day Numbers: calendar-neutral integers.
    that the readings differ by "at most 13 days" was wrong and is withdrawn.
 4. **Point envelope** = (minimum first day, maximum last day) over all readings.
 5. **Form.**
-   - POINT, FROM and TO use p1's envelope.
+   - POINT uses p1's envelope. FROM runs from **p1.earliest** to an open end (a period that starts at the point);
+     TO runs from an open start to **p1.latest** (a period that ends at the point). *Corrected 2026-11-16 by owner
+     decision GAS-P4-001: the earlier text gave FROM and TO p1's closed envelope, contradicting verified example 18.*
    - BETWEEN and FROM_TO run from p1.earliest to p2.latest.
    - BEFORE: open start, ending at **p1.latest**; AFTER: from **p1.earliest**, open end. The inclusive edge is
      deliberate: including a possible match is safe, excluding one is not.
