@@ -82,7 +82,7 @@ TO.
 | | |
 |---|---|
 | Found | 2026-11-16, registering the Phase 3 row locks (LO-1 to LO-3) |
-| Status | **OPEN, escalated.** The independent WP1 audit showed that the premise below is wrong across sessions (finding WP1-R1, BLOCKING). The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3 after the second Stage A review (D-LP-1…D-LP-8; Scenarios A–D; Option C for preservation rows), and is not implemented. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
+| Status | **OPEN, escalated.** The independent WP1 audit showed that the premise below is wrong across sessions (finding WP1-R1, BLOCKING). The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3.1, reconciled with the second Stage A review (D-LP-1…D-LP-9; Scenarios A–D; Option C for preservation rows), and is not implemented. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
 
 **Cause.**
 - Clarifications §5.5.3 rule 1 says rows within one level are locked in ascending UUID order. It also defines L1
@@ -109,3 +109,37 @@ TO.
 **Proposed wording, not applied** (it is a change to accepted architecture text, so it is for the reviewer and
 owner): §5.5.3 rule 1 would add "Within L1 the accepted Phase 3 order applies, serialised by the capture-session
 lock; UUID ordering applies from L2 upward."
+
+## GAS-P4-003: MAJOR. Administrator check can deadlock with history writers (accepted user administration)
+
+| | |
+|---|---|
+| Found | 2026-11-16, reconciling lock-protocol revision 3 with the second Stage A review |
+| Phase | Defect in accepted code (user administration); found during Phase 4 WP1 |
+| Status | **OPEN, needs owner decision D-LP-9.** Not fixed; no production code changed. |
+| Related | Second-review reconciliation SR2-B1 (`PHASE-4-WP1-AUDIT-CORRECTIONS.md`); proposal §3.2 rule TR, §5 L7, §11.5 |
+
+**Cause.**
+- `UserService.update` runs `AppUserRepository.lockEnabledAdministrators`:
+  `SELECT user_id FROM gas.app_user WHERE role = 'ADMINISTRATOR' AND enabled ORDER BY user_id FOR UPDATE`.
+- That single statement locks several rows and waits on a later row while holding earlier ones.
+- Every history insert takes KEY SHARE on its actor's `app_user` row through a foreign key. That conflicts with FOR
+  UPDATE.
+- So the check (A) can wait on transaction T1, which holds KEY SHARE on administrator a2 and waits on a row that T2
+  holds. T2 then writes history as administrator a1 and waits on A.
+
+**Effect.**
+- PostgreSQL detects the cycle and aborts one transaction with 40P01, so it fails visibly and nothing partial is
+  committed.
+- It needs three concurrent actors, one of them changing a user's role or enabled flag while two administrators
+  edit.
+
+**Evidence.** Reproduced on the builder's local PostgreSQL 16 against the real `app_user`, `change_history` and
+administrator-check SQL, with a stand-in row for the T1/T2 resource: 40P01 (proposal §11.5). Not yet in CI
+(planned LP-14).
+
+**Proposed fix (D-LP-9, not applied).** A transaction-scoped blocking advisory lock on one fixed key as the first
+statement of every role or enabled change; a plain read of the enabled administrators; then the target update (NO
+KEY UPDATE, compatible with KEY SHARE). Alternatives: FOR UPDATE NOWAIT with a visible "try again" conflict; or keep
+it and accept the risk.
+

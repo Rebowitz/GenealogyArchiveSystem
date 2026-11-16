@@ -1,16 +1,21 @@
-# Phase 4 WP1: L1 locking-protocol proposal (WP1-R1, GAS-P4-002), revision 3
+# Phase 4 WP1: L1 locking-protocol proposal (WP1-R1, GAS-P4-002), revision 3.1
 
 **Status: REVISED PROPOSAL for owner review and independent Codex assessment. Not implemented.**
 - No production locking code, SQL, trigger or migration in this document has been written.
 - The test designs in §10 are specifications; none of them is claimed to pass.
 - Executed evidence is limited to the bounded, non-production checks in §11.
+- **Revision 3.1** reconciles revision 3 (`569753f`) with the second Stage A review, finding by finding. The
+  reconciliation matrix is in `PHASE-4-WP1-AUDIT-CORRECTIONS.md`. Changes from revision 3 are marked **[3.1]**.
+- **This is not a readiness claim.** PO-1 is contradicted by source (§2.3), PO-2 is replaced by the key ledger with
+  its own open obligations (§2.5), and the theorem in §5 is conditional on decisions D-LP-1…D-LP-9 and proof
+  obligations PO-A…PO-D.
 
 | | |
 |---|---|
 | Revision | 3: responds to the second Stage A review (`Phase-4-WP1-Stage-A-Second-Review.md`) and the Revision 3 direction (baseline `d2c96f2`) |
 | Supersedes | Revision 2 at `d2c96f2`. Its invariant I-ADV, proof obligation PO-1, the claim that operation-owned tables are never locked explicitly, the batch-preflight guard contract and the catalog paragraph of lemma L2 are **withdrawn**. |
 | Retained | The validated directions of SA-R1 (File before Record in `linkFile`), SA-R2 (stabilised derivative closure) and SA-R4 (creation-only grouping dependencies). No new evidence contradicts them. |
-| Inputs and limits | The full Revision 3 direction (§1–§9 and stop point) was received; the first copy was truncated in §8 and the gap is now closed. **The second review report was not received.** Its concrete counterexamples, which direction §1 makes the mandatory starting point, could not be checked one by one. §2.3 and §2.4 are built from source, schema and triggers at `d2c96f2` and must be reconciled against those counterexamples (§12, R3-OPEN-1). |
+| Inputs and limits | The full Revision 3 direction and the complete second review (`Phase-4-WP1-Stage-A-Second-Review.md`) were received. Revision 3.1 accounts for every finding of the review individually (reconciliation matrix in the correction record). |
 
 ---
 
@@ -72,7 +77,7 @@
   | **CR-4 location keys** | Location uniqueness keys are claimed only for a location the claimant created exclusively or already owns; trigger and settlement writes keyed by location match only rows of the writer's own operation or no committed row. |
 
 - **Under the decisions of §8, §5 shows that no wait-for cycle exists** among the writers of §2. The proof depends on:
-  - proof obligations PO-A…PO-E, each with a test;
+  - proof obligations PO-A…PO-D, each with a test (PO-E withdrawn in 3.1; see D-LP-9);
   - the reconciliation of §2.4 with the second review's counterexamples (R3-OPEN-1).
 - **The order is unchanged from revision 2** except for one new position:
 
@@ -168,21 +173,23 @@ Columns:
 | P11 | `performCancel` → `applyCancel` final [tx] | adv(O) | (`claimBecomesUnresolved`: O NKU → U ins) or O NKU (release) → O NKU (transition) | O; U location key | claims trigger (own row) | REPAIR with unresolved: **change P2-8f** (Ct first); otherwise CR-2 owner and CR-3 |
 | P12 | `applyCancel` → `QuarantineMoves.settle` | adv(O) | see Q2 | | | see Q2 |
 | P13 | `IngestionService.receive`: op ins [tx] | none (the row is new) | O ins (uq (batch_id, item_key)) → fk parent F KS → event ins | batch/item key; parent F | claims trigger (no target yet: nothing) | private O; uq on batch/item is a first-wait (L6), ledger K3 |
-| P14 | receiver `heartbeat`, `renewReceivers`, `transition` RECEIVING → STAGED, `abandon` | none | O NKU (RECEIVING only) → event | O | — | CR-2 single-resource (renewReceivers updates several RECEIVING rows in one statement; each row's other writers are single-resource, PO-A) |
+| P14 | receiver `heartbeat`, `renewReceivers` (timer), `transition` RECEIVING → STAGED, `abandon` (RECEIVING → ABANDONED) | none | O NKU, predicate `state = 'RECEIVING'` → event | O | — | CR-2 single-resource, **state-specific [3.1]**: every statement's predicate is `state = 'RECEIVING'`; no advisory-owning writer touches a RECEIVING row (the worker starts at STAGED). `renewReceivers` updates several RECEIVING rows in one statement; it holds no other resource, so each wait is on a single-resource or receiving peer. |
+| P14b **[3.1]** | `IngestionService.cleanup`, `RecoveryService.cleanStaging`, and the post-transaction `markStagingCleaned` calls in `applyCancel`, `destroy` and DestructionProcessor (one autocommit statement each) | none | O NKU (`staging_cleaned`) | O | — | CR-2 single-resource. They may wait for O's owner (for example a worker still finishing a final operation's step); they hold nothing while waiting (L6). LP-10i. |
 | P15 | `RecoveryService.runOnce`: `abandonStaleReceiving` per op [tx] | none | O NKU → event | O | — | CR-2 single-resource |
 | P16 | `RecoveryService.runOnce`: `presentButRecordedMissing` → `setState` (one statement) | none | Ct NKU → (trg) G(X, CURRENT) NKU → (trg) O-at-location NKU | Ct; G(X); other O | vacates; missing-retires-ownership | CR-1: Ct is the statement's first lock. The O update matches no committed row (PO-B). **No change.** |
-| P17 | `RepairService.receive`: op ins | none | as P13 | | | as P13 |
+| P17 **[3.1]** | `RepairService.receive`: op ins [tx with its event] | none (the row is new) | O ins (`batch_id` NULL: the batch/item key never conflicts) → fk KS on content-less references: `storage_volume`, `app_user`, and the selected open `integrity_finding` (`finding_id`) | finding row (KS) | — | Private O. The finding fk KS conflicts only with FOR UPDATE or key updates of the finding; findings are only ever updated non-key (`resolve`, NKU), so the KS never waits. `app_user` per D-LP-9. No change. |
 | D1 | `FileService.destroyHolding` [tx] | xadv(repairs), try, bounded wait | F U → (replacement read) → Ct U → F NKU (fk replacement KS) → Ct NKU → repair O NKU → DESTROY O ins (dfk file at COMMIT: held) | F; replacement F; Ct; repair O | — | **D-LP-6a** (F↑ {file, replacement} before Ct). Repair O under xadv: CR-2 owner. |
 | D2 | `DestructionProcessor.process` → `removeBytes` | adv(DESTROY op) + tryLockAll(every other writer of X) | see D3…D6 | | | |
 | D3 | `stopUnfinishedRepairs` (`transition` [tx] per repair; `note`) | holds the repair's adv (tryLockAll) | repair O NKU → event; own O U → event | O | — | CR-2 owner |
 | D4 | DP `markVacated` (one statement) | adv | G(X, CURRENT) NKU | G(X) | — (`UPDATE OF state` not fired) | **Change P2-8c:** Ct(X) U first (CR-1); or a single-resource statement (see §4.9) |
 | D5 | DP `claimBecomesUnresolved` [tx] for a stopped repair's copy | holds that repair's adv | O NKU → U ins (uq OPEN) | O; U(X) location key | claims trigger | **Change P2-8c** (Ct(X) U first) |
+| D5b **[3.1]** | DP `newRecord` (via `classify` and `refuse`): `recordIfAbsent` outside any transaction of the caller (autocommit) | adv + all writers | U ins (uq OPEN (v, path)) → fk KS Ct(X), O | U(X) location key | — | **Change P2-8c, extended:** run in a transaction with Ct(X) U first. Without it, the insert holds a public OPEN key while its fk waits for Ct(X). |
 | D6 | DP completion [tx] | adv + all writers | U NKU (resolve) → own O NKU → G NKU (each → DESTROYED) → Q NKU → **Ct NKU last** → other O NKU (release) | U(X), G(X), Q(X), Ct(X), other O | G → DESTROYED retires ownership by location | **Change P2-8c:** Ct(X) U **first**. The other O are held by tryLockAll (CR-2 owner). |
 | D7 | DP `incomplete` (`transition`, `note`) | adv | O | O | — | CR-2 owner |
 | Q1 | `QuarantineMoves.move` → `intend` (one statement) | the caller's adv | Q ins (uq (v, quarantine_path)) → fk O KS (own) | Q location key | — | CR-3 or CR-1 via the caller; ledger K9 |
 | Q2 | `QuarantineMoves.settle` [tx] | the caller's adv (`reconcileAll`: tryLock; worker; cancel; DP) | Q NKU → **every O at source NKU** (`releaseTargetsAt`) → U NKU (resolve) → G NKU (`retireGenerationAt`) | Q(X), O by location, U(X), G(X) | G retires ownership by location | **Change P2-8a:** Ct(X) U first when content is not null; `releaseTargetsAt` matches only the entry's own operation (PO-B) |
 | U1 | `UnresolvedObjects.release` [tx] | adv(u.operation) | U U (`lockForUpdate`) → U NKU → G NKU (`retireGeneration`) → O U (`note`) → event | U(X), G(X), O | G → MISSING retires ownership | **Change P2-8d:** Ct(X) U first when content is not null |
-| U2 | `attestUnderLock` [tx] | adv(u.operation) | U U → U NKU → O U (`note`) | U, O | — | **Change P2-8d** |
+| U2 **[3.1]** | `attestUnderLock` [tx]. Reached **with** adv(u.operation) for an open, unattested record, and **without** any advisory lock when the record is already attested or closed (`attest`, lines 121–122) | adv(u.operation), or none | U U → (open and unattested only) U NKU → O U (`note`) | U, O | — | **Change P2-8d** (Ct(X) U first, in both branches). The no-advisory branch writes nothing after its U lock (it returns or throws), so it is single-resource apart from the Ct lock P2-8d adds. |
 | U3 | `quarantineAttested` | adv(first.operation) | `note` [tx]; `QuarantineMoves.move` (Q1, Q2) | | | as Q1 and Q2 |
 | U4 | `closeIfVerifiedAbsent` [tx] | adv(u.operation), or held by DP | U U → U NKU → G NKU | U(X), G(X) | G retires ownership | **Change P2-8d** |
 | I1 | `IntegrityService.checkContent` MISSING [tx] | none | finding ins (**fk Ct KS**) → Ct NKU (**upgrade**) → (trg) G NKU → (trg) O-at-location NKU | Ct, G(X), other O | vacates; missing-retires-ownership | **Change P2-8e:** Ct(X) U first (final strength) |
@@ -203,14 +210,15 @@ Columns:
 
 | Key | Table and constraint | Contenders | First wait | Protection | Class | Test and assumption |
 |---|---|---|---|---|---|---|
-| K1 | `file_capture_context` PK `(file_id)` | A (`add`), grouping does not insert | the insert | inserts in ascending `file_id` after S and F | **ordered** (L1d) | LP-2, LP-3; the key stays in the guard state after INSERTED (§6) |
+| K1 | `file_capture_context` PK `(file_id)` | A (`add`) inserting; **X (`removeFile`) deleting [3.1]**: an uncommitted DELETE holds the key, and a concurrent insert of that `file_id` waits for it | the insert | inserts in ascending `file_id` after S and F; X holds S(own) and K U and takes nothing after the DELETE except history (terminal) | **ordered** (L1d); the key is a public resource, not a private-row exemption | LP-2, LP-3, LP-2c (remove versus add of one File); the key stays in the guard state after INSERTED (§6) |
 | K2 | `file_capture_context_sequence` `(capture_session_id, sequence_number)` | A (insert, compaction) | the insert or compaction UPDATE | S held U | serialised (S) | LP-3 |
 | K3 | `file_operation_batch_id_item_key_key` `(batch_id, item_key)` | IR receive (the same batch item uploaded twice) | the op insert, the transaction's first statement | none needed | first-wait | PO-A test: receive transaction holds nothing before the insert |
 | K4 | `file_operation_event` PK `(operation_id, seq)`, seq = `max+1` | every event writer of O | the insert | every event writer has already updated or locked O in the same transaction (`transition`, `note`, `abandonStaleReceiving`) | serialised (O) | LO test: every call of `event` follows an O write in the same transaction |
 | K5 | `file_content_created_by_operation_key` | commitNewContent only | — | the operation's own id | private | — |
 | K6 | `archival_file_ingest_operation_id_key` | insertFile only | — | own id; adv(O) | private | — |
 | K7 | `file_content_generation_current` (partial: `content_id WHERE state = 'CURRENT'`) | commitRepair (new CURRENT after old leaves), commitNewContent (new content) | the insert | Ct(X) U (commitRepair); new content private | serialised (Ct) | LP-10c |
-| K8 | `file_content_generation_location` `(volume_id, storage_path)` and `physical_location_owner` PK `(volume_id, path)` | generation insert (commitNewContent, commitRepair); op claim (`markTargetCreated`) | `claim_physical_location` | **CR-4:** a generation claims only the path its own operation created exclusively and released in the same transaction; an operation claims only after an exclusive filesystem create at that path | private by construction (PO-C) | PO-C test: claim always preceded by exclusive create or own release in the same transaction; concurrent create at one path yields one claimant and one COLLISION |
+| K8 **[3.1, split]** | `file_content_generation_location` `(volume_id, storage_path)` | generation inserts: `commitNewContent` (path built from its own new content UUID), `commitRepair` (path from content UUID and the planned generation) | the generation insert | new content: the path contains a fresh content UUID (private). Repair: two repairs of X can plan the same `maxGeneration + 1` (`planRepair`, no Ct lock; review §4.2). Only one can create the file (CREATE_NEW); the other blocks with COLLISION. A repair commit inserts the generation while holding Ct(X) U, and every other repair commit of X must take Ct(X) first. | serialised (Ct) for repairs; private for new content | LP-10h (two repairs of one content planning one generation: one COLLISION, one commit, no 23505, retry plans max+1) |
+| K8b **[3.1]** | `physical_location_owner` PK `(volume_id, path)`, and the partial unique index of one owner row per operation | `claim_physical_location` from an operation's `markTargetCreated` (in `createOwned`), and from a generation insert | the claim (V0017 deliberately waits on an uncommitted claim) | **shared key.** Protection: (i) an operation claims only after its own CREATE_NEW at that path succeeded, so a second claimant needs the file to have disappeared in between; (ii) the claim is the **last** blocking statement of `createOwned`'s transaction, so its holder never waits afterwards (terminal holder); (iii) a generation claim happens in `commitRepair` under Ct(X) U, or in `commitNewContent` on its own fresh path, and `createOwned` for a repair of X takes Ct(X) Sh first, so it cannot hold a claim while `commitRepair` holds Ct(X). | shared; terminal holder or serialised (Ct) | LP-10f (concurrent claimants after an external removal: the loser waits for a terminal holder, then COLLISION or ownership error; no 40P01) |
 | K9 | `quarantine_object` `(volume_id, quarantine_path)` | `QuarantineMoves.intend` | the insert (one statement) | quarantine paths are derived from the operation and source (one per entry) | first-wait (one statement) | ledger test: the path is unique per (operation, source) |
 | K10 | `unresolved_object_open_location` (partial: `(volume_id, path) WHERE status = 'OPEN'`) | P3, P6, P7, P11, D5, DP `newRecord` | `recordIfAbsent` (ON CONFLICT DO NOTHING waits for an uncommitted OPEN insert) | content-scoped records: Ct(X) U held (CR-1, after P2-8a…f); content-less records: adv(O) (CR-3). Two records at one path for different contents cannot arise: a path belongs to one content's generations (K8) or to one operation's target (CR-4) | serialised | LP-10d; PO-D |
 | K11 | `storage_volume_active_name`, `app_user_username_ci`, `archive_instance` keys | administration | the insert or update, first statement | — | first-wait; outside archival writers | — |
@@ -221,6 +229,8 @@ Columns:
 | K16 | friendly numbers (`*_friendly_number_key`) | every creator | none: `nextval` never returns a value twice and holds no lock until commit | sequence | no-wait (non-transactional) | — |
 | K17 | `change_history`, `historical_date`, `record_role`, `citation` PKs | their writers | — | fresh UUID | private | — |
 | K18 | `grouping_run`, `grouping_run_group` PKs | G | — | fresh run id; S held | private | — |
+| K19 **[3.1]** | `file_content_generation` PK `(content_id, generation)` | `commitRepair`, `commitNewContent` | the insert | repair: Ct(X) U; new content: private | serialised (Ct) or private | LP-10h |
+| K20 **[3.1]** | grouping FKs: `grouping_run` → session and actor; `grouping_run_group` → run and Record; `capture_session_group` → session and Record | G | none: each parent is held (S, R) or private (new run, new Record) | — | covered | LP-4a |
 
 **No constraint is weakened.** K12 is recorded as existing behaviour (a logical key without a database constraint);
 it creates no wait and is outside this protocol.
@@ -247,7 +257,9 @@ L7 is implicit only.
    uniqueness keys stay keys the transaction holds (§6).
 6. **CR-1, content coordination.** A transaction that writes, directly or through a trigger, any of X's state, X's
    generation rows, an unresolved or quarantine row whose `content_id` is X, or a finding of X, holds Ct(X) FOR
-   UPDATE before the first such write. The lock is acquired at L1c, after any F locks.
+   UPDATE before the first such write. The lock is acquired at L1c, after any F locks. **[3.1]** A single statement
+   whose first lock is the NKU of its own update of X (P16) satisfies CR-1: NKU conflicts with every other CR-1
+   holder's FOR UPDATE or NKU. Only a statement that takes no other lock first may rely on this.
 7. **CR-2, operation rows.** A transaction that writes operation row O, explicitly or by trigger, either holds O's
    advisory lock (session or transaction scope; always acquired by try, never waiting), or is a single-resource
    transaction: it writes O and O's event rows and nothing else, and its only blocking acquisition is O.
@@ -257,16 +269,20 @@ L7 is implicit only.
 9. **CR-4, location keys.** `physical_location_owner` and the generation location key are claimed only for a
    location that the claiming transaction's own operation created by exclusive filesystem create, or released in
    the same transaction (PO-C).
-10. **TR, terminal references.** Source, Repository, vocabulary rows and `app_user` are terminal references:
-    - **a.** every transaction other than a catalog correction or the administrator check takes on them only
-      implicit KEY SHARE (foreign keys);
+10. **TR, terminal references [3.1, revised].** Source, Repository and vocabulary rows, and `app_user` (after
+    D-LP-9), are terminal references:
+    - **a.** every transaction other than a catalog correction takes on Source and Repository only implicit KEY
+      SHARE (foreign keys). Every transaction takes on vocabulary rows and `app_user` only KEY SHARE (foreign keys)
+      or NO KEY UPDATE (their own non-key updates). There is no explicit FOR UPDATE or FOR SHARE on `app_user` (this
+      requires **D-LP-9**) or on vocabulary rows (true today);
     - **b.** catalog corrections take their single explicit FOR UPDATE as their first blocking acquisition. Their
-      later waits are limited to: a Source correction's KEY SHARE on its new Repository; KEY SHARE on the actor's
-      `app_user` row;
-    - **c.** the administrator check locks `app_user` rows ascending as its first acquisition and takes no other lock
-      afterwards;
-    - **d.** every non-administrative transaction references at most one `app_user` row (its actor; PO-E);
-    - **e.** no transaction updates a key column of a terminal reference (identity triggers).
+      later waits are limited to a Source correction's KEY SHARE on its new Repository, and KEY SHARE on `app_user`
+      and vocabulary rows;
+    - **c.** no transaction updates a key column of a terminal reference (identity triggers).
+
+    **Revision 3's TR (c), "the administrator check … takes no other lock afterwards", and (d) (PO-E) are
+    withdrawn.** The administrator check's single statement locks several `app_user` rows and waits on later rows
+    while holding earlier ones. A three-transaction cycle through it is reproduced in §11.5 (40P01).
 11. **Presentation order is separate from lock order.**
 
 ### 3.3 Why Option C (D-LP-8)
@@ -274,8 +290,8 @@ L7 is implicit only.
 | | **A: extend the total order to all shared preservation rows** | **B: smaller ordered core plus individually proven exceptions** | **C (recommended): content coordination plus classified exceptions** |
 |---|---|---|---|
 | What it requires | Pick a global position for O, G, U, Q and location keys, and reorder every writer to it. Operation-before-content paths (P5, P6) and content-before-operation paths (P2, D1, D6, the I and P16 triggers) disagree. One of them must change in every pairing, and trigger-driven location writes (which pick their rows by predicate at run time) must also be ordered. | Keep F, Ct, K, R and C ordered and prove each other writer acyclic one by one: terminal, first-wait or single-resource. | One coordinator (Ct FOR UPDATE) for every content-scoped row; the remaining shared rows (O, content-less U and Q, location keys) are covered by three classification rules, each checkable by a test. |
-| Phase 2 changes | Most preservation writers, plus the triggers (they would have to lock in a defined order instead of by predicate). | Few now, but every new preservation writer needs a new proof; the I1/I2 and DP paths cannot be shown terminal (they hold Ct and then write G and O). | Seven bounded changes (P2-8a…f, plus D-LP-6a and 6b already proposed), all of the form "lock Ct FOR UPDATE first". No trigger changes. No advisory waits added. |
-| Strength of the safety argument | Strong in principle, but the triggers' predicate-chosen rows make the order hard to enforce or test. | Weakest: a list of special cases. | Strong: content-scoped rows are serialised by one exclusive lock; the remaining cases reduce to proof obligations PO-A…PO-E with tests. |
+| Phase 2 changes | Most preservation writers, plus the triggers (they would have to lock in a defined order instead of by predicate). | Few now, but every new preservation writer needs a new proof; the I1/I2 and DP paths cannot be shown terminal (they hold Ct and then write G and O). | Six bounded changes P2-8a…f (P2-8c extended in 3.1 to DestructionProcessor `newRecord`), plus D-LP-6a and 6b already proposed,, all of the form "lock Ct FOR UPDATE first". No trigger changes. No advisory waits added. |
+| Strength of the safety argument | Strong in principle, but the triggers' predicate-chosen rows make the order hard to enforce or test. | Weakest: a list of special cases. | Strong: content-scoped rows are serialised by one exclusive lock; the remaining cases reduce to proof obligations PO-A…PO-D with tests. |
 | Behavioural change | Large | Small | Small: some preservation transactions wait for the content row where they now race; outcomes unchanged |
 
 **The cost of C is serialisation of preservation writes per content.** That is acceptable: these are background or
@@ -338,6 +354,16 @@ Unchanged from revision 2 §4.2:
      immediate `(capture_session_id, sequence_number)` uniqueness holds at every statement.
    - `row_version`, `added_at` and `added_by` are not changed.
 9. **History** for added rows in request order, unchanged.
+
+**Linearization rule [3.1].** Each candidate File's outcome is decided by its state at the moment this transaction's
+SHARE lock on it is granted:
+- a restriction or destruction that committed before the grant is seen (the File counts as hidden or destroyed);
+- one that starts after the grant waits for this transaction.
+
+This includes restriction of a descendant through another root: that root's FC holds the File FOR UPDATE, so this
+`add` waits, then reads RESTRICTED. The accepted per-item reads happened at varying times inside the transaction, so
+an equivalent single point did not exist before. The new rule is strictly more precise and never counts a File
+differently from some accepted interleaving (LP-3b).
 
 **Why SHARE, not KEY SHARE (direction §7, "authoritative state after lock waits").** Under KEY SHARE a restriction
 or destruction (NKU) could still commit between the re-read and this commit. Accepted Phase 3 behaviour (GAS-P3-002)
@@ -425,6 +451,20 @@ Only NORMAL → RESTRICTED cascades. Every other `correct`, `delete` and `restor
 
    The message names only the root, which the actor can see. It reveals no count or identity of descendants.
 
+**Implementation boundaries [3.1]:**
+- The attempt loop is **outside** the transaction callback. An abandoned attempt returns normally from the callback
+  after `setRollbackOnly()`; no exception is swallowed inside a rollback-only transaction, and no savepoint is used.
+  Each attempt therefore starts with no locks held and an empty guard tracker.
+- A reachable node that is missing at acquisition cannot occur (`archival_file` rows are never deleted). If it does,
+  it is recorded as MISSING (never ACQUIRED) and the attempt fails with an internal error. It is **not** counted as
+  graph growth.
+- Steps 1 and 7 together make the hidden-root outcome identical to the accepted not-found outcome in every path; the
+  exhaustion message is reachable only after the root passed visibility, lifecycle and version checks.
+- **History semantics.** The restriction transaction records history only for the root and for the descendants it
+  actually changed (NORMAL → RESTRICTED). A child published after the restriction commits gets its own accepted
+  creation history from `insertFile`, with `restriction = RESTRICTED` inherited through the trigger. No entry for it
+  is fabricated in the restriction transaction.
+
 **Graph cases:**
 - **Deep chains:** the recursive CTE has no depth bound; `UNION` removes duplicates (diamond-shaped graphs).
 - **All-state graphs:** DESTROYED, DELETED and already RESTRICTED intermediates are discovered and locked.
@@ -434,6 +474,10 @@ Only NORMAL → RESTRICTED cascades. Every other `correct`, `delete` and `restor
 - **Growth during the attempt:** detected at step 4 (LP-11).
 - **Publication after stabilisation:** blocked by the held parent lock, then restricted by the inheritance trigger
   (LP-12).
+- **Overlapping roots [3.1]:** two restrictions whose closures share nodes lock the shared nodes in UUID order; one
+  waits for the other; the second then finds them RESTRICTED and changes only what remains NORMAL (LP-11b).
+- **Publisher rollback [3.1]:** a publisher that rolls back while FC waits leaves no edge. FC's re-discovery equals
+  its acquired set and it proceeds (LP-12b).
 
 **Why the closure is stable** (revision 2 argument, retained):
 - `file_derivation` is immutable and append-only.
@@ -556,27 +600,32 @@ has no incoming edge while waiting, so it cannot be on a cycle. This covers:
 - the Administrator check's first statement;
 - catalog corrections' first lock.
 
-**L7 (terminal references, rule TR).** Let t be a Source, Repository, vocabulary or `app_user` row.
-- **A wait on t held in KEY SHARE** comes only from an explicit FOR UPDATE requester: a catalog correction or the
-  administrator check. That request is the requester's first (TR b, c), so it is L6.
-- **A wait on t held in FOR UPDATE by a catalog correction W** comes from KEY SHARE requests. W's own further waits
-  are limited to:
-  - the new Repository's KEY SHARE (blocked only by a Repository correction W', whose only further wait is its
-    actor's `app_user` KEY SHARE);
-  - its actor's `app_user` KEY SHARE (blocked only by the administrator check A, which waits only for `app_user`
-    rows in ascending order).
+**L7 (terminal references, rule TR) [3.1, revised].**
+- **`app_user` and vocabulary rows.** With D-LP-9 adopted, these rows are taken only in KEY SHARE and NO KEY UPDATE
+  modes. KEY SHARE conflicts with neither. NO KEY UPDATE conflicts with NO KEY UPDATE: two updates of one user, or of
+  one vocabulary row. Each such update is in a transaction whose other blocking acquisitions are at most:
+  - the D-LP-9 guard, which is a first acquisition;
+  - KEY SHARE on terminal rows.
 
-  The chain W → W' → A moves strictly up Source < Repository < `app_user`, then ascending within `app_user`, so it
-  has no cycle. None of W, W' or A waits on a non-terminal resource after its first lock.
-- **A non-terminal transaction T waiting on t** cannot be waited on by W, W' or A, except through t-rows T holds in
-  KEY SHARE. Those block only first requests (L6).
-- **PO-E** (at most one `app_user` row per non-administrative transaction) excludes a non-terminal transaction that
-  holds one `app_user` KEY SHARE and waits for another behind A.
+  The holder of one such NO KEY UPDATE never waits on a non-terminal resource afterwards. These rows therefore add
+  no edge to any cycle.
+- **Source and Repository.**
+  - **A wait on t held in KEY SHARE** comes only from a catalog correction's FOR UPDATE. That is the correction's
+    first acquisition, so the wait is L6.
+  - **A wait on t held in FOR UPDATE by a catalog correction W** comes from KEY SHARE requests. W's only further
+    waits are:
+    - the new Repository's KEY SHARE, blocked only by a Repository correction W', whose further waits are on
+      `app_user` and vocabulary KEY SHARE, which never wait (above);
+    - its own `app_user` and vocabulary KEY SHARE (never wait).
+
+    The chain W → W' ends; it has no cycle, and it never reaches a non-terminal resource.
+- **Without D-LP-9** the `app_user` part fails: the administrator check A holds earlier administrators' FOR UPDATE
+  while waiting for a later administrator's KEY SHARE holder. §11.5 reproduces A → T1 → T2 → A.
 
 **Theorem.** Assume:
-- D-LP-1, D-LP-3, D-LP-5, D-LP-6a, D-LP-6b, D-LP-7 and D-LP-8 (Option C, changes P2-8a…f) are adopted;
-- PO-A…PO-E hold;
-- R3-OPEN-1 is closed.
+- D-LP-1, D-LP-3, D-LP-5, D-LP-6a, D-LP-6b, D-LP-7, D-LP-8 (Option C, changes P2-8a…f, P2-8c as extended in 3.1)
+  and **D-LP-9** are adopted;
+- PO-A…PO-D hold (PO-E is withdrawn and replaced by D-LP-9).
 
 Then every blocking request of every writer in §2 is ordered (L1), covered (L2), private (L3), an operation-row edge
 of L4, a content-scoped edge of L5, a first-only wait (L6) or a terminal-reference wait (L7). No wait-for cycle
@@ -589,13 +638,13 @@ that schedule against the implemented protocol and must show the obligation hold
 |---|---|---|---|
 | PO-A | Single-resource transactions (P9, P10, P14, P15, D3, D7, the I5 statements) take no blocking lock other than O and its event key | An Administrator retry or cancel, or a receiver, that holds O and then waits for Ct, a generation or a File held by the worker that is waiting for O | LP-10b (inventory) and LP-10g (retry against a worker in `commitRepair`) |
 | PO-B | Location-keyed trigger and settlement writes match only the writer's own operation or no committed row | A committed operation row owning path p while a generation records p, and IntegrityService marking that content MISSING while the operation's worker holds the row and waits for Ct | LP-10e |
-| PO-C | Location keys are claimed only after an exclusive create or an own release in the same transaction | Two transactions claiming one `(volume, path)`: T1 holds the claim and waits for T2's content; T2 waits on T1's claim | LP-10f |
+| PO-C | Location keys are claimed only after an exclusive create or an own release in the same transaction | Two transactions claiming one `(volume, path)`: T1 holds the claim and waits for T2's content; T2 waits on T1's claim | LP-10f, LP-10h |
 | PO-D | Unresolved OPEN location inserts for content X happen under Ct(X); content-less ones under their operation's advisory lock | Two recorders of one path for X, one without Ct(X), each holding a row the other needs | LP-10d |
-| PO-E | A non-administrative transaction references at most one `app_user` row | T holds KEY SHARE on user u2 and requests user u1 while the administrator check holds u1 and waits for u2 | LO-3 extension |
+| ~~PO-E~~ | **Withdrawn [3.1].** It does not prevent the cycle: each participant references only one user (§11.5). Replaced by D-LP-9. | Executed: §11.5 | LP-14 |
 
 **What is not proven:**
 - **Declined decisions:** each leaves its scenario, which PostgreSQL detects as 40P01 (fails visibly).
-- **The second review's counterexamples:** not available to the builder (R3-OPEN-1). The schedules above are the builder's, not the reviewer's.
+- **The second review's counterexamples** are accounted for individually in the correction record's reconciliation matrix. The schedules above are the builder's; the reviewer's are cited there with their source references.
 - **Writers added later:** must be inventoried before implementation.
 
 ## 6. `LockSequence` contract (direction §4)
@@ -604,15 +653,19 @@ that schedule against the implemented protocol and must show the obligation hold
 |---|---|---|---|
 | `acquire(level, table, id, mode)` → `Ticket` | immediately before each explicit lock statement, one row each | against the **current** state (no stored batch): key (level, UUID) ≥ every held key, unless a re-lock (below); `mode` is the strongest the transaction will need for this row (caller-declared; mismatch later → `assertHeld` fails); the tracker has no other open ticket (one statement at a time, non-interleavable); the tracker is not FAILED | `Ticket.acquired()` → ACQUIRED(mode); `Ticket.missing()` → MISSING (no lock held); `Ticket.failed(sqlState)` → ATTEMPTED with SQLSTATE, and the tracker enters FAILED |
 | `insertKey(level, table, key)` → `Ticket` | immediately before an INSERT whose uniqueness key may wait (K1) | as `acquire`, mode UPDATE | `inserted()` → INSERTED: the row is PRIVATE_NEW **and** the key stays in the held-key set at its level; `taken()` → TAKEN: no row held, but the key position is recorded as passed (later keys must be ≥ it) |
-| `privateNew(table, id)` | after inserting a row with a fresh, uncontended key | — | PRIVATE_NEW; later locks or references to it are exempt from order checks |
+| `privateNew(table, id)` | after inserting a row **all of whose unique indexes are classified private in the ledger (§2.5)** **[3.1]** | the table is on the ledger's private list; otherwise the call is rejected and the caller must use `insertKey` for each shared key (for example `file_operation` batch/item, unresolved OPEN location, generation location) | PRIVATE_NEW; later locks or references to the row are exempt from order checks; **shared keys are never erased by it** |
 | re-lock (`acquire` on a key already ACQUIRED) | as `acquire` | WP1-R3 rules kept: same level; same-or-weaker mode; no acquisition at a **higher** level or sub-level since (else rejected). A re-lock of a MISSING or TAKEN key is a normal acquisition, not a re-lock. | ACQUIRED unchanged |
 | `assertHeld(level, table, id, mode)` | where code relies on a lock already held (the `commitShared` parent File, §4.7) | ACQUIRED at ≥ mode, else `IllegalStateException` | — |
-| `context(OperationOwner opId)` and `context(SingleResource opId)` | set by OperationProcessor, DestructionProcessor, OperationAdminService and the others around their transactions | — | used by L1p checks: an explicit O lock requires owner context or single-resource context; a single-resource context rejects any other `acquire` (PO-A) |
+| ownership context **[3.1]** | **derived from locks actually held, not set by hand:** `OperationLocks.tryLock`, `tryLockAll` and `tryLockForTransaction` register ownership with the guard when the lock is granted, and the returned `Held` (or transaction completion, for the transaction-scoped lock) deregisters it. A single-resource context is opened only by the repository methods that are single-resource by construction (`transition` and `note` outside owner context, `heartbeat`, `markStagingCleaned`). | — | used by L1p checks: an explicit O lock requires registered ownership of O or a single-resource context; a single-resource context rejects any other `acquire` (PO-A). Tests cross-check registered ownership against `pg_locks` (`locktype = 'advisory'`, granted) for the key. |
 | reset | on commit **and** rollback (`TransactionSynchronization.afterCompletion`) | — | clears all state, including FAILED |
 
 **Mode strength:** KEY SHARE < SHARE < NO KEY UPDATE < UPDATE.
 - A request for a row the transaction will need at several strengths is made once, at the strongest. For example,
-  `destroyHolding`'s replacement File: KS, but U if it equals the file; equality is refused before locking.
+  `destroyHolding`'s replacement File: KS. **[3.1]** If the replacement id equals the file id, there is one plan entry
+  (U), and the accepted rejection message is raised at its accepted position, after the not-found, version and
+  lifecycle checks.
+- **[3.1] Table and level consistency:** each repository method is bound to exactly one (level, table). `acquire`
+  rejects a table that does not match the declared level.
 - **Duplicate targets** in one call site are rejected; callers deduplicate first. `add` and `saveMarks` deduplicate
   by first occurrence.
 
@@ -627,7 +680,7 @@ that schedule against the implemented protocol and must show the obligation hold
 | `L1_WORKSHEET` | new `lockSessionRow(s, f)`, `lockRow(f)`, `addRow` (via `insertKey`) |
 | `L1_RECORD` | `ArchivalRecordRepository.lock`, new `lockShared` |
 | `L1_CATALOG_SOURCE`, `L1_CATALOG_REPOSITORY` | `CatalogRepository.lockSource`, `lockRepository` (TR: first acquisition only) |
-| L7 | `AppUserRepository` administrator check (first acquisition only; asserted) |
+| L7 | `app_user` and vocabulary rows: no explicit lock after D-LP-9. The guard rejects any explicit `app_user` lock. |
 
 - **Implicit locks** (foreign keys, triggers, deferred keys) are **not** instrumented. They are covered by §5 L2–L5
   and L7, and tested with real blockers (LO-7, LP-10e).
@@ -643,12 +696,13 @@ that schedule against the implemented protocol and must show the obligation hold
 | D-LP-6b | Phase 2 `commitShared` | Parent F before content; parent re-lock replaced by assertion | Unchanged |
 | D-LP-8 / P2-8a | Phase 2 `QuarantineMoves.settle` | Ct U first | Settlement waits for concurrent work on the same content |
 | P2-8b | Phase 2 `quarantineSuperseded` | Ct U first | as above |
-| P2-8c | Phase 2 `DestructionProcessor` (completion, stopped-repair copy, `markVacated`) | Ct U first | as above |
+| P2-8c | Phase 2 `DestructionProcessor` (completion, stopped-repair copy, `markVacated`, **and `newRecord`/`refuse` [3.1]**) | Ct U first | as above |
 | P2-8d | Phase 2 `UnresolvedObjects` release, attest, close | Ct U first | An Administrator decision waits briefly for concurrent work on the content |
 | P2-8e | Phase 2 `IntegrityService` (MISSING, damaged, reappeared, reverify) | Ct U first, before the finding insert | A scan waits briefly for concurrent work on the content |
 | P2-8f | Phase 2 `unverifiedOwnCopy`, `applyCancel` (REPAIR) | Ct U first | as above |
 | D-LP-5 | Phase 3 `linkFile` | F Sh before R | A link waits for a concurrent restriction of the File |
 | D-LP-7 | Phase 3 grouping, `add` (F Sh, ordered inserts, compaction), `saveMarks`, `removeFile` | §4.2–§4.4 | `add` waits for a concurrent restriction or destruction of a candidate File; counts unchanged |
+| **D-LP-9 [3.1]** | Accepted user administration (`UserService.update`, `AppUserRepository.lockEnabledAdministrators`) | Replace the multi-row `FOR UPDATE` on enabled administrators with a transaction-scoped **blocking** advisory lock on one fixed key (`pg_advisory_xact_lock`) as the **first** statement of every transaction that changes a user's role or enabled flag. Then read the enabled administrators without row locks and update the target row (NO KEY UPDATE). | Unchanged outcomes: the at-least-one-enabled-Administrator rule is kept, because every role or enable change serialises on the key. Concurrent role changes queue on the key instead of on administrator rows. Researchers' and workers' history inserts no longer wait behind a role change. |
 
 ## 8. Decisions requested (updated)
 
@@ -661,7 +715,8 @@ that schedule against the implemented protocol and must show the obligation hold
 | D-LP-5 | `linkFile` File before Record | Approve |
 | D-LP-6a, 6b | File before content in `destroyHolding`, `commitShared` | Approve |
 | D-LP-7 | Grouping, `add`, `saveMarks`, `removeFile` sequences | Approve |
-| **D-LP-8** (now active) | **Option C** and Phase 2 changes P2-8a…f | Approve C. Decline A (too many changes, trigger ordering). Decline B (weakest argument). |
+| **D-LP-8** (now active) | **Option C** and Phase 2 changes P2-8a…f (P2-8c extended in 3.1) | Approve C. Decline A (too many changes, trigger ordering). Decline B (weakest argument). |
+| **D-LP-9 [3.1]** | The administrator check: options **(a)** first-statement blocking advisory key (recommended); **(b)** `FOR UPDATE NOWAIT` with a visible "try again" conflict (no queueing, but user-visible failures under contention); **(c)** keep, and accept the reproduced 40P01 risk (requires three concurrent actors, one of them changing a role) | Approve (a). It is a first acquisition, so it is not a late advisory wait; no existing wait is inverted. |
 
 ## 9. Phase 4 writers and LO-1…LO-7
 
@@ -670,7 +725,7 @@ As revision 2 §9:
 - W10 takes no L1 lock;
 - W12 takes R U.
 
-Their references to Source, vocabularies and users are terminal (TR). LO-3 is extended with PO-E.
+Their references to Source, vocabularies and users are terminal (TR, with D-LP-9). LO-3 is extended to reject any explicit `app_user` lock.
 
 ## 10. Concurrency-test contracts (amended as directed; not implemented)
 
@@ -724,7 +779,9 @@ Their references to Source, vocabularies and users are terminal (TR). LO-3 is ex
 | **LP-10e** (PO-B) | ACC | IntegrityService marks X MISSING while a worker holds an uncommitted `markTargetCreated` on an unrelated path: no wait (blocker set empty). A seeded committed-state check that no operation owns a path that a generation records. |
 | **LP-10f** (PO-C) | ACC | Two operations planned to the same path: one exclusive create wins; the other is COLLISION; one `physical_location_owner` row. |
 | **LP-11** (closure growth) | ACC | FC discovers {P, D}; the seam pauses before acquisition; a publisher **commits** D2 under D (an independent, committed change); FC re-discovers → attempt abandoned and **rolled back** (no history rows, no version change from attempt 1); attempt 2 locks {P, D, D2}; D2 RESTRICTED with history. Deep chain (depth 6) and diamond variants. All-state variant: a DESTROYED intermediate is locked and its descendants handled. |
-| **LP-12** (concurrent publication) | ACC | FC holds the full closure; a publisher of D3 under D is **observed waiting (blocker = FC)** while uncommitted; after FC commits, the publisher's transaction (independent of FC) commits, and its trigger restricts D3. Exhaustion variant: growth forced in three attempts → visible Conflict; nothing changed; a hidden-root variant answers not found; a DESTROYED-root variant answers the accepted rule message. |
+| **LP-12** (concurrent publication) | ACC | FC holds the full closure; a publisher of D3 under D is **observed waiting (blocker = FC)**, with D3 still uncommitted; after FC commits, the publisher's transaction (independent of FC) commits, its trigger restricts D3, and D3's **creation history** records the inherited restriction **[3.1]**. **Exhaustion variant [3.1]:** before each of the three re-discoveries the controller makes a publisher **commit and acknowledge** one new edge; result: one visible Conflict; **the restriction's own writes are absent** (root version and history unchanged by FC); the publishers' independently committed Files and edges remain. Hidden root: not found. DESTROYED root: the accepted rule message. |
+| **LP-11b [3.1]** | ACC | Overlapping roots: FC1 restricts P1 and FC2 restricts P2, sharing descendant D. One waits for the other (blocker observed); both complete; history records D's change once (by whichever changed it). |
+| **LP-12b [3.1]** | ACC | Publisher rollback: a publisher waiting on FC's parent rolls back; FC completes in one attempt; no edge, no history for the rolled-back child. |
 
 **Additional tests** (ACC):
 - **LP-10g** (PO-A): an Administrator retry of operation O while O's worker is inside `commitRepair` (holding O,
@@ -734,7 +791,48 @@ Their references to Source, vocabularies and users are terminal (TR). LO-3 is ex
   correction holds it and a grouping transaction holds a new Record's KEY SHARE on the Source. No 40P01. All three
   complete with final versions and history.
 
-**Database-behaviour characterisation to add to CI** (DB): §11.3 predicate waits, on all four jobs.
+**Further amendments [3.1]** (from the second review §9):
+- **LP-1b:** the corrected foreign-row test uses an **independent blocker**: T3 holds the foreign row B FOR UPDATE
+  throughout. `saveMarks(S1, [A, B])` must return not found for B within a bound well below `lock_timeout` while T3
+  still holds B. That shows it never waited on B. Sampling `pg_blocking_pids` alone is not relied on.
+- **LP-2c (ACC):** `removeFile` of F from S2 (uncommitted DELETE) while `add(S1, [F])` runs. The add waits on F's
+  key (blocker = remover). After the commit it adds F; after a rollback it reports F taken.
+- **LP-3:** the controller commits the competing claim of Fa **before** T's insert attempt on Fa (acknowledged), and
+  in a second run holds it uncommitted with T observed waiting. Every pre-existing row's sequence, version and
+  attribution is asserted unchanged. Wording: each compaction target is "a gap or a just-vacated slot".
+- **LP-3b (ACC):** restriction races around the SHARE grant: before the grant (counted hidden); after the grant (the
+  restriction waits for the add); through another root's closure (the add waits for that FC).
+- **LP-4d (COMPAT and ACC):** existing-Record extension; classification source in a later chunk; boundary fault and
+  replay; assertion that no source lock is taken on extension paths; per-edit validation precedence.
+- **LP-5:** all lifecycle and restriction states of the intermediate node; depths 2 and 3; both UUID orders per run
+  set.
+- **LP-7:** run now only as a **synthetic** R SHARE holder against grouping; it does not certify W1–W11, which are
+  tested when implemented.
+- **LP-8b additions:** an acquisition after a TAKEN key below it; `privateNew` on a table with shared keys; a
+  mixed-mode plan (U plus KS) on one id; a lower-level same-row re-lock after a higher level (WP1-R3 still
+  rejects); tracker state after rollback and retry.
+- **LP-9a:** FC is observed waiting **in its explicit closure acquisition** (`SELECT … FOR UPDATE` on D), not in the
+  trigger. The outcomes and history of G, FC and L are all asserted.
+- **LP-9b (BASE) limits:** the existing harness asserts one 40P01 victim. Extend it to collect every future, roll
+  back every survivor explicitly, and log txids. It is not reused as an ACC test.
+- **LP-10b:** the static and runtime checks follow the registered-ownership rule of §6, including trigger-driven and
+  delegated writes (the call graph covers `QuarantineMoves`, `OperationCopies` and `UnresolvedObjects` helpers),
+  cross-checked against `pg_locks`.
+- **LP-10h (ACC):** two repairs of one content plan one generation; one CREATE_NEW collision, one commit, no 23505;
+  a retry plans `max + 1`.
+- **LP-10i (ACC):** final staging cleanup (P14b) racing the worker that still owns the operation: the cleanup waits
+  (blocker = worker) and completes.
+- **LP-10j (ACC):** concurrent repairs of one content committing: the second waits on Ct(X) and then finds the state
+  changed (accepted rollback outcome).
+- **LP-10k (ACC):** destruction completion against settlement, attestation and IntegrityService on one content: all
+  serialise on Ct(X); no 40P01; final generation, unresolved and quarantine states consistent.
+- **LP-14 (BASE, then ACC after D-LP-9):** the §11.5 schedule using the application services (an `add` or grouping
+  transaction writing history, then waiting; a role change by a third administrator). BASE expects 40P01; ACC
+  expects the role change to wait on the D-LP-9 key and no 40P01.
+- **Corrected-path rules, added:** disable any automatic deadlock retry in the code under test; bound the controller
+  with its own timeout independent of `deadlock_timeout` and `lock_timeout`; collect every future.
+
+**Database-behaviour characterisation to add to CI** (DB): §11.3 predicate waits and §11.5, on all four jobs.
 
 ## 11. Bounded verification executed (non-production)
 
@@ -765,13 +863,26 @@ Taken from a scratch database migrated with V0001…V0025 (local PostgreSQL 16):
 - every foreign key, including the deferred `file_operation.file_id`;
 - every non-internal trigger and the bodies of the cross-row trigger functions (§2.2).
 
+### 11.5 Administrator-check cycle (new [3.1]; refutes revision 3's TR (c), (d) and PO-E)
+
+| | |
+|---|---|
+| Where | Builder's local PostgreSQL 16, scratch database migrated with V0001…V0025, real `app_user`, `change_history` and the exact `lockEnabledAdministrators` SQL. One throwaway table `res` stands in for any capture-session, worksheet or File row. Not part of CI; no project code. |
+| Seed | two enabled administrators a1 < a2 |
+| Schedule | T1 (txid 5982, pid 316): inserts history with actor a2 (fk KEY SHARE on a2). T2 (5983, pid 317): `res` FOR UPDATE. A (5984, pid 315): the administrator check; locks a1, then waits for a2 (blockers = {316}). T1: `res` FOR UPDATE, waits (blockers = {317}). T2: inserts history with actor a1, waits (blockers = {315}). |
+| Result | T1: `ERROR 40P01 deadlock detected`, "Process 316 waits … blocked by process 317. Process 317 waits … blocked by process 315. Process 315 waits … blocked by process 316." T2 and A then proceeded. |
+| Meaning | Any transaction that writes history and later takes a blocking lock can play T1 or T2. One example is accepted `add`, which writes history after each insert and then waits on the next insert. This is a defect of the accepted code, reachable with three concurrent actors, one of them changing a role. It is addressed by D-LP-9. |
+
 ## 12. Residual risks and open items
 
-- **R3-OPEN-1.** The second review's counterexamples were not received. §2.3 and §2.4 were built independently and
-  must be checked against them, row by row, before D-LP-8 is decided.
+- **R3-OPEN-1 (closed by reconciliation [3.1]).** Every finding of the second review is accounted for individually
+  in the correction record's reconciliation matrix. Closure means accounted for, not resolved. The findings that
+  remain open or partial are listed there and below.
+- **Open after reconciliation [3.1]:** PO-A…PO-D are unproven until their tests run on the implementation;
+  D-LP-1…D-LP-9 await owner decision; the corrected-path tests are specifications only.
 - **R3-OPEN-2 (closed).** The Revision 3 direction was first received truncated in §8. The complete text was
   received afterwards; its test classes, acceptance rules and deliverables are now addressed (§0.1, §0.2, §5, §10).
-- **PO-A…PO-E** are code or data invariants verified by tests, not by database constraints.
+- **PO-A…PO-D** are code or data invariants verified by tests, not by database constraints.
 - **Pool and retry waits:** these are application waits, not database waits, and are bounded by timeouts:
   - Hikari connection waits while a worker holds a session advisory lock on another connection;
   - `destroyHolding`'s 2 s bounded loop.
