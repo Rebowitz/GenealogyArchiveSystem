@@ -82,7 +82,7 @@ TO.
 | | |
 |---|---|
 | Found | 2026-11-16, registering the Phase 3 row locks (LO-1 to LO-3) |
-| Status | **OPEN, escalated.** The independent WP1 audit showed that the premise below is wrong across sessions (finding WP1-R1, BLOCKING). The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 2 after the Stage A review (D-LP-1…D-LP-7; Scenarios A–D), and is not implemented. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
+| Status | **OPEN, escalated.** The independent WP1 audit showed that the premise below is wrong across sessions (finding WP1-R1, BLOCKING). The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3 after the second Stage A review (D-LP-1…D-LP-8; Scenarios A–D; Option C for preservation rows), and is not implemented. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
 
 **Cause.**
 - Clarifications §5.5.3 rule 1 says rows within one level are locked in ascending UUID order. It also defines L1

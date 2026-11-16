@@ -78,6 +78,48 @@ the same harness reproduces the SA-R1 granted-lock cycle G → L → C → G, wh
 
 **Status:** revision 2 submitted; awaiting independent review and owner decisions D-LP-1…D-LP-7.
 
+### Second Stage A review (revision 2 → revision 3)
+
+| | |
+|---|---|
+| Review | `Phase-4-WP1-Stage-A-Second-Review.md` (**not available to the builder**) |
+| Reviewed head | `d2c96f2` |
+| Disposition received | PROPOSAL REQUIRES REVISION |
+| Direction | Phase 4 WP1 — Locking-Protocol Revision 3 Direction (received **truncated in its §8**) |
+
+**Response.** Revision 3 of the proposal, in the same file. Its §0 maps direction items §1–§8. In summary:
+- **Withdrawn:** I-ADV, PO-1, the claim that operation-owned tables are never locked explicitly, the batch-preflight
+  guard contract and the catalog paragraph of revision 2's lemma L2. The counter-evidence is in proposal §2.3.
+- **Added:**
+  - a writer-by-writer protection matrix for every preservation writer and cross-row trigger (§2.4);
+  - a unique and logical conflict-key ledger (§2.5);
+  - D-LP-8 resolved as **Option C**: content-row coordination (CR-1), operation-row classification (CR-2),
+    content-less rows under their operation (CR-3) and location-key invariants (CR-4);
+  - Phase 2 changes P2-8a…f, each "lock the content row FOR UPDATE first";
+  - a terminal-reference rule for catalog, vocabulary and user references (TR);
+  - the per-statement guard contract;
+  - the closure implementation boundaries;
+  - the worksheet entry-point specification;
+  - amended LP-1…LP-12.
+- **Retained:** the SA-R1, SA-R2 and SA-R4 directions.
+
+**Non-production verification.** On the builder's local PostgreSQL 16, a throwaway table confirms that an UPDATE
+whose predicate does not match a row's committed version does not wait on that row's lock, and one whose predicate
+matches it does (proposal §11.3). Schema facts were read from a scratch database migrated with V0001…V0025.
+
+**Limits of this response.**
+- The second review's counterexamples were not available, so they could not be checked row by row against the new
+  matrix (R3-OPEN-1).
+- The direction text after "Delete the universal requirement that every test must reproduce a baseline dead…" was
+  not received (R3-OPEN-2).
+
+Both are recorded in proposal §12.
+
+**Not implemented**, as directed. No production locking code has changed.
+
+**Status:** revision 3 submitted; awaiting the full direction and the second review for reconciliation, independent
+review, and owner decisions D-LP-1…D-LP-8.
+
 ---
 
 ## WP1-R2: Historical Date database constraints (BLOCKING; corrected)
