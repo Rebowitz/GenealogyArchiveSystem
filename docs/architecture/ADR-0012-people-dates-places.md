@@ -204,7 +204,7 @@ register governs, then this ADR.
   - `restriction` is NORMAL or RESTRICTED.
   - No state is stored on the Mention. Its state (Resolved, Proposed or Unresolved) is derived from the visible
     candidate rows.
-  - `record_role` is unchanged, and no Mention is created by migration.
+  - `record_role` gains only the lifecycle columns of §5a. No Mention is created by migration.
 - **`candidate_resolution`**:
   - exactly one of `candidate_person_id` or `candidate_place_id`, matching the kind;
   - `state`: PROPOSED, RESOLVED, REJECTED or SUPERSEDED;
@@ -226,6 +226,36 @@ register governs, then this ADR.
     (A-006).
 - **Re-proposal (D4-29).** A new row with new attribution and a **required rationale**. The earlier rejection is
   shown and never blocks.
+
+## 5a. Record Role withdrawal (GAS-P4-PLAN-001, Option C approved 2026-11-15; Cl. §11)
+This supersedes the Role-removal behaviour of ADR-0011 §5 for archives at V0027 and later. ADR-0011 is not edited.
+- **Schema (additive, V0027).**
+  - `record_role.lifecycle`: ACTIVE or WITHDRAWN, `NOT NULL DEFAULT 'ACTIVE'`. Existing rows are not rewritten and
+    read as ACTIVE.
+  - `withdrawn_at` and `withdrawn_by`: system-set, both NULL exactly when ACTIVE.
+  - A `BEFORE DELETE` `reject_removal()` trigger. Roles are never physically deleted again.
+  - Roles removed before the upgrade stay removed, and their `ROLE_REMOVED` history stays as written.
+- **Actions** (EDIT_RECORDS, Record visible and ACTIVE, versions current):
+  - **Withdraw role** replaces "Remove role", with the same parameters.
+  - **Restore role** returns the same `role_id`, wording and position.
+
+  History (`ROLE_WITHDRAWN`, `ROLE_RESTORED`) is written on the Record, as in Phase 3. Identity, wording, code,
+  note, sequence and all references are preserved.
+- **While a Role is WITHDRAWN:**
+  - correcting it is refused;
+  - new Role-backed Mentions or collectives on it are refused;
+  - candidate, member and named-Mention writes on its Mentions and collectives are refused;
+  - the message is always "Restore the role before …";
+  - restriction actions remain allowed.
+
+  Its Mentions and collectives keep existing and keep their wording (read from the Role). They are shown under a
+  "Withdrawn roles" group labelled "role withdrawn", subject to policy S. The restriction closure includes them.
+- **Wording correction** of an ACTIVE Role changes no Phase 4 row. A visible decision that predates a correction
+  shows the note "wording corrected on <date>, after this decision".
+- **Non-disclosure.** Withdrawal and restoration never read, lock or change Mentions or collectives. Their
+  outcomes, messages, counts, history and timing are therefore independent of hidden objects (Cl. §11.4).
+- **Locks.** Record `FOR UPDATE` (L1), then the Role row update, then history. Phase 4 writers referencing a Role
+  hold the Record `FOR SHARE`, so the lifecycle they read is stable.
 
 ## 6. Person identity (D4-09 A)
 - **`person_identity_proposal`**:
@@ -303,9 +333,9 @@ register governs, then this ADR.
   Every writer's sequence is specified (W1–W14). The confirmation takes **no** L1 lock: its closure is independent
   of Record state, and it writes no Record or Role row. It re-verifies the closure after acquiring the item locks.
   A `LockSequence` helper records and, in test builds, enforces the order (LO-1…LO-7).
-- **Open issue GAS-P4-PLAN-001 (owner decision).** Removing a Phase 3 Record Role that has Role-backed Mentions
-  or collectives is affected by the new foreign keys, including a possible disclosure of hidden objects. See
-  [`issues.md`](../issues.md).
+- **Record Roles (GAS-P4-PLAN-001, Option C approved).** Role removal is a lifecycle update (§5a), so Phase 3
+  Record and Role paths (W12) take only L1 locks and no Phase 4 lock, explicit or implicit. No foreign-key check
+  on Mentions or collectives occurs, because Roles are never deleted.
 - **Consistent reads.** Pages combining these visibilities read one `REPEATABLE READ READ ONLY` snapshot.
 - **Configuration (U-3, resolved).** Installation configuration with these defaults:
 
@@ -346,12 +376,13 @@ register governs, then this ADR.
 | V0024 | Vocabularies: relationship types, person name types, parentage qualifiers, place types with category, place-name types; seeds per §3 and §4. Also `historical_date`. |
 | V0025 | `person`, `person_name`, `person_relationship`, `person_identity_proposal`; series `P` |
 | V0026 | `place`, `place_name`, `jurisdiction_link`; series `PL` |
-| V0027 | `mention`, `candidate_resolution`, `collective_reference`, `collective_named_mention`, `collective_member` (series `M`, `CP`); `restriction_operation` and items; deferred invariant triggers; `archival_record.record_date_id` and `filing_date_id` |
+| V0027 | `mention`, `candidate_resolution`, `collective_reference`, `collective_named_mention`, `collective_member` (series `M`, `CP`); `restriction_operation` and items; deferred invariant triggers; `archival_record.record_date_id` and `filing_date_id`; `record_role.lifecycle`, `withdrawn_at`, `withdrawn_by` and its `BEFORE DELETE` trigger (§5a) |
 
 - **Forward-only, additive and transactional** (ADR-0005). No accepted row is updated or reinterpreted:
   - no date text is parsed;
   - no `party_as_written` becomes a Mention;
-  - no note becomes a structured assertion.
+  - no note becomes a structured assertion;
+  - the new `record_role.lifecycle` column reads ACTIVE for every existing Role without rewriting it.
 - **Tests.** `Phase4SchemaIT` upgrades a populated V0023 database and proves every accepted table is unchanged.
   `Phase3SchemaIT` stays pinned to V0023.
 
@@ -398,6 +429,7 @@ These meanings must survive export, backup and transfer without reinterpretation
   - `PersonRestrictionOperationIT` RO-1…RO-18 (RO-18: configuration bounds, including the 50,000 cap);
   - `PeopleRestrictionIT` 1–11;
   - `LockSequenceTest` and `LockOrderIT` LO-1…LO-7 (PR4-R3);
+  - `RecordRoleWithdrawalIT` RW-1…RW-11 (GAS-P4-PLAN-001);
   - `ProhibitedInferenceIT` 1–20.
 - **Implementation gate.** Final independent architectural review of this ADR and the three Phase 4 documents,
   then a separate owner instruction.

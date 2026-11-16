@@ -137,3 +137,31 @@ changes accepted Role removal, and under policy S a refusal could disclose a hid
 and C are listed. It is open and blocks WP4.
 
 **Status:** builder-corrected, pending independent verification. GAS-P4-PLAN-001 is open, awaiting the owner.
+
+---
+
+## Disposition received after `a6d1d9f`
+
+The reviewer recorded **PR4-R3: PARTIAL**, pending verification of the revised lock-order and database
+concurrency specifications. The owner approved **Option C** for builder issue GAS-P4-PLAN-001 (Record Role
+withdrawal).
+
+### Builder update to PR4-R3 following the GAS-P4-PLAN-001 decision
+
+This is not a new finding; it records how the Option C decision changes the PR4-R3 correction.
+- **W12 is revised** (clarifications §5.5.3). Role add, correct, **withdraw** and **restore** are L1-only
+  lifecycle or field updates: Record `FOR UPDATE`, then the Role row, then history.
+  - Roles are never deleted (a `BEFORE DELETE` trigger), so the implicit L3/L4 foreign-key lock described in
+    `a6d1d9f` no longer exists.
+  - Phase 3 Record and Role paths now take **no** Phase 4 lock, explicit or implicit. The "why no L1 lock"
+    justification is simplified accordingly.
+- **Role lifecycle stability for Phase 4 writers** (§11.5). W1, W2, W3 and W5 read the Role's lifecycle under the
+  Record `FOR SHARE` lock. Lifecycle changes need the Record `FOR UPDATE`, so the lifecycle a writer reads is
+  stable until it commits.
+- **Tests revised.**
+  - LO-4 adds the confirmation × W12 (withdraw, restore) pair, and W12 (withdraw, restore, correct) × W1–W5 and
+    W11.
+  - LO-5 now asserts through `pg_locks` that no W12 transaction holds or awaits a Phase 4 lock.
+  - The new RW-10 races withdrawal against W1, W2, W3, W5 and W10, with deadlock retry disabled.
+
+**Status:** builder-corrected, pending independent verification (reviewer disposition: PARTIAL).

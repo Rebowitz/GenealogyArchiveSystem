@@ -12,6 +12,7 @@ approved register, the register governs.** Planning only: no Phase 4 implementat
 | Reviews | [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md) and [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md) at `7a68d32`. Neither is approved. |
 | Baseline | `phase-3-accepted` (`c494d6a`) and the accepted Phase 0–3 decisions, particularly D3-04 and the Phase 3 audit corrections GAS-P3-001…010 |
 | Outputs | This analysis (§1–§6), newly found conflicts (§7), proposed decision revisions (§8; also applied, still PROPOSED, in the register) and coverage-matrix updates (§9; also applied in the plan) |
+| Revision 7 | GAS-P4-PLAN-001 Option C approved (2026-11-15): Record Role withdrawal replaces physical deletion (new §11: data and migration, actions, wording edits and Role-backed object handling, non-disclosure, lock order, tests RW-1…RW-11); W12, LO-4, LO-5 and the §5.5.2 closure revised accordingly. |
 | Revision 6 | Review finding PR4-R3 (2026-11-15): one total lock order for every writer (§5.5.3: levels, rules, per-writer sequences W1–W14, the reason the confirmation takes no L1 lock); closure re-verification after locking (§5.5.5 step 4a); lock-order tests LO-1…LO-7 (§10.7). |
 | Revision 5 | U-1…U-3 resolved (2026-11-15): place types COUNTY and STATE seeded, type optional; place-name type vocabulary HISTORICAL, CURRENT, VARIANT; D4-27 values are configurable installation settings with the §5.5 defaults (§5.5.1, §5.5.5, §5.5.8). ADR-0012 written. |
 | Revision 4 | Owner approvals consolidated (2026-11-15): D4-28 modified (no cut-off; §2.3, §2.4, §7 C-14, §10.5 HD-4 and new HD-7); D4-30 approved as deferral to Phase 6 (§1.5). |
@@ -654,8 +655,9 @@ For Person P, computed by one query function used both at preview and at confirm
 3. **Identity proposals:** every `person_identity_proposal` with P on either side (any state).
 4. **Informational** (HIDDEN_BY_ENDPOINT): relationships with P as an endpoint, and P's Names.
 
-The closure is complete after step 2, because nothing depends on collectives or proposals. **DELETED objects and
-objects on restricted Records are included**: restoring or unrestricting them later must not expose P.
+The closure is complete after step 2, because nothing depends on collectives or proposals. **DELETED objects,
+objects on restricted Records, and Mentions and collectives of WITHDRAWN Roles (§11) are included**: restoring or
+unrestricting them later must not expose P.
 
 **Collateral.** For each item, the preview also lists the *other* visible Persons whose pages will lose it. For
 example: "M00303 also has candidate P00140; non-administrators will no longer see this Mention on P00140's page."
@@ -714,7 +716,7 @@ relies on.
 | W9 | Edit a Person; delete or restore; unrestrict a Person | L2 Person `UPDATE` → L6 |
 | W10 | **Restriction confirmation** (interactive or job) | L0 operation `UPDATE` → L2 P `UPDATE` → (compute closure) → L3 Mentions `UPDATE` → L4 collectives `UPDATE` → L5 proposals `UPDATE` (each in UUID order) → (re-verify closure) → L6 items and history. **No L1 lock:** see below. |
 | W11 | Restrict or unrestrict a single Mention, collective or proposal | Mention: L1 Record `SHARE` → L2 its candidate Persons `SHARE` → L3 Mention `UPDATE`. Collective: L1 Record `SHARE` → L2 member Persons `SHARE` → L3 anchor and named Mentions `SHARE` → L4 collective `UPDATE`. Proposal: L2 both Persons `SHARE` → L5 `UPDATE`. |
-| W12 | Phase 3 Record paths (edit, delete, restore, restrict, roles, Citations, File links, grouping) | **Unchanged** explicit locks: L1 only, in the accepted Phase 3 order. Phase 4 adds no explicit lock to these transactions; hiding Mentions of a deleted or restricted Record is computed at read time. **One implicit addition:** removing a Record Role (a physical `DELETE` in Phase 3) makes PostgreSQL's foreign-key check take `FOR KEY SHARE` on the Mentions and collectives that reference the Role (L3/L4). That is after L1, so it is monotonic. The *semantics* of removing a Role that has Mentions are an open owner question (issue GAS-P4-PLAN-001). |
+| W12 | Phase 3 Record paths (edit, delete, restore, restrict, Citations, File links, grouping) and **Role add, correct, withdraw and restore** | L1 only: Record `FOR UPDATE` in the accepted Phase 3 order, then the Role or child row update, then L6 history. **Role removal is a lifecycle update, not a `DELETE`** (GAS-P4-PLAN-001 Option C, §11), so no foreign-key check touches Mentions or collectives. These transactions take **no** Phase 4 lock, explicit or implicit. Hiding Mentions of a deleted or restricted Record, and labelling those of a withdrawn Role, is computed at read time. |
 | W13 | Place writes; jurisdiction links; Place Names | Place `UPDATE`, or for a link, both Places `SHARE` in UUID order (L2) → L6 |
 | W14 | Restriction preview, cancel, expiry marking | Preview: no locks (one read-only snapshot), then insert. Cancel or expire: L0 only. |
 
@@ -724,8 +726,8 @@ relies on.
 - **It never writes a Record or Role row,** and it never changes a foreign-key column that references one, so
   PostgreSQL takes no implicit lock on L1 rows.
 - **Skipping L1 complies with rule 1.** It skips a level; it does not reverse the order.
-- **A Phase 3 Record path waits for the confirmation only in Role removal,** through the implicit L3/L4 foreign-key
-  lock above, and that wait is in increasing order. Every other Phase 3 path takes no Phase 4 lock.
+- **A Phase 3 Record or Role path never waits for the confirmation.** These paths, including Role withdrawal and
+  restoration, take no Phase 4 lock.
 - **A Phase 4 writer holding a Record `SHARE` lock may wait for the confirmation** (on a Person or Mention), but the
   confirmation never waits for that Record. So no cycle can form.
 
@@ -1057,7 +1059,116 @@ on Windows and Linux.
 | LO-1 | **Recorded sequences** (`LockSequenceTest`, unit, with a recording `LockSequence` helper through which every repository lock call passes) | For each writer W1–W14, including the confirmation's interactive and job paths, the recorded (level, UUID, mode) sequence equals the §5.5.3 table and is non-decreasing. |
 | LO-2 | **Runtime guard** | In test builds the `LockSequence` helper throws on any lower-level acquisition after a higher one, and on any `SHARE` → `UPDATE` upgrade of the same row. A deliberately mis-ordered test path is rejected. Every integration suite runs with the guard on. |
 | LO-3 | **No unregistered locks** (`ArchitectureTest` addition) | Every `FOR UPDATE` and `FOR SHARE` statement in the `data` package for Phase 3 and Phase 4 archival tables is reached only through `LockSequence`. Phase 3 statements are registered at L1 in their accepted order, without behaviour change. |
-| LO-4 | **Pairwise races** (`LockOrderIT`) | For each conflicting pair, 50 barrier-synchronised iterations with automatic deadlock retry **disabled** and `deadlock_timeout` lowered: zero `40P01` errors, and the invariant holds at every commit. The pairs: confirmation (W10) × each of W1–W9 and W11; confirmation via the **job path** × W2 and W4; Phase 3 Record delete, restrict and edit (W12) × W1–W5 and W11; Place delete (W13) × W2 for a Place candidate; W6 × W7 on the same Persons in both argument orders. |
-| LO-5 | **Phase 3 path unaffected** | While a confirmation holds P and the Mentions on Record R, Phase 3 edits, lifecycle changes and restriction of R complete without waiting. Role removal on R (the only Phase 3 path with an implicit Phase 4 lock) either waits and then completes, or is refused under the outcome of GAS-P4-PLAN-001, and never deadlocks. All Phase 3 race tests pass unchanged. |
+| LO-4 | **Pairwise races** (`LockOrderIT`) | For each conflicting pair, 50 barrier-synchronised iterations with automatic deadlock retry **disabled** and `deadlock_timeout` lowered: zero `40P01` errors, and the invariant holds at every commit. The pairs: confirmation (W10) × each of W1–W9, W11 and W12 (Role withdraw and restore); confirmation via the **job path** × W2 and W4; W12 (Record delete, restrict, edit, Role withdraw, restore and correct) × W1–W5 and W11; Place delete (W13) × W2 for a Place candidate; W6 × W7 on the same Persons in both argument orders. |
+| LO-5 | **Phase 3 path unaffected** | While a confirmation holds P and the Mentions on Record R, every W12 path on R completes without waiting: edits, lifecycle changes, restriction, and Role add, correct, **withdraw** and **restore**. `pg_locks` shows no Phase 4 lock held or awaited by these transactions. All Phase 3 race tests pass unchanged. |
 | LO-6 | **Closure growth** | W3 sets a collective's anchor to a Mention in the closure, racing the confirmation. The outcome is either W3 first, with the confirmation STALE at step 3 or 4a, or the confirmation first, with W3 refused by the invariant. The commit-time trigger never fires. |
 | LO-7 | **Implicit foreign-key locks** | With `pg_locks` inspection during W1–W11, every implicit `FOR KEY SHARE` on an L1–L5 row is held only on a row the transaction had already locked explicitly. Implicit locks on L7 rows never wait in the races of LO-4. |
+
+---
+
+## 11. Record Role withdrawal (GAS-P4-PLAN-001, owner-approved Option C, 2026-11-15)
+
+**Decision.** Once Phase 4 is installed, physical deletion of Record Roles is replaced by a recoverable WITHDRAWN
+state. The analysis and the rejected options A and B are in [`issues.md`](issues.md). This section defines the
+design under that decision. It supersedes the Role-removal behaviour of ADR-0011 §5 for archives at V0027 and
+later; ADR-0011 itself is not edited.
+
+### 11.1 Data and migration (requirements 1 and 4)
+- **`record_role` gains, additively in V0027:**
+  - `lifecycle text NOT NULL DEFAULT 'ACTIVE' CHECK (lifecycle IN ('ACTIVE','WITHDRAWN'))`;
+  - `withdrawn_at timestamptz` and `withdrawn_by uuid` (system-set; both NULL exactly when ACTIVE, by CHECK).
+- **Existing rows.** PostgreSQL 11+ adds a column with a constant default without rewriting rows. Every existing
+  Role therefore reads as ACTIVE, which is exactly its Phase 3 meaning. No accepted column value changes (UP-006).
+  `Phase4SchemaIT` proves every accepted column is byte-identical after upgrade.
+- **Physical deletion becomes impossible.** A new `BEFORE DELETE` trigger on `record_role` calls
+  `reject_removal()`, like every durable table. Phase 3 already blocked `TRUNCATE`.
+  - The `ArchivalRecordRepository.removeRole` delete statement is retired in WP4.
+  - Roles removed *before* the upgrade were physically deleted under Phase 3 and cannot be recovered. Their
+    `ROLE_REMOVED` history entries stay as written.
+- **Identity, wording and references are preserved.** `role_id`, `record_id`, `role_code`, `party_as_written`,
+  `note` and `sequence_number` are unchanged by withdrawal and restoration. The identity-immutability trigger is
+  unchanged. Mentions and collectives keep their `record_role_id`.
+
+### 11.2 Actions (requirements 2 and 3)
+
+| Action | Replaces | Permission | Preconditions | Effect | History (on the Record, as Phase 3) |
+|---|---|---|---|---|---|
+| **Withdraw role** | Phase 3 "Remove role" (same place in the UI, relabelled; the route keeps its `recordVersion`, `roleVersion` and optional reason parameters) | EDIT_RECORDS | Record visible and ACTIVE; Role ACTIVE; both versions current | `lifecycle = WITHDRAWN`, `withdrawn_at` and `withdrawn_by` set; Role `row_version` +1; Record touched as in Phase 3 | `ROLE_WITHDRAWN`: role code and `party_as_written` as *unchanged* values, plus the reason |
+| **Restore role** | (new) | EDIT_RECORDS | Record visible and ACTIVE; Role WITHDRAWN; both versions current | `lifecycle = ACTIVE`, withdrawal fields cleared; same `role_id` and `sequence_number` | `ROLE_RESTORED`, with an optional reason |
+
+- **No Role is recreated.** Restoring returns the same identity, wording and position.
+- **Withdrawn is not deleted.** A Record's DELETED lifecycle (D3-12) is independent. Roles on a deleted Record
+  keep their own lifecycle and cannot be withdrawn or restored until the Record is restored, as for every Record
+  change.
+
+### 11.3 Wording edits and Role-backed objects (requirement 6)
+- **Correcting a withdrawn Role is refused:** "Restore the role before changing it." This is the D3-12 pattern.
+  Correction of an ACTIVE Role is unchanged from Phase 3, including its history.
+- **A correction never changes Phase 4 rows.** Correcting an ACTIVE Role's `party_as_written` changes no Mention,
+  candidate, collective or member row. The Role-backed Mention shows the corrected wording, because it reads it
+  from the Role (D4-12 B).
+  - Where a *visible* candidate decision predates a later wording correction, the Mention view shows a
+    proportionate note: "wording corrected on <date>, after this decision". The note is derived from the Record's
+    Change History timestamps and the decision's attribution time.
+  - Nothing is re-resolved or marked invalid. The earlier wording stays readable in the Record's history.
+- **Role-backed Mentions and collectives of a withdrawn Role:**
+  - They **keep existing** with their identity, wording (read from the withdrawn Role), candidates, members and
+    history.
+  - **Visibility is unchanged:** they are shown wherever they were, subject to policy S. The Record page lists
+    withdrawn Roles in a collapsed "Withdrawn roles" group with their wording. Each *visible* Mention or collective
+    appears under its Role, labelled "role withdrawn". Person and Place "Mentioned in" lists label such Mentions the
+    same way.
+  - **Derived state is unchanged.** Resolved, Proposed or Unresolved is still computed from the visible candidate
+    rows.
+  - **Writes are refused while the Role is WITHDRAWN:** creating a new Role-backed Mention or collective on it, and
+    candidate, member and named-Mention writes on its Mentions and collectives. The message is "Restore the role
+    before changing references to it". This is one rule, applied identically whatever hidden objects exist.
+    Restoring the Role re-enables them.
+  - **Restriction is not blocked.** The restriction operation (§5.5) and single-object restriction are not refused
+    for a withdrawn Role. They change restriction state only. The closure includes Mentions and collectives of
+    withdrawn Roles, as it includes those on deleted Records (§5.5.2).
+
+### 11.4 Non-disclosure (requirement 5)
+Withdrawal and restoration **never read, lock or change Mentions or collectives.** Their outcome therefore cannot
+depend on hidden objects.
+
+| Channel | Rule |
+|---|---|
+| Success or refusal | Depends only on the Record's and Role's visibility, lifecycle and versions, which are Record content the actor can already see. There is no foreign-key failure path, because rows are never deleted. |
+| Errors | Phase 3's not-found and conflict messages, unchanged. No error names or counts a Mention or collective. |
+| Counts | Role counts (active and withdrawn) are Record content. Mention and collective counts per Role are computed over visible rows only (Cl. §5.3). |
+| History | `ROLE_WITHDRAWN` and `ROLE_RESTORED` carry only Role fields and the reason. History about restricted Mentions and collectives stays hidden by the Phase 4 layer. |
+| Timing and locks | Withdrawal waits only on the Record lock (L1). It never waits on a restricted Mention, so its latency does not reveal one. |
+| Restoration | It cannot "resurface" a restricted Mention: restriction is per object and independent of the Role's lifecycle. |
+
+### 11.5 Lock order (requirement 7)
+Withdraw, restore and correct are **W12 Role lifecycle updates**:
+- L1 Record `FOR UPDATE` (as Phase 3);
+- then `UPDATE` of the Role row, which is protected by the Record lock and takes no lock beyond L1;
+- then L6 history.
+
+There is no `DELETE`, so no foreign-key check on Mentions or collectives occurs. The implicit L3/L4 lock that
+physical deletion would have taken (Revision 6) **no longer exists**.
+
+Phase 4 writers that reference a Role (W1, W2, W3, W5) take the Record `FOR SHARE` before reading the Role's
+lifecycle. Because Role lifecycle changes require the Record `FOR UPDATE`, the lifecycle a writer reads stays
+stable until it commits.
+
+### 11.6 Regression tests (`RecordRoleWithdrawalIT`, and additions to `Phase4SchemaIT` and `LockOrderIT`)
+
+| ID | Expected |
+|---|---|
+| RW-1 | **Upgrade:** every existing Role reads ACTIVE; every accepted column is byte-identical; withdrawal fields are NULL (`Phase4SchemaIT`). |
+| RW-2 | **No physical deletion:** raw SQL `DELETE` on `record_role` is refused by the trigger. No application path issues a delete (`ArchitectureTest`: no `DELETE FROM gas.record_role`). |
+| RW-3 | **Withdraw:** identity, wording, code, note, sequence and every Mention or collective reference are unchanged. Lifecycle, withdrawal attribution, Role `row_version` and Record touch are as specified. `ROLE_WITHDRAWN` history is present. A stale version gets the Phase 3 conflict. |
+| RW-4 | **Restore:** the same `role_id` is ACTIVE with the same wording and position; `ROLE_RESTORED` history is present. Restoring an ACTIVE Role or a Role on a DELETED Record is refused as specified. |
+| RW-5 | **Non-disclosure:** for an Editor, withdrawing and restoring a Role with a hidden RESTRICTED Mention and collective gives results, messages, Record page, counts and history identical to a Role whose hidden objects never existed. Repeated for a Role with only restricted objects, and for one with both visible and restricted objects. |
+| RW-6 | **Frozen while withdrawn:** correction, new Role-backed Mention or collective, and candidate, member and named-Mention writes are all refused with the specified message, for every role. Reads are unchanged. After restoration all of them succeed. |
+| RW-7 | **Visibility:** the withdrawn group shows the Role's wording; visible Mentions and collectives appear under it labelled "role withdrawn"; "Mentioned in" lists carry the label; restricted ones stay hidden; derived Mention state is unchanged. |
+| RW-8 | **Wording correction:** correcting an ACTIVE Role changes no Phase 4 row. The "corrected after this decision" note appears only on visible decisions that predate the correction. |
+| RW-9 | **Restriction interplay:** the closure includes Mentions and collectives of withdrawn Roles; confirmation succeeds while the Role is withdrawn; withdrawing or restoring never changes restriction state. |
+| RW-10 | **Concurrency:** 50 barrier-synchronised iterations of withdraw or restore racing W1, W2, W3 and W5 on the same Role, and racing confirmation (W10). Either the Phase 4 write commits first, or the withdrawal does and the write is refused. Zero deadlocks with retry disabled; no write on a WITHDRAWN Role's references ever commits; the confirmation never waits on the withdrawal or the reverse. |
+| RW-11 | **Browser:** the Phase 3 "Remove role" control is replaced by "Withdraw role"; "Restore role" appears for withdrawn Roles; Viewers see neither control (`RecordsWebIT` additions). |
+
+Phase 3 has no test of physical Role removal, so no accepted test is weakened. RW-2 and RW-11 cover the replaced
+behaviour.

@@ -10,7 +10,7 @@ cross-references the other.
 |---|---|
 | Found | 2026-11-15, while correcting review finding PR4-R3 (lock order) |
 | Phase | 4 (planning; no code) |
-| Status | **OPEN: owner decision required.** Not fixed; nothing is decided in the Phase 4 documents. |
+| Status | **DECIDED: Option C approved by the owner, 2026-11-15.** Design recorded in planning documents (no code). Implementation pending Phase 4 authorization (WP4). |
 | Related | PR4-R3 (`PHASE-4-PLAN-REVIEW-CORRECTIONS.md`); D4-12 B; D4-16 policy S; Phase 3 accepted Role removal |
 
 **Cause.**
@@ -28,7 +28,7 @@ cross-references the other.
 3. **Lost wording.** If removal were simply allowed (for example `ON DELETE SET NULL`), the Mention would lose its
    wording, which D4-12 B keeps only on the Role. That violates A-004.
 
-**Options for the owner** (the builder makes no choice):
+**Options presented to the owner** (Option C was approved; A and B were not chosen):
 - **A. Block removal** whenever any Mention or collective references the Role, with one generic message for
   everyone. Simple, but it leaves the disclosure in consequence 2.
 - **B. Allow removal, preserving the wording.** In the same transaction, each Role-backed Mention and collective
@@ -39,5 +39,19 @@ cross-references the other.
   disclosure. This changes accepted Phase 3 behaviour (removal becomes withdrawal) and needs a migration that adds
   a lifecycle column without changing existing rows.
 
-**Lock-order effect (already documented).** In every option, the implicit foreign-key lock on Mentions and
-collectives is taken after the Record lock, so it is consistent with §5.5.3 of the clarifications (W12).
+**Resolution (Option C, approved 2026-11-15).** Design and tests are in clarifications §11 and ADR-0012 §5a; the
+register records the decision.
+- An additive `record_role.lifecycle` (ACTIVE or WITHDRAWN, default ACTIVE with no row rewrite), withdrawal
+  attribution, and a `BEFORE DELETE` `reject_removal()` trigger.
+- "Withdraw role" replaces "Remove role"; "Restore role" returns the same Role.
+- Withdrawal never reads, locks or changes Mentions or collectives, so neither its outcome nor its timing can
+  disclose a hidden object.
+- A withdrawn Role's references stay, labelled and frozen for writes until restoration. Wording corrections of
+  ACTIVE Roles change no Phase 4 row.
+- **Lock order.** Role withdraw, restore and correct are L1-only lifecycle updates (W12). The implicit L3/L4
+  foreign-key lock that physical deletion would have taken no longer exists (clarifications §5.5.3 and §11.5;
+  LO-4, LO-5, RW-10).
+- **Tests.** RW-1…RW-11.
+
+**Residual note.** Roles removed physically *before* the Phase 4 upgrade cannot be recovered; their Phase 3
+`ROLE_REMOVED` history stays as written.

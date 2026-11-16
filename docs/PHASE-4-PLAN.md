@@ -61,7 +61,7 @@ BUILD-SPEC §62:
 
 | Accepted item | Where | Phase 4 extension |
 |---|---|---|
-| `record_role` (role code, `party_as_written`, note) | V0022; `RecordService` roles; `record.html` | Optional link to a Person Mention (D4-12). `party_as_written` is untouched and stays the authority for wording. |
+| `record_role` (role code, `party_as_written`, note) | V0022; `RecordService` roles; `record.html` | Optional link to a Person Mention (D4-12). `party_as_written` is untouched and stays the authority for wording. **"Remove role" becomes "Withdraw role", with a new "Restore role"; Roles are never deleted again** (GAS-P4-PLAN-001 C; Cl. §11). |
 | `archival_record.record_date_text`, `filing_date_text` | V0022; `RecordService`; `record.html` | Optional structured Historical Date interpretation beside each (D4-05). No automatic parsing of existing rows (D4-06). |
 | `source.jurisdiction_text` | V0021; `CatalogService` | None in Phase 4 (D4-19 A); the text stays as written. |
 | `friendly_id_series` and `FriendlyIdSeriesRepository` | V0007 | New series `P`, `PL`, `M`, `CP` (D4-02 A). |
@@ -272,7 +272,9 @@ Conflicting dates coexist because dates are owned by separate statements and are
   restricting a linked Person (Cl. §5.5.1). Administrator-only, never deleted.
 
 ### 4.5 Extensions to accepted tables (additive only)
-- `record_role`: none. Linkage goes from `mention.record_role_id` (D4-12 B).
+- `record_role`: linkage goes from `mention.record_role_id` (D4-12 B). Additively, `lifecycle` (ACTIVE or WITHDRAWN,
+  default ACTIVE, no row rewrite), `withdrawn_at`, `withdrawn_by`, and a `BEFORE DELETE` `reject_removal()` trigger
+  (GAS-P4-PLAN-001 C; Cl. §11.1).
 - `archival_record`: `record_date_id` and `filing_date_id`, nullable FKs to `historical_date`. The text columns are
   untouched and authoritative (D4-05).
 - `source`: none (D4-19 A).
@@ -356,6 +358,9 @@ cases.
 4. **Places list and page.** Names over time, jurisdiction links over time (as a dated list), approximate
    location, "Mentioned in".
 5. **Record page additions.**
+   - Active Roles are listed as in Phase 3, with "Withdraw role" in place of "Remove role". Withdrawn Roles are in a
+     collapsed "Withdrawn roles" group with "Restore role"; their visible Mentions are labelled "role withdrawn"
+     (Cl. §11.3).
    - Each Role shows its party as written and, if linked, the Mention's state: "unresolved", "proposed: P00127,
      P00133" (visually distinct) or "resolved: P00127".
    - "Add Mention" holds free wording, a Person or Place kind and a note.
@@ -385,7 +390,7 @@ cases.
 | V0024 | Vocabularies (person name types, relationship types with category, parentage qualifiers, place types with category, place-name types; spec-named seeds only, D4-11; place types COUNTY and STATE per U-1; place-name types HISTORICAL, CURRENT, VARIANT per U-2) and `historical_date` (§4.1) |
 | V0025 | `person`, `person_name`, `person_relationship`, `person_identity_proposal`; series `P` |
 | V0026 | `place`, `place_name`, `jurisdiction_link` (kind, basis); series `PL`. No formation table (D4-30). |
-| V0027 | `mention`, `candidate_resolution`, `collective_reference`, `collective_named_mention`, `collective_member` (series `M`, `CP`); `restriction_operation` and items; deferred restriction-invariant triggers; `archival_record.record_date_id` and `filing_date_id` |
+| V0027 | `mention`, `candidate_resolution`, `collective_reference`, `collective_named_mention`, `collective_member` (series `M`, `CP`); `restriction_operation` and items; deferred restriction-invariant triggers; `archival_record.record_date_id` and `filing_date_id`; `record_role` lifecycle columns and `BEFORE DELETE` trigger (GAS-P4-PLAN-001 C) |
 
 - **Forward-only and additive.** Migrations only add tables, columns, nullable foreign keys, triggers and
   vocabulary seeds. **No accepted row is updated or reinterpreted** (UP-006):
@@ -498,6 +503,7 @@ These rows add to or replace the rows above where they cover the same requiremen
 | Supplement area 4: counts, identifiers and history hidden | CL-5, CL-10, CL-11; `PeopleRestrictionIT` 1, 2, 3, 8, 9, 10; RO-14 | Full |
 | Supplement area 5: concurrent relationship or Mention creation during restriction | RO-15, RO-16, RO-5, RO-3, CR-6 | Full |
 | Supplement area 6: failed restriction leaves the prior state intact | RO-17, RO-2, RO-9, RO-10, RO-12 | Full |
+| GAS-P4-PLAN-001 C: Record Role withdrawal (Cl. §11) | `RecordRoleWithdrawalIT` RW-1…RW-11 (upgrade, no deletion, withdraw, restore, non-disclosure, frozen references, visibility, wording correction, restriction interplay, concurrency, browser) | Full |
 | PR4-R3: one global lock order for every writer (Cl. §5.5.3, W1–W14) | `LockSequenceTest` LO-1…LO-3 (recorded sequences, runtime guard, no unregistered locks); `LockOrderIT` LO-4…LO-7 (pairwise races including the job path and Phase 3 Record paths, Phase 3 unaffected, closure growth, implicit foreign-key locks) | Full |
 | L-002, D4-30 (Rev. 3) | `PlaceIT.countyFormationExpressedByContainmentAndNote` | Full (formation links deferred) |
 
@@ -564,7 +570,7 @@ Names, Persons, Places, resolutions) and that no Change History entry of a forbi
 | WP1 | Historical Date model, JDN calendar algorithms, envelope, parser and validation (unit-heavy); the `LockSequence` helper with the Phase 3 locks registered at L1 (LO-1…LO-3); V0024 | `HistoricalDateTest` HD-1…HD-7 green; LO-1…LO-3 for Phase 3 paths; prohibited-inference items 10, 11, 18 |
 | WP2 | People: Person, Names, relationships, identity proposals; V0025 | P-001…P-007, P-009, P-010; prohibited-inference items 1–5, 8, 12, 13, 20 |
 | WP3 | Places: Place, Names, jurisdiction links (kind, basis); V0026; no formation links | L-001…L-003; `PlaceIT` D4-18 scenarios; `countyFormationExpressedByContainmentAndNote`; items 15, 19 |
-| WP4 | Mentions, Candidate Resolution, collective references, Record Role links, Record date interpretation, restriction tables and deferred invariant triggers; V0027 | C-001…C-006, A-006, P-008; CR-1…CR-7, RP-1…RP-8; items 6, 7, 9, 14, 16, 17 |
+| WP4 | Mentions, Candidate Resolution, collective references, Record Role links, **Record Role withdrawal and restoration** (GAS-P4-PLAN-001 C), Record date interpretation, restriction tables and deferred invariant triggers; V0027 | C-001…C-006, A-006, P-008; CR-1…CR-7, RP-1…RP-8, RW-1…RW-10; items 6, 7, 9, 14, 16, 17 |
 | WP5 | Browser workflows, restriction (policy S and the D4-27 protocol), history visibility | `PeopleWebIT`, `PlacesWebIT`, `PeopleRestrictionIT` 1–11, CL-1…CL-11, RO-1…RO-18, LO-4…LO-7 |
 | WP6 | Reference fixture, full CI matrix, completion report (`PHASE-4-COMPLETION.md`), draft PR, then stop for the independent Codex audit | All four jobs green, every job's results checked individually |
 
@@ -606,7 +612,7 @@ notes:
 | U-3 | D4-27 numeric values | **Resolved:** configurable installation settings `people.restriction.*` with defaults 30 min, 5 s, 30 s, 1,000, 10 min, 50,000; validated by `check-config` (ADR-0012 §8). The ceiling is capped at 50,000; raising it needs an approved ADR revision (PR4-R1). Tests set their own values within the cap. |
 | U-4 | Year-start widening in every period (approved behaviour) | Phase 7 search design; no Phase 4 change |
 | U-5 | Phase 6 must explicitly carry formation and boundary-change relationships | Phase 6 planning |
-| GAS-P4-PLAN-001 | **Open (owner decision):** removing a Phase 3 Record Role that has Role-backed Mentions or collectives. Options A, B and C are in [`issues.md`](issues.md). | Blocks WP4 (Role-backed Mentions) until decided |
+| GAS-P4-PLAN-001 | **Resolved: Option C approved (2026-11-15).** Record Role withdrawal replaces physical deletion. | V0027 additions; WP4 implements withdraw and restore with RW-1…RW-11; Cl. §11 |
 
 ### 11.3 Acceptance risks
 | Risk | Effect | Mitigation |
