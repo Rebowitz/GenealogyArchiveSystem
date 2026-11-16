@@ -85,7 +85,7 @@ the same harness reproduces the SA-R1 granted-lock cycle G → L → C → G, wh
 | Review | `Phase-4-WP1-Stage-A-Second-Review.md` (**not available to the builder**) |
 | Reviewed head | `d2c96f2` |
 | Disposition received | PROPOSAL REQUIRES REVISION |
-| Direction | Phase 4 WP1 — Locking-Protocol Revision 3 Direction (received **truncated in its §8**) |
+| Direction | Phase 4 WP1 — Locking-Protocol Revision 3 Direction (first received truncated in §8; complete text received afterwards) |
 
 **Response.** Revision 3 of the proposal, in the same file. Its §0 maps direction items §1–§8. In summary:
 - **Withdrawn:** I-ADV, PO-1, the claim that operation-owned tables are never locked explicitly, the batch-preflight
@@ -110,15 +110,16 @@ matches it does (proposal §11.3). Schema facts were read from a scratch databas
 **Limits of this response.**
 - The second review's counterexamples were not available, so they could not be checked row by row against the new
   matrix (R3-OPEN-1).
-- The direction text after "Delete the universal requirement that every test must reproduce a baseline dead…" was
-  not received (R3-OPEN-2).
+- The direction was first received truncated in §8 (R3-OPEN-2). The complete text arrived later and is now
+  addressed: test classes, acceptance rules, the SA-R1…SA-R6 matrix, counterexample schedules and evidence classes.
 
 Both are recorded in proposal §12.
 
 **Not implemented**, as directed. No production locking code has changed.
 
-**Status:** revision 3 submitted; awaiting the full direction and the second review for reconciliation, independent
-review, and owner decisions D-LP-1…D-LP-8.
+**Status:** revision 3 submitted. WP1-R1 and GAS-P4-002 are not closed. Awaiting the second review for
+reconciliation (R3-OPEN-1), a third independent assessment, and owner decisions D-LP-1…D-LP-8. WP1 is not
+accepted; WP2 remains on HOLD.
 
 ---
 

@@ -10,11 +10,11 @@
 | Revision | 3: responds to the second Stage A review (`Phase-4-WP1-Stage-A-Second-Review.md`) and the Revision 3 direction (baseline `d2c96f2`) |
 | Supersedes | Revision 2 at `d2c96f2`. Its invariant I-ADV, proof obligation PO-1, the claim that operation-owned tables are never locked explicitly, the batch-preflight guard contract and the catalog paragraph of lemma L2 are **withdrawn**. |
 | Retained | The validated directions of SA-R1 (File before Record in `linkFile`), SA-R2 (stabilised derivative closure) and SA-R4 (creation-only grouping dependencies). No new evidence contradicts them. |
-| Inputs and limits | The builder received the Revision 3 direction **truncated in its §8** (it ends at "Delete the universal requirement that every test must reproduce a baseline dead…") and **did not receive the second review report**. The second review's concrete counterexamples, which the direction makes the mandatory starting point of §1, could therefore not be checked one by one. §2.4 is built from source, schema and triggers at `d2c96f2`; it must be reconciled against those counterexamples before this revision is relied on (§12, R3-OPEN-1). |
+| Inputs and limits | The full Revision 3 direction (§1–§9 and stop point) was received; the first copy was truncated in §8 and the gap is now closed. **The second review report was not received.** Its concrete counterexamples, which direction §1 makes the mandatory starting point, could not be checked one by one. §2.3 and §2.4 are built from source, schema and triggers at `d2c96f2` and must be reconciled against those counterexamples (§12, R3-OPEN-1). |
 
 ---
 
-## 0. Response matrix (Revision 3 direction §1–§8)
+## 0. Response matrix (Revision 3 direction §1–§9)
 
 | Direction item | What revision 3 does | Where |
 |---|---|---|
@@ -25,7 +25,29 @@
 | §5 Catalog and reference locks | Source → Repository dependency, terminal reference waits from Record, Citation, worksheet overrides, session correction, history, vocabularies and users. A narrowly scoped terminal-reference rule (TR) is proved; no lock is claimed to be held that is acquired implicitly. | §4.8, §5 (L7) |
 | §6 Closure boundaries | READ COMMITTED; a new transaction per attempt; exactly three attempts; the original `expectedVersion` and actor; missing and hidden-root outcomes without leakage; authorization and lifecycle checks before any retry-exhaustion message; full rollback; history and inheritance; deep, all-state and growing graphs. | §4.6, LP-11, LP-12 |
 | §7 Worksheet entry points | `addFiles`, `addBatch` and `addByFriendlyIds` specified separately; authoritative File state read under FOR SHARE after lock waits; restriction and destruction races; deduplication and history order; one-row compaction updates; integer bounds; public keys kept in the guard. `saveMarks` duplicate edits and precedence preserved independently. | §4.3, §4.4 |
-| §8 Test contracts | LP-1…LP-12 amended as directed. The universal baseline-deadlock requirement is deleted. | §10 |
+| §8 Test contracts | LP-1…LP-12 amended as directed; LP-10g and LP-13 added. The universal baseline-deadlock requirement is deleted; every test is classed BASE, COMPAT, DB or ACC, and ACC tests follow the acceptance rules. | §10 |
+| §9 Deliverables | 1 this document; 2 §0.1; 3 §2.2–§2.4; 4 §2.5; 5 §3.3, §4.9; 6 §8; 7 §6; 8 §10; 9 §7; 10 §5 (proof obligations with counterexample schedules) and §12; 11 the commit SHA is given in the checkpoint report. Evidence classes: §0.2. | — |
+
+### 0.1 SA-R1…SA-R6 response matrix (status at revision 3)
+
+| Finding | Revision 2 response | Revision 3 status |
+|---|---|---|
+| SA-R1 Record → File | `linkFile` File FOR SHARE before Record; G → L → C → G reproduced (40P01) | **Retained** (§4.5). Worksheet-to-File edges removed by F before K (§4.2–§4.3). `add` now takes F FOR SHARE so the File state it reads is authoritative (§4.3). LP-9a observes the corrected blocking. |
+| SA-R2 derivative closure | Discovery, ordered locks, re-discovery, bounded restart; complete SQL | **Retained**, with implementation boundaries: READ COMMITTED, a new transaction per attempt, exactly three attempts, original version and actor, no-leak outcomes, full rollback, all graph shapes (§4.6). |
+| SA-R3 preservation inventory | Inventory; File before content (D-LP-6a, 6b); I-ADV | **Revised.** I-ADV withdrawn (§2.3). Writer and trigger protection matrix (§2.4), key ledger (§2.5), Option C (§3.2–§3.3, §4.9), Phase 2 changes P2-8a…f. D-LP-6a and 6b retained; the `commitShared` re-lock becomes an assertion. |
+| SA-R4 grouping dependencies | Classification source only on the new-Record path | **Retained** (§4.2); LP-4b and LP-4c cover applied sources and replay. |
+| SA-R5 guard before SQL | Batch preflight | **Replaced** by a per-statement, non-interleavable contract that keeps inserted keys and WP1-R3 re-lock rules (§6); LP-8b negative tests. |
+| SA-R6 test designs | LP-1…LP-12 | **Amended** (§10): baseline and corrected schedules separated, test classes, corrected-path acceptance rules. |
+
+### 0.2 Evidence classes used in this document
+
+| Class | Meaning | Where |
+|---|---|---|
+| **Independently verified** | Confirmed by another party | Only LP-6 and the SA-R1 reproduction ran in CI on all four jobs (run `43831470275`); the reviewer has not yet assessed revision 3 |
+| **Executed (builder)** | Run by the builder outside CI, on local PostgreSQL 16 | §11.3 predicate waits; §11.4 schema extraction |
+| **Builder source analysis** | Read from source, schema and triggers at `d2c96f2`, not executed | §2.1–§2.5 |
+| **Proposed design** | Not implemented | §3–§9 |
+| **Test specification** | Not implemented | §10 |
 
 ## 1. Summary
 
@@ -560,19 +582,20 @@ Then every blocking request of every writer in §2 is ordered (L1), covered (L2)
 of L4, a content-scoped edge of L5, a first-only wait (L6) or a terminal-reference wait (L7). No wait-for cycle
 exists among the inventoried writers.
 
-**Proof obligations** (each tested, §10):
+**Proof obligations** (each tested, §10). Each has the schedule that would refute it; the matching test runs
+that schedule against the implemented protocol and must show the obligation holds.
 
-| ID | Statement | Test |
-|---|---|---|
-| PO-A | Single-resource transactions (P9, P10, P14, P15, D3, D7, the I5 statements) take no blocking lock other than O and its event key | LP-10b: statement-level inventory with the guard's context markers |
-| PO-B | Location-keyed trigger and settlement writes match only the writer's own operation or no committed row | LP-10e: invariant test plus concurrent schedule |
-| PO-C | Location keys are claimed only after exclusive create or own release in the same transaction | LP-10f |
-| PO-D | Unresolved OPEN location inserts for content X happen under Ct(X); content-less ones under their operation's advisory lock | LP-10d |
-| PO-E | A non-administrative transaction references at most one `app_user` row | LO-3 extension: history and `created_by` actor columns per transaction |
+| ID | Statement | Counterexample schedule (refutes it if it can occur) | Test |
+|---|---|---|---|
+| PO-A | Single-resource transactions (P9, P10, P14, P15, D3, D7, the I5 statements) take no blocking lock other than O and its event key | An Administrator retry or cancel, or a receiver, that holds O and then waits for Ct, a generation or a File held by the worker that is waiting for O | LP-10b (inventory) and LP-10g (retry against a worker in `commitRepair`) |
+| PO-B | Location-keyed trigger and settlement writes match only the writer's own operation or no committed row | A committed operation row owning path p while a generation records p, and IntegrityService marking that content MISSING while the operation's worker holds the row and waits for Ct | LP-10e |
+| PO-C | Location keys are claimed only after an exclusive create or an own release in the same transaction | Two transactions claiming one `(volume, path)`: T1 holds the claim and waits for T2's content; T2 waits on T1's claim | LP-10f |
+| PO-D | Unresolved OPEN location inserts for content X happen under Ct(X); content-less ones under their operation's advisory lock | Two recorders of one path for X, one without Ct(X), each holding a row the other needs | LP-10d |
+| PO-E | A non-administrative transaction references at most one `app_user` row | T holds KEY SHARE on user u2 and requests user u1 while the administrator check holds u1 and waits for u2 | LO-3 extension |
 
 **What is not proven:**
 - **Declined decisions:** each leaves its scenario, which PostgreSQL detects as 40P01 (fails visibly).
-- **The second review's counterexamples:** not available to the builder (R3-OPEN-1).
+- **The second review's counterexamples:** not available to the builder (R3-OPEN-1). The schedules above are the builder's, not the reviewer's.
 - **Writers added later:** must be inventoried before implementation.
 
 ## 6. `LockSequence` contract (direction §4)
@@ -661,40 +684,57 @@ Their references to Source, vocabularies and users are terminal (TR). LO-3 is ex
   application exception.
 - **Final-state assertions** on rows, versions, counts and history.
 - **Seams** (`CaptureFaults`, `FileFaults`, `PreservationFaults`) are test-only no-ops in production.
+- **Test classes** (direction §8), one per test:
+  - **BASE**: baseline deadlock characterisation, on the accepted code; expected 40P01.
+  - **COMPAT**: compatibility reference, against a serial run of the accepted behaviour.
+  - **DB**: database behaviour characterisation; plain SQL; no project logic.
+  - **ACC**: corrected-path acceptance, on the implemented protocol.
+- **Acceptance rules for every ACC test:**
+  - every participant's outcome is asserted (success, or the specific expected application exception);
+  - every transaction is completed explicitly (commit or rollback) before assertions;
+  - zero unexpected 40P01 and zero unexpected 55P03;
+  - full final-state and history verification for every row touched.
 - **Deleted:** the universal requirement that every test first reproduce a baseline deadlock. A baseline
   reproduction is required only where a baseline cycle exists: LP-1b, LP-2b, LP-5b, LP-9b and LP-10b-baseline. All
   other tests assert corrected behaviour only.
 
-| ID | Contract |
-|---|---|
-| **LP-1a** (baseline, Scenario A) | Sessions S1 {A}, S2 {B}, accepted code. T1 locks S1 and row A; T2 locks S2 and row B (the seam after the first row lock). Then T1 requests B and T2 requests A, interleaving enforced by the controller (T1 observed waiting on T2 before T2's request). Expected 40P01, one victim. |
-| **LP-1b** (corrected, foreign rows) | Same data. `saveMarks(S1, [A, B])` and `saveMarks(S2, [B, A])` under the revised code: each answers "not found" for the foreign row at its accepted precedence position. `pg_blocking_pids` never shows T1 and T2 blocking each other on worksheet rows. Rows unchanged. A third case has an earlier validation error preceding the foreign row in request order: that error is reported (precedence). |
-| **LP-2a** (baseline, Scenario B) | Accepted code; `add(S1, [F2, F1])` and `add(S2, [F1, F2])`, with the seam after each first insert; the controller observes the cross-wait; 40P01. |
-| **LP-2b** (corrected) | Revised code; T1 paused after inserting F1 (lowest UUID); T2 started and **observed waiting on F1 with blocker = T1**; then: **(i)** T1 commits → T2 reports F1 and F2 taken (if T1 took both) or partial overlap (T1 {F1}, T2 {F1, F3}: T2 adds F3); **(ii)** variant: T1 **rolls back** → T2's insert succeeds and T2 adds F1. No 40P01; per-session sequences consecutive in request order. |
-| **LP-3** (compaction) | Session rows 1…5. Request [Fc, Fa, Fd, Fb] (UUID order Fa < Fb < Fc < Fd), plus a hidden id, a destroyed id and a duplicate. **The competing claim is controlled:** T2 holds an uncommitted insert of Fa in S2; T1 (revised `add`) is observed waiting on Fa (blocker = T2); T2 commits. **Assert:** provisional 6…9; compaction UPDATEs each affect exactly 1 row (statement counts captured); final Fc 6, Fd 7, Fb 8; `row_version` 1; `added_at` and `added_by` unchanged; counts per entry point (`addFiles`: added 3, taken 1, not available 2; `addBatch` excludes hidden; `addByFriendlyIds` adds unknown); history rows in request order; no 23505. Bound case: `base` near `Integer.MAX_VALUE` → rule violation, nothing inserted. |
-| **LP-4a** | Grouping chunk with plan order the reverse of UUID order, with continuations: same Records, links, holds, conflicts and history as a serial reference run; the recorded sequence is S, F↑, K↑, R. |
-| **LP-4b** | Classification source applied by chunk 1; a forced restart; chunk 2 (extension) neither locks nor checks the source row or File; outcome equals the accepted code. |
-| **LP-4c** (replay boundary) | Replay of a completed chunk (idempotent run): no new locks beyond S; no new history. Replay after the source row was changed by another session between chunks: the accepted Conflict precedence. |
-| **LP-5a** | Grouping holds derivative D Sh (D < P) while FC restricts parent P: FC waits (blocker = G); after G commits, FC completes; D RESTRICTED with inheritance history. |
-| **LP-5b** | The same with D > P, and with a **two-level** chain P → D1 → D2 in the chunk (D2 < P < D1): FC's ordered closure lock waits on the first held node; no 40P01. Baseline variant reproduces Scenario C (40P01) on the accepted code. |
-| **LP-6** | Executed harness (§11.1). |
-| **LP-7** | Phase 4 writer racing grouping on one Record: the Phase 4 writer requests only R Sh at L1; no cycle. |
-| **LP-8a** | Full integration suite with the guard: no violation. |
-| **LP-8b** (negative guard tests) | Each must throw **before** SQL: descending acquisition; acquisition while a ticket is open; acquisition after FAILED without reset; upgrade (Sh → U) at any level; re-lock after a higher sub-level (WP1-R3); duplicate target in one call; insert key below a held key; L1p lock without owner or single-resource context; single-resource context with a second acquisition; `assertHeld` on a missing or weaker lock. Reset after rollback clears FAILED. |
-| **LP-9a** (corrected SA-R1) | G holds D Sh; FC holds the closure of P (P, D in order) and is **observed waiting on D (blocker = G)**; L requests P Sh (revised `linkFile`) and is **observed waiting with blocker = FC** before taking R; G takes R and commits; FC completes; L completes. No 40P01. |
-| **LP-9b** (baseline) | `Lp6LockBehaviourIT.saR1_…` (executed, §11.2). |
-| **LP-10a** (Scenario D, corrected) | FD on File X (content Ct) and OS committing a derivative of X sharing Ct. **No symmetric barrier:** the controller pauses FD after its F lock only, starts OS, observes OS **waiting on X with blocker = FD**, then releases FD. Second schedule: OS paused after its parent lock; FD observed waiting on X (blocker = OS). No 40P01; final states as in serial order. |
-| **LP-10a-baseline** | Accepted code, FD paused after F, OS paused after Ct, then both released: 40P01. |
-| **LP-10b** (replaces the I-ADV test; PO-A) | Statement-level inventory under the guard's context markers. Every `file_operation` write is in owner context or single-resource context. Every single-resource transaction issues no other blocking statement. Every `note` FOR UPDATE outside owner context is single-resource. Runtime assertion in tests plus an ArchUnit rule on call sites. |
-| **LP-10c** (K7) | Concurrent commitRepair and IntegrityService MISSING on content X: the second waits for Ct(X) (blocker = first); final generation states consistent; exactly one CURRENT. |
-| **LP-10d** (K10, PO-D) | Concurrent `quarantineSuperseded` and DestructionProcessor `claimBecomesUnresolved` recording at one path of X: one waits for Ct(X); exactly one OPEN record; no 23505. |
-| **LP-10e** (PO-B) | IntegrityService marks X MISSING while a worker holds an uncommitted `markTargetCreated` on an unrelated path: no wait (blocker set empty). A seeded committed-state check that no operation owns a path that a generation records. |
-| **LP-10f** (PO-C) | Two operations planned to the same path: one exclusive create wins; the other is COLLISION; one `physical_location_owner` row. |
-| **LP-11** (closure growth) | FC discovers {P, D}; the seam pauses before acquisition; a publisher **commits** D2 under D (an independent, committed change); FC re-discovers → attempt abandoned and **rolled back** (no history rows, no version change from attempt 1); attempt 2 locks {P, D, D2}; D2 RESTRICTED with history. Deep chain (depth 6) and diamond variants. All-state variant: a DESTROYED intermediate is locked and its descendants handled. |
-| **LP-12** (concurrent publication) | FC holds the full closure; a publisher of D3 under D is **observed waiting (blocker = FC)** while uncommitted; after FC commits, the publisher's transaction (independent of FC) commits, and its trigger restricts D3. Exhaustion variant: growth forced in three attempts → visible Conflict; nothing changed; a hidden-root variant answers not found; a DESTROYED-root variant answers the accepted rule message. |
+| ID | Class | Contract |
+|---|---|---|
+| **LP-1a** (baseline, Scenario A) | BASE | Sessions S1 {A}, S2 {B}, accepted code. T1 locks S1 and row A; T2 locks S2 and row B (the seam after the first row lock). Then T1 requests B and T2 requests A, interleaving enforced by the controller (T1 observed waiting on T2 before T2's request). Expected 40P01, one victim. |
+| **LP-1b** (corrected, foreign rows) | ACC | Same data. `saveMarks(S1, [A, B])` and `saveMarks(S2, [B, A])` under the revised code: each answers "not found" for the foreign row at its accepted precedence position. `pg_blocking_pids` never shows T1 and T2 blocking each other on worksheet rows. Rows unchanged. A third case has an earlier validation error preceding the foreign row in request order: that error is reported (precedence). |
+| **LP-2a** (baseline, Scenario B) | BASE | Accepted code; `add(S1, [F2, F1])` and `add(S2, [F1, F2])`, with the seam after each first insert; the controller observes the cross-wait; 40P01. |
+| **LP-2b** (corrected) | ACC | Revised code; T1 paused after inserting F1 (lowest UUID); T2 started and **observed waiting on F1 with blocker = T1**; then: **(i)** T1 commits → T2 reports F1 and F2 taken (if T1 took both) or partial overlap (T1 {F1}, T2 {F1, F3}: T2 adds F3); **(ii)** variant: T1 **rolls back** → T2's insert succeeds and T2 adds F1. No 40P01; per-session sequences consecutive in request order. |
+| **LP-3** (compaction) | ACC | Session rows 1…5. Request [Fc, Fa, Fd, Fb] (UUID order Fa < Fb < Fc < Fd), plus a hidden id, a destroyed id and a duplicate. **The competing claim is controlled:** T2 holds an uncommitted insert of Fa in S2; T1 (revised `add`) is observed waiting on Fa (blocker = T2); T2 commits. **Assert:** provisional 6…9; compaction UPDATEs each affect exactly 1 row (statement counts captured); final Fc 6, Fd 7, Fb 8; `row_version` 1; `added_at` and `added_by` unchanged; counts per entry point (`addFiles`: added 3, taken 1, not available 2; `addBatch` excludes hidden; `addByFriendlyIds` adds unknown); history rows in request order; no 23505. Bound case: `base` near `Integer.MAX_VALUE` → rule violation, nothing inserted. |
+| **LP-4a** | COMPAT | Grouping chunk with plan order the reverse of UUID order, with continuations: same Records, links, holds, conflicts and history as a serial reference run; the recorded sequence is S, F↑, K↑, R. |
+| **LP-4b** | ACC | Classification source applied by chunk 1; a forced restart; chunk 2 (extension) neither locks nor checks the source row or File; outcome equals the accepted code. |
+| **LP-4c** (replay boundary) | ACC | Replay of a completed chunk (idempotent run): no new locks beyond S; no new history. Replay after the source row was changed by another session between chunks: the accepted Conflict precedence. |
+| **LP-5a** | ACC | Grouping holds derivative D Sh (D < P) while FC restricts parent P: FC waits (blocker = G); after G commits, FC completes; D RESTRICTED with inheritance history. |
+| **LP-5b** | ACC | The same with D > P, and with a **two-level** chain P → D1 → D2 in the chunk (D2 < P < D1): FC's ordered closure lock waits on the first held node; no 40P01. Baseline variant reproduces Scenario C (40P01) on the accepted code. |
+| **LP-6** | DB | Executed harness (§11.1). |
+| **LP-7** | ACC | Phase 4 writer racing grouping on one Record: the Phase 4 writer requests only R Sh at L1; no cycle. |
+| **LP-8a** | ACC | Full integration suite with the guard: no violation. |
+| **LP-8b** (negative guard tests) | ACC | Each must throw **before** SQL: descending acquisition; acquisition while a ticket is open; acquisition after FAILED without reset; upgrade (Sh → U) at any level; re-lock after a higher sub-level (WP1-R3); duplicate target in one call; insert key below a held key; L1p lock without owner or single-resource context; single-resource context with a second acquisition; `assertHeld` on a missing or weaker lock. Reset after rollback clears FAILED. |
+| **LP-9a** (corrected SA-R1) | ACC | G holds D Sh; FC holds the closure of P (P, D in order) and is **observed waiting on D (blocker = G)**; L requests P Sh (revised `linkFile`) and is **observed waiting with blocker = FC** before taking R; G takes R and commits; FC completes; L completes. No 40P01. |
+| **LP-9b** (baseline) | BASE | `Lp6LockBehaviourIT.saR1_…` (executed, §11.2). |
+| **LP-10a** (Scenario D, corrected) | ACC | FD on File X (content Ct) and OS committing a derivative of X sharing Ct. **No symmetric barrier:** the controller pauses FD after its F lock only, starts OS, observes OS **waiting on X with blocker = FD**, then releases FD. Second schedule: OS paused after its parent lock; FD observed waiting on X (blocker = OS). No 40P01; final states as in serial order. |
+| **LP-10a-baseline** | BASE | Accepted code, FD paused after F, OS paused after Ct, then both released: 40P01. |
+| **LP-10b** (replaces the I-ADV test; PO-A) | ACC | Statement-level inventory under the guard's context markers. Every `file_operation` write is in owner context or single-resource context. Every single-resource transaction issues no other blocking statement. Every `note` FOR UPDATE outside owner context is single-resource. Runtime assertion in tests plus an ArchUnit rule on call sites. |
+| **LP-10c** (K7) | ACC | Concurrent commitRepair and IntegrityService MISSING on content X: the second waits for Ct(X) (blocker = first); final generation states consistent; exactly one CURRENT. |
+| **LP-10d** (K10, PO-D) | ACC | Concurrent `quarantineSuperseded` and DestructionProcessor `claimBecomesUnresolved` recording at one path of X: one waits for Ct(X); exactly one OPEN record; no 23505. |
+| **LP-10e** (PO-B) | ACC | IntegrityService marks X MISSING while a worker holds an uncommitted `markTargetCreated` on an unrelated path: no wait (blocker set empty). A seeded committed-state check that no operation owns a path that a generation records. |
+| **LP-10f** (PO-C) | ACC | Two operations planned to the same path: one exclusive create wins; the other is COLLISION; one `physical_location_owner` row. |
+| **LP-11** (closure growth) | ACC | FC discovers {P, D}; the seam pauses before acquisition; a publisher **commits** D2 under D (an independent, committed change); FC re-discovers → attempt abandoned and **rolled back** (no history rows, no version change from attempt 1); attempt 2 locks {P, D, D2}; D2 RESTRICTED with history. Deep chain (depth 6) and diamond variants. All-state variant: a DESTROYED intermediate is locked and its descendants handled. |
+| **LP-12** (concurrent publication) | ACC | FC holds the full closure; a publisher of D3 under D is **observed waiting (blocker = FC)** while uncommitted; after FC commits, the publisher's transaction (independent of FC) commits, and its trigger restricts D3. Exhaustion variant: growth forced in three attempts → visible Conflict; nothing changed; a hidden-root variant answers not found; a DESTROYED-root variant answers the accepted rule message. |
 
-The second review's amendments that the truncated direction does not show (§8 after "baseline dead…", and any later
-sections) are not reflected here (R3-OPEN-2).
+**Additional tests** (ACC):
+- **LP-10g** (PO-A): an Administrator retry of operation O while O's worker is inside `commitRepair` (holding O,
+  waiting for Ct(X) held by IntegrityService). The retry waits only for the worker (blocker = worker pid) and
+  completes after it. No 40P01.
+- **LP-13** (rule TR): a Source correction holding the Source and requesting its new Repository, while a Repository
+  correction holds it and a grouping transaction holds a new Record's KEY SHARE on the Source. No 40P01. All three
+  complete with final versions and history.
+
+**Database-behaviour characterisation to add to CI** (DB): §11.3 predicate waits, on all four jobs.
 
 ## 11. Bounded verification executed (non-production)
 
@@ -729,8 +769,8 @@ Taken from a scratch database migrated with V0001…V0025 (local PostgreSQL 16):
 
 - **R3-OPEN-1.** The second review's counterexamples were not received. §2.3 and §2.4 were built independently and
   must be checked against them, row by row, before D-LP-8 is decided.
-- **R3-OPEN-2.** The Revision 3 direction was received truncated in §8. Any later requirement (deliverables, stop
-  point, further test amendments) is not addressed.
+- **R3-OPEN-2 (closed).** The Revision 3 direction was first received truncated in §8. The complete text was
+  received afterwards; its test classes, acceptance rules and deliverables are now addressed (§0.1, §0.2, §5, §10).
 - **PO-A…PO-E** are code or data invariants verified by tests, not by database constraints.
 - **Pool and retry waits:** these are application waits, not database waits, and are bounded by timeouts:
   - Hikari connection waits while a worker holds a session advisory lock on another connection;
