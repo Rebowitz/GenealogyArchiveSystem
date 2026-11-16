@@ -239,7 +239,8 @@ This supersedes the Role-removal behaviour of ADR-0011 §5 for archives at V0027
   - **Withdraw role** replaces "Remove role", with the same parameters.
   - **Restore role** returns the same `role_id`, wording and position.
 
-  History (`ROLE_WITHDRAWN`, `ROLE_RESTORED`) is written on the Record, as in Phase 3. Identity, wording, code,
+  History (`ROLE_WITHDRAWN`, `ROLE_RESTORED`) is written on the Record, as in Phase 3. **Both actions touch the
+  Record and increment its `row_version` and the Role's by one** (Record-level optimistic concurrency; RW-3, RW-4). Identity, wording, code,
   note, sequence and all references are preserved.
 - **While a Role is WITHDRAWN:**
   - correcting it is refused;

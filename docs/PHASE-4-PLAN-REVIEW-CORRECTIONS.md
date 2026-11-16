@@ -165,3 +165,33 @@ This is not a new finding; it records how the Option C decision changes the PR4-
   - The new RW-10 races withdrawal against W1, W2, W3, W5 and W10, with deadlock retry disabled.
 
 **Status:** builder-corrected, pending independent verification (reviewer disposition: PARTIAL).
+
+---
+
+## Disposition received after `129d2a1`
+
+The reviewer recorded **PR4-R3: CLOSED (documentation level)**, noting that runtime proof of deadlock freedom
+remains an implementation acceptance requirement. **GAS-P4-PLAN-001: RESOLVED (Option C)** at the planning level.
+The reviewer also raised one minor clarification, recorded below as PR4-R4.
+
+## PR4-R4 — MINOR — Record versioning on Role restoration
+
+**Finding (reviewer's text, unaltered):**
+
+> I noticed a smaller documentation issue in §11.2: withdrawal explicitly says the Record is touched as in Phase 3, but restoration does not explicitly say whether it also increments the Record's version. Because both actions use Record-level optimistic concurrency, I recommend specifying that restoration also touches and versions the Record, just as withdrawal does, and adding that assertion to RW-4.
+>
+> This is a minor clarification, not a reason to reopen PR4-R3.
+
+**Response.** Agreed. Restoration changes the Record's content as seen by readers, because the Role reappears among
+the active Roles. Under Phase 3's rule that Role changes make earlier copies of the Record stale, it must version
+the Record exactly as withdrawal does.
+
+**Changes:**
+- **Clarifications §11.2.** The Restore row now states "Role `row_version` +1; Record touched exactly as for
+  withdrawal (Record `row_version` +1)". The Withdraw row now names the Record increment explicitly.
+- **RW-4.** Now asserts that the Role's and the Record's `row_version` each increase by exactly one, and that a stale
+  Record version held from before the restoration gets the Phase 3 conflict. RW-3 asserts both increments for
+  withdrawal.
+- **ADR-0012 §5a.** States that both actions touch the Record and increment both versions by one.
+
+**Status:** builder-corrected, pending independent verification.
