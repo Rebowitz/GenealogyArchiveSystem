@@ -431,7 +431,57 @@ None of these closes WP1-R1 or certifies a production change.
 - **Tests:** every ACC test is a future test.
 - **Issues:** WP1-R1, GAS-P4-002 and GAS-P4-003 are not closed.
 
-**Status:** revision 3.2 submitted (responds to the third assessment). WP1-R1, GAS-P4-002 and GAS-P4-003 are not
+**[3.3] T3 register count correction:** the register above has **71 populated rows**: 70 numeric rows plus
+T3-70b. T3-5…T3-9 are unused; T3-75 is the highest label, not a count. The fourth assessment's Appendix A
+dispositions (D, C, P, O) are adopted as the independent status of each T3 row. "RESPONDED" means a design response
+only. The P rows are answered by F4-1…F4-12 below.
+
+### Fourth independent architectural assessment (revision 3.2 → revision 3.3)
+
+| | |
+|---|---|
+| Assessment | `Phase-4-WP1-Fourth-Architectural-Assessment.md`, 16 November 2026, reviewed head `b4c4aca` |
+| Disposition received | PROPOSAL REQUIRES REVISION; complete implementation authorization: NO at 3.2. D-LP-9(a) architecturally acceptable as a separately bounded item. WP1-R1, GAS-P4-002, GAS-P4-003 OPEN; WP1 unaccepted; WP2 HOLD. |
+| Direction | Phase 4 WP1 — Locking-Protocol Revision 3.3 Direction. **Received truncated** at §2.3 ("Compare A and B against: -"). The criteria and any later items were not received; this response follows the assessment's §11 minimum amendments. |
+| Result | proposal revision 3.3 (same file) |
+
+**SA-R statuses as the assessor gave them:**
+
+| Finding | Status |
+|---|---|
+| SA-R1 | CLOSED (direction) |
+| SA-R2 | CLOSED (direction) |
+| SA-R3 | PARTIAL |
+| SA-R4 | CLOSED (direction) |
+| SA-R5 | PARTIAL |
+| SA-R6 | PARTIAL |
+
+None is implementation closure.
+
+| ID | Assessment section and finding | Response (revision 3.3) | Status |
+|---|---|---|---|
+| F4-1 | §3 (BLOCKING): INV-U contradicted; settlement Ct → O(W) against repair O(W) → Ct after path reoccupation | INV-U withdrawn, not renamed. Both counterexamples documented (destruction refusal; later-repair reclaim). Alternatives A and B compared; **A recommended** as new group **P2-8g**: Wh1 monotonic planning; Wh2 OPEN check in `createOwned` under Ct(X) Sh, serialised against every OPEN-record creator, converter and resolver. PO-B's settlement case rewritten (proposal §5.1, §5.4). Accepted-code semantic consequence recorded as GAS-P4-004. | RESPONDED (design); DECISION D-LP-8 / P2-8g |
+| F4-2 | §7 (BLOCKING): the G2 index-name ordering rejects valid inserts; request-order sequences; G1 ignores higher-level held resources | Key classes (ordered, coordinated, delegated, private); common projection π; G1 compares against all held or passed ordered resources at every level; G2 and G3 rewritten with no cross-index ordering; acceptance and rejection witnesses (proposal §6.3) | RESPONDED (design); DECISION D-LP-4 |
+| F4-3 | §4: `FileService.download` MISSING window omitted; standalone download SIZE_MISMATCH and `tryShare` NOT_PROTECTED | We7 (Ct U first, state re-read; effects committed before the accepted exception); We5 additions; counts updated to 18 P2-8 windows and 21 in Phase 2; LP-16 | RESPONDED (design) |
+| F4-4 | §4: A3 says KS waits on NKU (wrong); owner `note` FOR UPDATE holders omitted from A3 and A4; held earlier KS references | A3 corrected (KS conflicts only with FOR UPDATE and key updates); new lemma **A0** (owner `note` holders are terminal after the note); A3 holder argument for earlier KS; A4 corrected | RESPONDED |
+| F4-5 | §4: E1–E5 assessments (E1 is not intrinsically single-resource; E2 state-changing callers must not enter standalone) | G9 admits `standalone()` only at named entry points; helpers in We1, We2 and We7 join the window tracker | RESPONDED |
+| F4-6 | §5: INV-P is not a database constraint; define the admitted data; legacy and case-fold audit | Admitted-data scope and a read-only preflight data-audit obligation (proposal §12) | RESPONDED; conditional |
+| F4-7 | §5: receiver sets per `IngestionService` instance; `ANY` has no row order; prohibit direct overlap | Lemma A2 rescoped; ArchUnit rule and staging assertion; overlap not supported; LP-10l uses the real registration | RESPONDED; conditional |
+| F4-8 | §6: PO table (A1–A4, B, C, D) and deferred COMMIT work | PO-B revised; others unchanged in substance; COMMIT outcomes are a test rule | RESPONDED |
+| F4-9 | §7 rule table (G4, G7, G8, G9, G11, G12; savepoints; native JDBC) | G7 window CLOSED; G8 hand-off and LOST; G9 per-lemma effects; G11 entry versus SQL; G12 unknown completion; savepoint and native-JDBC interception | RESPONDED |
+| F4-10 | §8: D-LP-9(a) acceptable; GAS-P4-003's actor count; four-job gate items 1–8 | `issues.md` now says "two or three actors depending on the schedule" (the target-update cycle also applies to the accepted ordinary FOR UPDATE check); LP-14b adopts gate items 1–8 | RESPONDED |
+| F4-11 | §9: LP-8, LP-9c, LP-10b (`pg_locks` observability), LP-10d, LP-10e, LP-10f, LP-10l, LP-10m, LP-13, LP-14 | All amended (proposal §10, "[3.3] Amendments"); new LP-15 (F4-1) and LP-16 (download) | RESPONDED (future tests) |
+| F4-12 | §2, §11 (6): stale text (summary CR wording; K13 scan-row protection; D4 single-resource alternative; rule 3 "no other exception") | All corrected | RESPONDED |
+| F4-13 | §10: decision recommendations and counts | Proposal §7 and §8 updated: seven P2-8 groups, 18 windows; Phase 2 total 21 under ten subdecision items | DECISION (owner) |
+| F4-14 | §12: evidence limits; WP1-R2 and WP1-R3 not finally closed | Acknowledged; no closure claimed | RESPONDED |
+
+**Remaining open:**
+- **Decisions:** D-LP-1…D-LP-9, including P2-8g.
+- **Conditions:** INV-P (admitted data) and lemma A2 (registration protocol).
+- **Tests:** every ACC test is a future test.
+- **Issues:** WP1-R1, GAS-P4-002, GAS-P4-003 and GAS-P4-004 are not closed.
+
+**Status:** revision 3.3 submitted (responds to the fourth assessment). Earlier: revision 3.2 submitted (responds to the third assessment). WP1-R1, GAS-P4-002 and GAS-P4-003 are not
 closed. Awaiting owner decisions D-LP-1…D-LP-9 and an independent assessment. WP1 is not accepted; WP2 remains on
 HOLD.
 

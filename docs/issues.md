@@ -82,7 +82,7 @@ TO.
 | | |
 |---|---|
 | Found | 2026-11-16, registering the Phase 3 row locks (LO-1 to LO-3) |
-| Status | **OPEN, escalated.** **SUPERSEDED ASSERTION:** the deadlock-freedom premise stated below (L1 is safe because session-first locking serialises it) is **wrong across sessions and subsystems** and must not be relied on; see WP1-R1 (BLOCKING), Scenarios A–D and GAS-P4-003. The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3.2 (D-LP-1…D-LP-9; modified Option C), and is not implemented. Not closed by specification. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
+| Status | **OPEN, escalated.** **SUPERSEDED ASSERTION:** the deadlock-freedom premise stated below (L1 is safe because session-first locking serialises it) is **wrong across sessions and subsystems** and must not be relied on; see WP1-R1 (BLOCKING), Scenarios A–D and GAS-P4-003. The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3.3 (D-LP-1…D-LP-9; modified Option C with P2-8g), and is not implemented. Not closed by specification. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
 
 > **Superseded assertion (kept for the record, do not rely on it):** the text below describes the original premise.
 
@@ -133,8 +133,10 @@ lock; UUID ordering applies from L2 upward."
 **Effect.**
 - PostgreSQL detects the cycle and aborts one transaction with 40P01, so it fails visibly and nothing partial is
   committed.
-- It needs three concurrent actors, one of them changing a user's role or enabled flag while two administrators
-  edit.
+- **[3.3, corrected]** It needs **two or three concurrent actors depending on the schedule.** The three-actor form
+  goes through history writers. The two-actor form is a password reset (or other target update) of the role change's
+  target, whose history insert waits on the administrator rows. That form also applies to the accepted ordinary
+  FOR UPDATE check once it is granted; NOWAIT is not essential to it (proposal §11.7).
 
 **Evidence.** Reproduced on the builder's local PostgreSQL 16 against the real `app_user`, `change_history` and
 administrator-check SQL, with a stand-in row for the T1/T2 resource: 40P01 (proposal §11.5). Not yet in CI
@@ -145,4 +147,35 @@ collision-free with existing keys) as the first statement of `UserService.update
 fresh plain read of the enabled administrators in a later statement; then the target update (NO KEY UPDATE,
 compatible with KEY SHARE). `create` and CLI `create-admin` have a documented insert-only exception. **NOWAIT alone is
 not a fix** (proposal §11.7). Keeping the current design is an explicit risk decision only.
+
+## GAS-P4-004: MINOR. Quarantine settlement can release a newer repair's claim after path reoccupation (accepted Phase 2 code)
+
+| | |
+|---|---|
+| Found | 2026-11-16, analysing fourth-assessment finding F4-1 |
+| Phase | Defect in accepted Phase 2 code; found during Phase 4 WP1 |
+| Status | **OPEN; source-derived, not executed.** Not fixed; no production code changed. Proposed fix: P2-8g (proposal §5.4), part of decision D-LP-8. |
+| Related | Fourth assessment F4-1; `PHASE-4-WP1-AUDIT-CORRECTIONS.md` F4-1; proposal §5.4, LP-15(a) |
+
+**Cause.**
+- An attested quarantine move of an object at path p is recorded (intent), and the bytes are moved before the
+  settlement transaction.
+- Between the move and settlement, another repair of the same content can plan the same unrecorded generation
+  (`planRepair` ignores other repairs' planned generations). It creates p (CREATE_NEW succeeds on the emptied path)
+  and claims it.
+- Settlement's `releaseTargetsAt(volume, p)` then releases **every** operation's claim at p, including the new
+  repair's legitimate claim on its own copy.
+
+**Effect.**
+- The new repair's copy is no longer recorded as owned.
+- If that repair commits, its generation claims p normally.
+- If it is cancelled or fails, its cancellation sees no claim and may not quarantine its copy. An unexplained object
+  is then left at p, which a later integrity check reports as unexpected. No byte is lost, but ownership evidence is
+  wrong.
+
+**Evidence.** Source analysis only (`QuarantineMoves.settle`, `OperationProcessor.planRepair` and `createOwned`).
+LP-15(a) characterises it.
+
+**Proposed fix (not applied).** P2-8g: monotonic generation planning (Wh1) and the OPEN-record check in
+`createOwned` under Ct(X) Sh (Wh2).
 
