@@ -46,6 +46,38 @@ D-LP-4 is decided. No narrowing or broadening of that exception has been made.
 
 **Status:** proposal submitted; awaiting owner review and independent Codex assessment.
 
+### Stage A review of the proposal (revision 1 → revision 2)
+
+| | |
+|---|---|
+| Review | `Phase-4-WP1-Stage-A-Lock-Protocol-Review.md` (not available to the builder; findings taken from the owner's revision direction, unaltered in that document) |
+| Reviewed head | `9c36d5e` |
+| Disposition received | PROPOSAL REQUIRES REVISION. WP1 not accepted. WP2 on HOLD. |
+| Direction | Phase 4 WP1 — Stage A Locking-Protocol Revision Direction |
+
+**Response.** The proposal is revised to revision 2 in the same file. Its §0 holds the SA-R1…SA-R6 response matrix.
+Revision 1's "sink" lemma, its implicit-KEY-SHARE-after-Record exception and its global deadlock-freedom conclusion
+are withdrawn. Revision 2:
+- reorders L1 so Files (and then content) precede worksheet keys and the Record;
+- specifies `linkFile` File-FOR-SHARE-before-Record (D-LP-5);
+- specifies the stabilised derivative closure with complete SQL and bounded restart (D-LP-3);
+- inventories the Phase 2 preservation writers and resolves the content/parent cycle (Scenario D, D-LP-6a/6b);
+- restricts grouping's classification-source locks to the new-Record path (D-LP-7);
+- redesigns the `LockSequence` contract (D-LP-4);
+- replaces the proof with a wait-for argument whose open dependencies are named as decisions and proof obligations
+  (PO-1, PO-2; conditional D-LP-8);
+- rewrites LP-1…LP-8 and adds LP-9…LP-12.
+
+**LP-6 and SA-R1 evidence (bounded, non-production).** Harness
+`src/test/java/org/genealogyarchive/data/Lp6LockBehaviourIT.java` (commit `dc274cd`), plain SQL sessions against
+the existing schema; no production code changed. Results are in proposal §11. LP-6 shows that a compatible KEY
+SHARE (explicit or foreign-key) is not queued behind a waiting FOR UPDATE. This is **not** used to dismiss SA-R1:
+the same harness reproduces the SA-R1 granted-lock cycle G → L → C → G, which PostgreSQL aborts with 40P01.
+
+**Not implemented**, as directed. No production locking code has changed.
+
+**Status:** revision 2 submitted; awaiting independent review and owner decisions D-LP-1…D-LP-7.
+
 ---
 
 ## WP1-R2: Historical Date database constraints (BLOCKING; corrected)
@@ -184,15 +216,17 @@ The guard stays on for the whole unit and integration suite (`-Dgas.lockOrderGua
 | WP3 and WP4 | Place and Record integration as those dependencies arrive. The same interpretation on Records with different Sources, `jurisdiction_text`, linked Places and periods is byte-identical. | `HistoricalDateIT.hd7_*` (to be added in WP4) |
 | Final integration gate (WP6) | The complete HD-7 and item 18, mandatory for Phase 4 acceptance | The full suites on all four CI jobs |
 
-**Conflict with the accepted plan, for owner approval (not applied).** Plan §10's WP1 gate reads:
+**Conflict with the accepted plan (owner-approved staging).** Plan §10's WP1 gate reads:
 
 > `HistoricalDateTest` HD-1…HD-7 green; LO-1…LO-3 for Phase 3 paths; prohibited-inference items 10, 11, 18
 
-Proposed wording:
+Approved wording:
 
 > `HistoricalDateTest` HD-1…HD-6 and the model-and-parser part of HD-7 green; LO-1…LO-3 for Phase 3 paths; prohibited-inference items 10 and 11, and the model-and-parser part of item 18. The persisted parts of HD-7 and item 18 are verified as their consumers arrive (WP2–WP4) and are **mandatory at the final integration gate (WP6)**.
 
-**Status:** documented; the gate wording awaits owner approval.
+**Status:** **approved by the owner.** The staged gate wording above was previously approved by the owner and is
+not awaiting another decision (recorded under the Stage A revision direction, §11). Plan §10's WP1 gate text is
+to be updated to this wording in a documentation commit when WP1 acceptance is recorded.
 
 ---
 
