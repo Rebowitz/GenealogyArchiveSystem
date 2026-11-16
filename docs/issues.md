@@ -82,7 +82,7 @@ TO.
 | | |
 |---|---|
 | Found | 2026-11-16, registering the Phase 3 row locks (LO-1 to LO-3) |
-| Status | **OPEN: documentation precision; reported for the reviewer.** No behaviour change. |
+| Status | **OPEN, escalated.** The independent WP1 audit showed that the premise below is wrong across sessions (finding WP1-R1, BLOCKING). The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md) (D-LP-1…D-LP-4) and is not implemented. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
 
 **Cause.**
 - Clarifications §5.5.3 rule 1 says rows within one level are locked in ascending UUID order. It also defines L1
@@ -92,6 +92,8 @@ TO.
   - in the new-Record branch, it re-locks the classification-source row after the Files.
 - Phase 3's own safety comes from locking the capture session first. Every multi-row path holds the session lock
   before locking any rows.
+  *(Corrected 2026-11-16: this holds within one session only. The audit's Scenarios A and B are cross-session
+  cycles; see the proposal.)*
 
 **Effect on Phase 4.** None on deadlock freedom.
 - A Phase 4 writer takes at most one L1 lock, on the Record, and takes it first.
