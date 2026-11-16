@@ -338,3 +338,17 @@ analysis, examples and alternatives: [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`]
 | **D4-25 ⚠ (new)** | Calendar UNSPECIFIED is never assumed Gregorian or Julian; the envelope covers both readings. | §7 C-4 |
 | **D4-26 ⚠ (new)** | "YYYY-YYYY" is proposed as BETWEEN; FROM_TO offered at confirmation; never decided silently. | §7 C-5 |
 | **D4-27 ⚠ (new)** | Sanction the explicit, previewed restriction of linked Mentions, collectives and identity proposals when a Person is restricted, as distinct from D3-04's prohibited automatic propagation. | §7 C-1, C-2 |
+
+### Revision 2: final architectural corrections (PROPOSED, 2026-11-15)
+
+**Not approved.** These supersede the matching rows of the table above. See clarifications §2.2–§2.6, §5.5 and §10.
+
+| Decision | Revised recommendation (PROPOSED) |
+|---|---|
+| D4-04 ⚠ | Adds: a dual year implies a MARCH_25 year start, and an explicit JANUARY_1 with a dual year is refused; any calendar may carry a dual year or MARCH_25; explicit GREGORIAN before 15 Oct 1582 is proleptic and noted; unsupported year-start styles are never mapped. |
+| D4-05 ⚠ | The stored bounds are the **calendar-unit envelope**: the convex hull of every reading left open by precision, calendar and year start. Julian/Gregorian differences are computed per date by the two calendar algorithms, never as a constant; the earlier "at most 13 days" is withdrawn. ABOUT, ESTIMATED, CALCULATED and "?" never move the bounds. Phase 7 applies a versioned, query-time tolerance per modifier, labels approximate matches and never writes back. |
+| D4-16 ⚠ | The invariant also covers collective anchors and named Mentions, and is enforced by deferred commit-time constraint triggers. |
+| D4-25 ⚠ | An UNSPECIFIED calendar keeps both readings and is not narrowed by era. |
+| **D4-27 ⚠** | The restriction protocol of clarifications §5.5: persisted preview with item `row_version`s; one-transaction confirmation; recompute and compare, where any difference means STALE and nothing is applied; global lock order (Person before Mention before collective before identity proposal, UUID order within each); deferred integrity triggers; idempotent, retryable confirmation; large operations run as one job transaction; an absolute ceiling; never chunked. |
+| **D4-28 ⚠ (new)** | `MARCH_25_LAST_YEAR`, proposed 1750, bounds year-start widening for an UNSPECIFIED year start. This is a regional fact; the owner chooses the value. |
+| **D4-29 (new)** | Re-proposing a rejected candidate creates a new attributed row and requires a rationale. The earlier rejection is shown and never blocks. |

@@ -425,6 +425,11 @@ These rows add to or replace the rows above where they cover the same requiremen
 | P-003 | `ProhibitedInferenceIT.p003_noCrossObjectDateValidation` | **Partial**; **Phase 6** verifies Birth 1849 / Marriage 1852 with no warning |
 | P-005 | as above | Complete for relationships; **Phase 5** verifies competing Claims |
 | EV-003 | `HistoricalDateIT.recordFilingCaptureDatesDistinct` | **Partial**; **Phase 6** adds Event date |
+| D-001…D-005, §12 (Rev. 2) | `HistoricalDateTest` HD-1…HD-6 (clarifications §10.5): 25 worked examples with JDNs, calendar fixed points and cross-checks, envelope properties, year start and dual year, per-calendar day validity, integrity scan | Full |
+| C-004, SEC-008 (Rev. 2) | `CandidateResolutionConcurrencyIT` CR-1…CR-7 (§10.1) | Full |
+| C-005, A-006 (Rev. 2) | `CandidateReproposalIT` RP-1…RP-8 (§10.2) | Full |
+| P-008, SEC-004 (Rev. 2) | `CollectiveRestrictionLifecycleIT` CL-1…CL-10 (§10.3) | Full |
+| SEC-004, D4-27 (Rev. 2) | `PersonRestrictionOperationIT` RO-1…RO-14 (§10.4) | Full |
 
 ### 9.2 Negative tests for prohibited historical inference (`ProhibitedInferenceIT`)
 
