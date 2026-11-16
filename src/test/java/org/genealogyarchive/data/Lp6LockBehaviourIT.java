@@ -43,6 +43,8 @@ class Lp6LockBehaviourIT {
     private HikariDataSource ds;
     private ExecutorService pool;
     private final List<Connection> sessions = new ArrayList<>();
+    /** Backend pids captured when each session opens: a connection busy in another thread cannot be queried. */
+    private final java.util.Map<Connection, Integer> pids = new java.util.IdentityHashMap<>();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -180,6 +182,11 @@ class Lp6LockBehaviourIT {
             st.execute("SET lock_timeout = '20s'");
         }
         c.commit();
+        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery("SELECT pg_backend_pid()")) {
+            rs.next();
+            pids.put(c, rs.getInt(1));
+        }
+        c.commit();
         return c;
     }
 
@@ -207,11 +214,8 @@ class Lp6LockBehaviourIT {
         return pool.submit(call);
     }
 
-    private int pid(Connection c) throws SQLException {
-        try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery("SELECT pg_backend_pid()")) {
-            rs.next();
-            return rs.getInt(1);
-        }
+    private int pid(Connection c) {
+        return pids.get(c);
     }
 
     private List<Integer> blockersOf(String application) throws SQLException {
