@@ -93,6 +93,92 @@ class LockSequenceIT {
         assertThat(all).as("no Phase 3 path takes a Phase 4 lock").allMatch(a -> a.level() == Level.L1_PHASE3);
     }
 
+    // ---- WP1-R3: rejection before the blocking SQL runs ----------------------------------------------
+
+    /**
+     * Two transactions each hold a File FOR SHARE and then ask for FOR UPDATE on it: executed, the two upgrades
+     * would deadlock. The guard must reject both before any blocking SQL is sent, so each fails at once with a
+     * {@link LockSequence.LockOrderViolation} rather than a lock timeout or a PostgreSQL deadlock error.
+     */
+    @Test
+    void wp1r3_concurrentLevel1ShareHoldersCannotUpgrade() throws Exception {
+        ArchivalFile file = rx.file();
+        ArchivalFileRepository files = rx.records().context().files();
+        org.springframework.transaction.support.TransactionTemplate tx = rx.records().context().tx();
+        org.springframework.jdbc.core.simple.JdbcClient jdbc = org.springframework.jdbc.core.simple.JdbcClient.create(rx.fx.ds);
+        java.util.concurrent.CyclicBarrier bothShared = new java.util.concurrent.CyclicBarrier(2);
+        java.util.concurrent.Callable<Throwable> upgrader = () -> {
+            try {
+                tx.executeWithoutResult(status -> {
+                    jdbc.sql("SET LOCAL lock_timeout = '5s'").update();
+                    files.lockShared(file.fileId());
+                    await(bothShared);
+                    files.lock(file.fileId());
+                });
+                return null;
+            } catch (Throwable e) {
+                return e;
+            }
+        };
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            long start = System.nanoTime();
+            java.util.concurrent.Future<Throwable> a = pool.submit(upgrader);
+            java.util.concurrent.Future<Throwable> b = pool.submit(upgrader);
+            Throwable ea = a.get(30, java.util.concurrent.TimeUnit.SECONDS);
+            Throwable eb = b.get(30, java.util.concurrent.TimeUnit.SECONDS);
+            long millis = (System.nanoTime() - start) / 1_000_000;
+            assertThat(ea).isInstanceOf(LockSequence.LockOrderViolation.class).hasMessageContaining("upgrade");
+            assertThat(eb).isInstanceOf(LockSequence.LockOrderViolation.class).hasMessageContaining("upgrade");
+            assertThat(millis).as("rejected before waiting for the other holder").isLessThan(5_000);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** A single transaction: the upgrade is refused while another transaction holds the row FOR SHARE. */
+    @Test
+    void wp1r3_theGuardRejectsBeforeExecutingBlockingSql() throws Exception {
+        ArchivalFile file = rx.file();
+        ArchivalFileRepository files = rx.records().context().files();
+        org.springframework.transaction.support.TransactionTemplate tx = rx.records().context().tx();
+        org.springframework.jdbc.core.simple.JdbcClient jdbc = org.springframework.jdbc.core.simple.JdbcClient.create(rx.fx.ds);
+        java.util.concurrent.CountDownLatch held = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        Thread holder = new Thread(() -> tx.executeWithoutResult(status -> {
+            files.lockShared(file.fileId());
+            held.countDown();
+            try {
+                release.await(30, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        holder.start();
+        try {
+            assertThat(held.await(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            long start = System.nanoTime();
+            Throwable e = org.assertj.core.api.Assertions.catchThrowable(() -> tx.executeWithoutResult(status -> {
+                jdbc.sql("SET LOCAL lock_timeout = '5s'").update();
+                files.lockShared(file.fileId());
+                files.lock(file.fileId());
+            }));
+            assertThat(e).isInstanceOf(LockSequence.LockOrderViolation.class);
+            assertThat((System.nanoTime() - start) / 1_000_000).as("no wait on the other holder").isLessThan(5_000);
+        } finally {
+            release.countDown();
+            holder.join(30_000);
+        }
+    }
+
+    private static void await(java.util.concurrent.CyclicBarrier barrier) {
+        try {
+            barrier.await(30, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private static int indexOf(List<Acquisition> q, String table) {
         for (int i = 0; i < q.size(); i++) {
             if (q.get(i).table().equals(table)) {

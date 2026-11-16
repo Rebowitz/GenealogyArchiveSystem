@@ -17,11 +17,17 @@ import java.util.function.Consumer;
  * <ol>
  *   <li>Locks are acquired in non-decreasing level order; levels may be skipped, never reversed.</li>
  *   <li>Within a level above L1, rows are locked in ascending UUID order (PostgreSQL's unsigned byte order).</li>
- *   <li>A row is locked at its final strength the first time: no SHARE to UPDATE upgrade.</li>
+ *   <li>A row is locked at its final strength the first time: no SHARE to UPDATE upgrade, at any level.</li>
+ *   <li>A re-lock of a row already held at the same or a weaker strength never waits; it is recorded, skips the
+ *       UUID check of its level, and is still rejected after a higher level (it would reveal a mis-ordered path).
+ *       A row is always announced at the same level.</li>
  * </ol>
+ * L7 (reference rows locked only implicitly by foreign-key checks) has no level here: no writer locks an L7 row
+ * explicitly through this class. A level and its checks must be added before any writer does (WP1-R3).
  * L1 is the accepted Phase 3 chain (capture session, worksheet rows, Files, Archival Record), kept exactly as
- * Phase 3 accepted it; its internal order is Phase 3's own and is not re-checked here. What is checked is that no
- * L1 lock follows a lock of a higher level.
+ * Phase 3 accepted it; its internal order is Phase 3's own and is not re-checked here (GAS-P4-002; the locking
+ * protocol proposal for WP1-R1 is pending owner approval). What is checked at L1 is that no L1 lock follows a lock
+ * of a higher level and that no L1 lock is upgraded.
  *
  * <p>The guard ({@code -Dgas.lockOrderGuard=true}, set for every test run) throws on a violation, so a mis-ordered
  * path fails visibly in the test suites (LO-2). Observers receive each transaction's sequence when it completes
@@ -123,21 +129,39 @@ public final class LockSequence {
         }
 
         private void check(Acquisition a) {
-            for (Acquisition held : acquisitions) {
-                if (held.table().equals(a.table()) && held.id().equals(a.id())) {
-                    if (held.mode() == Mode.SHARE && a.mode() == Mode.UPDATE && a.level() != Level.L1_PHASE3) {
-                        throw new LockOrderViolation("Lock upgrade from SHARE to UPDATE on " + a.table() + " "
-                                + a.id() + ": lock the row at its final strength first");
-                    }
-                    return;
-                }
-            }
             if (acquisitions.isEmpty()) {
                 return;
             }
-            Acquisition last = acquisitions.get(acquisitions.size() - 1);
             Level highest = acquisitions.stream().map(Acquisition::level).max(Enum::compareTo).orElseThrow();
+            Acquisition held = null;
+            for (Acquisition h : acquisitions) {
+                if (h.table().equals(a.table()) && h.id().equals(a.id())) {
+                    held = h;
+                    break;
+                }
+            }
+            if (held != null) {
+                // Re-lock of a row this transaction already holds. Its strength must not rise at any level,
+                // including L1: two holders of SHARE upgrading to UPDATE deadlock each other (WP1-R3).
+                if (held.level() != a.level()) {
+                    throw new LockOrderViolation(a.table() + " " + a.id() + " announced at " + a.level()
+                            + " but first locked at " + held.level());
+                }
+                if (strongest(a.table(), a.id()) == Mode.SHARE && a.mode() == Mode.UPDATE) {
+                    throw new LockOrderViolation("Lock upgrade from SHARE to UPDATE on " + a.table() + " " + a.id()
+                            + ": lock the row at its final strength the first time");
+                }
+                // A same-strength or weaker re-lock never waits (the row is already held), so it is exempt from
+                // the UUID-order check within its level. It is not exempt from the level order: a re-lock below a
+                // higher level already held marks a mis-ordered code path and is rejected like a new lock.
+                if (a.level().compareTo(highest) < 0) {
+                    throw new LockOrderViolation("Re-lock of " + a.table() + " " + a.id() + " at " + a.level()
+                            + " after " + highest + " was locked");
+                }
+                return;
+            }
             if (a.level().compareTo(highest) < 0) {
+                Acquisition last = acquisitions.get(acquisitions.size() - 1);
                 throw new LockOrderViolation("Lock order reversed: " + a.level() + " " + a.table() + " after "
                         + highest + " (" + last.table() + ")");
             }
@@ -149,6 +173,16 @@ public final class LockSequence {
                             + " after " + max);
                 }
             }
+        }
+
+        private Mode strongest(String table, UUID id) {
+            Mode m = Mode.SHARE;
+            for (Acquisition h : acquisitions) {
+                if (h.table().equals(table) && h.id().equals(id) && h.mode() == Mode.UPDATE) {
+                    m = Mode.UPDATE;
+                }
+            }
+            return m;
         }
     }
 

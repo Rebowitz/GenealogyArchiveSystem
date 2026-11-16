@@ -98,6 +98,70 @@ class LockSequenceTest {
                 .doesNotThrowAnyException();
     }
 
+    // ---- WP1-R3: upgrades and re-locks at every level --------------------------------------------
+
+    private static Acquisition l1(UUID id, Mode mode) {
+        return new Acquisition(Level.L1_PHASE3, "archival_file", id, mode);
+    }
+
+    @Test
+    void wp1r3_aLevel1ShareToUpdateUpgradeIsRejected() {
+        Tracker t = new Tracker(true);
+        t.acquire(l1(LOW, Mode.SHARE));
+        assertThatThrownBy(() -> t.acquire(l1(LOW, Mode.UPDATE)))
+                .isInstanceOf(LockSequence.LockOrderViolation.class).hasMessageContaining("upgrade");
+    }
+
+    @Test
+    void wp1r3_aLevel1UpgradeAfterAHigherLevelIsRejected() {
+        Tracker t = new Tracker(true);
+        t.acquire(l1(LOW, Mode.SHARE));
+        t.acquire(a(Level.L2_PERSON, HIGH, Mode.UPDATE));
+        assertThatThrownBy(() -> t.acquire(l1(LOW, Mode.UPDATE)))
+                .isInstanceOf(LockSequence.LockOrderViolation.class).hasMessageContaining("upgrade");
+    }
+
+    @Test
+    void wp1r3_aPreviouslySeenRowCannotBypassTheLevelOrder() {
+        Tracker t = new Tracker(true);
+        t.acquire(l1(LOW, Mode.SHARE));
+        t.acquire(a(Level.L2_PERSON, HIGH, Mode.UPDATE));
+        assertThatThrownBy(() -> t.acquire(l1(LOW, Mode.SHARE)))
+                .as("even a same-strength re-lock below a higher level")
+                .isInstanceOf(LockSequence.LockOrderViolation.class).hasMessageContaining("Re-lock");
+    }
+
+    @Test
+    void wp1r3_aNewLevel1ResourceAfterLevel2IsRejected() {
+        Tracker t = new Tracker(true);
+        t.acquire(l1(LOW, Mode.SHARE));
+        t.acquire(a(Level.L2_PERSON, HIGH, Mode.SHARE));
+        assertThatThrownBy(() -> t.acquire(l1(HIGH, Mode.SHARE)))
+                .isInstanceOf(LockSequence.LockOrderViolation.class).hasMessageContaining("reversed");
+    }
+
+    @Test
+    void wp1r3_harmlessReLocksAreAllowedAndRecorded() {
+        Tracker t = new Tracker(true);
+        assertThatCode(() -> {
+            t.acquire(l1(LOW, Mode.UPDATE));
+            t.acquire(l1(LOW, Mode.SHARE));            // weaker, same level
+            t.acquire(l1(LOW, Mode.UPDATE));           // same strength as held
+            t.acquire(a(Level.L3_MENTION, HIGH, Mode.UPDATE));
+            t.acquire(a(Level.L3_MENTION, TOP, Mode.UPDATE));
+            t.acquire(a(Level.L3_MENTION, HIGH, Mode.SHARE));  // held row: exempt from the UUID check
+        }).doesNotThrowAnyException();
+        assertThat(t.acquisitions()).hasSize(6);
+    }
+
+    @Test
+    void wp1r3_aRowIsAlwaysAnnouncedAtOneLevel() {
+        Tracker t = new Tracker(true);
+        t.acquire(new Acquisition(Level.L2_PERSON, "person", LOW, Mode.SHARE));
+        assertThatThrownBy(() -> t.acquire(new Acquisition(Level.L3_MENTION, "person", LOW, Mode.SHARE)))
+                .isInstanceOf(LockSequence.LockOrderViolation.class).hasMessageContaining("first locked at");
+    }
+
     @Test
     void lo2_level1KeepsTheAcceptedPhase3OrderUnchecked() {
         // Phase 3 grouping locks worksheet rows and Files in plan order and may lock a classification row after the

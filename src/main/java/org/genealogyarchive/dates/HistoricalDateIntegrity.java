@@ -5,8 +5,9 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The envelope integrity scan (HD-6): recomputes each stored envelope from its interpretation and reports any
- * mismatch or invalid stored interpretation. It never repairs anything; a mismatch is an integrity finding to be
+ * The Historical Date integrity scan (HD-6): validates every stored interpretation, uninterpreted dates included,
+ * and recomputes each envelope. It reports invalid rows (for example an orphan dual year on an uninterpreted date,
+ * or a ghost second point, WP1-R2) and envelope mismatches. It never repairs anything; a finding is to be
  * investigated (fail visibly).
  */
 public final class HistoricalDateIntegrity {

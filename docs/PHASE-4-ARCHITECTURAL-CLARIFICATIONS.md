@@ -1075,11 +1075,11 @@ on Windows and Linux.
 
 **Decision.** Once Phase 4 is installed, physical deletion of Record Roles is replaced by a recoverable WITHDRAWN
 state. The analysis and the rejected options A and B are in [`issues.md`](issues.md). This section defines the
-design under that decision. It supersedes the Role-removal behaviour of ADR-0011 §5 for archives at V0027 and
+design under that decision. It supersedes the Role-removal behaviour of ADR-0011 §5 for archives at V0028 and
 later; ADR-0011 itself is not edited.
 
 ### 11.1 Data and migration (requirements 1 and 4)
-- **`record_role` gains, additively in V0027:**
+- **`record_role` gains, additively in V0028:**
   - `lifecycle text NOT NULL DEFAULT 'ACTIVE' CHECK (lifecycle IN ('ACTIVE','WITHDRAWN'))`;
   - `withdrawn_at timestamptz` and `withdrawn_by uuid` (system-set; both NULL exactly when ACTIVE, by CHECK).
 - **Existing rows.** PostgreSQL 11+ adds a column with a constant default without rewriting rows. Every existing

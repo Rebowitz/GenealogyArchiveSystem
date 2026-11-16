@@ -120,6 +120,58 @@ class HistoricalDateIT {
         assertThat(repository.find(victim.id()).orElseThrow()).as("nothing repaired").isEqualTo(corrupted);
     }
 
+    /**
+     * WP1-R2: rows that V0024's NULL-unsafe CHECK let through (an orphan dual year on an uninterpreted date, a ghost
+     * second point on a POINT) are read exactly as stored and reported by the integrity scan, never concealed.
+     */
+    @Test
+    void wp1r2_theScanReportsMalformedLegacyRowsFromV0024() {
+        TestDatabase legacy = TestDatabase.createFresh();
+        try (HikariDataSource lds = DataSources.create(legacy.settings(), "test")) {
+            SchemaMigrator.upTo(lds, "0024").migrate();
+            JdbcClient raw = JdbcClient.create(lds);
+            UUID orphan = UUID.randomUUID();
+            UUID ghost = UUID.randomUUID();
+            UUID unknown = UUID.randomUUID();
+            raw.sql("INSERT INTO gas.historical_date (historical_date_id, expression, form, p1_dual_year, created_at)"
+                    + " VALUES (:id, 'orphan dual year', 'NOT_INTERPRETED', 1721, now())").param("id", orphan).update();
+            raw.sql("INSERT INTO gas.historical_date (historical_date_id, expression, form, p1_year, p1_modifier,"
+                    + " p2_dual_year, interpretation_origin, interpreted_expression, confirmed_at, earliest_jdn, latest_jdn,"
+                    + " created_at) VALUES (:id, '1847', 'POINT', 1847, 'EXACT', 1849, 'RESEARCHER', '1847', now(),"
+                    + " 2395663, 2396123, now())").param("id", ghost).update();
+            raw.sql("INSERT INTO gas.historical_date (historical_date_id, expression, form, p1_dual_year,"
+                    + " interpretation_origin, interpreted_expression, confirmed_at, created_at) VALUES (:id, 'unknown',"
+                    + " 'UNKNOWN', 1801, 'RESEARCHER', 'unknown', now(), now())").param("id", unknown).update();
+            HistoricalDateRepository legacyRepository = new HistoricalDateRepository(lds);
+
+            StoredHistoricalDate o = legacyRepository.find(orphan).orElseThrow();
+            assertThat(o.interpretation().first()).as("the orphan dual year is not dropped by the mapping")
+                    .isNotNull().extracting(DatePoint::dualYear).isEqualTo(1721);
+            StoredHistoricalDate g = legacyRepository.find(ghost).orElseThrow();
+            assertThat(g.interpretation().second()).as("the ghost second point is not dropped")
+                    .isNotNull().extracting(DatePoint::dualYear).isEqualTo(1849);
+
+            List<HistoricalDateIntegrity.Finding> findings = HistoricalDateIntegrity.check(legacyRepository.all());
+            assertThat(findings).extracting(HistoricalDateIntegrity.Finding::historicalDateId)
+                    .containsExactlyInAnyOrder(orphan, ghost, unknown);
+            assertThat(findings).allSatisfy(f -> assertThat(f.problem()).contains("not valid"));
+        } finally {
+            legacy.close();
+        }
+    }
+
+    @Test
+    void wp1r2_aValidDualYearPersistsAndReadsBack() {
+        StoredHistoricalDate d = StoredHistoricalDate.confirmed(UUID.randomUUID(), "12 Feb 1720/21",
+                DateExpressionParser.propose("12 Feb 1720/21").orElseThrow(), InterpretationOrigin.PARSER_CONFIRMED,
+                NOW, null);
+        repository.insert(d);
+        StoredHistoricalDate read = repository.find(d.id()).orElseThrow();
+        assertThat(read).isEqualTo(d);
+        assertThat(read.interpretation().first().dualYear()).isEqualTo(1721);
+        assertThat(HistoricalDateIntegrity.check(repository.all())).isEmpty();
+    }
+
     @Test
     void anInvalidInterpretationIsNeverStored() {
         assertThatThrownBy(() -> StoredHistoricalDate.confirmed(UUID.randomUUID(), "31 Feb 1847",

@@ -388,9 +388,10 @@ cases.
 | Migration | Content |
 |---|---|
 | V0024 | Vocabularies (person name types, relationship types with category, parentage qualifiers, place types with category, place-name types; spec-named seeds only, D4-11; place types COUNTY and STATE per U-1; place-name types HISTORICAL, CURRENT, VARIANT per U-2) and `historical_date` (§4.1) |
-| V0025 | `person`, `person_name`, `person_relationship`, `person_identity_proposal`; series `P` |
-| V0026 | `place`, `place_name`, `jurisdiction_link` (kind, basis); series `PL`. No formation table (D4-30). |
-| V0027 | `mention`, `candidate_resolution`, `collective_reference`, `collective_named_mention`, `collective_member` (series `M`, `CP`); `restriction_operation` and items; deferred restriction-invariant triggers; `archival_record.record_date_id` and `filing_date_id`; `record_role` lifecycle columns and `BEFORE DELETE` trigger (GAS-P4-PLAN-001 C) |
+| V0025 | **WP1 audit correction WP1-R2:** NULL-safe Historical Date point constraints (forward-only; V0024 unchanged). Migration numbers from here on are one higher than in the accepted plan; nothing else changes. |
+| V0026 | `person`, `person_name`, `person_relationship`, `person_identity_proposal`; series `P` |
+| V0027 | `place`, `place_name`, `jurisdiction_link` (kind, basis); series `PL`. No formation table (D4-30). |
+| V0028 | `mention`, `candidate_resolution`, `collective_reference`, `collective_named_mention`, `collective_member` (series `M`, `CP`); `restriction_operation` and items; deferred restriction-invariant triggers; `archival_record.record_date_id` and `filing_date_id`; `record_role` lifecycle columns and `BEFORE DELETE` trigger (GAS-P4-PLAN-001 C) |
 
 - **Forward-only and additive.** Migrations only add tables, columns, nullable foreign keys, triggers and
   vocabulary seeds. **No accepted row is updated or reinterpreted** (UP-006):
@@ -403,7 +404,7 @@ cases.
   installation guide keeps the existing instruction to take a PostgreSQL backup before upgrading; the
   backup/restore product feature remains Phase 8.
 - **Upgrade test (`Phase4SchemaIT`).** A V0023 database with Records, Roles (with and without a party as written),
-  Citations, grouping runs, applied worksheet rows, Files, a tombstone and a quarantine object upgrades to V0027.
+  Citations, grouping runs, applied worksheet rows, Files, a tombstone and a quarantine object upgrades to V0028.
   Every accepted table snapshot is unchanged and the new tables are empty.
 - **Schema pinning.** `Phase3SchemaIT` is pinned to V0023, following the accepted pattern.
 - **Rollback of the feature itself.** No Phase 4 data is written by migration, so declining Phase 4 means restoring
@@ -568,9 +569,9 @@ Names, Persons, Places, resolutions) and that no Change History entry of a forbi
 |---|---|---|
 | WP0 | Decisions and U-1…U-3 approved (2026-11-15). [ADR-0012](architecture/ADR-0012-people-dates-places.md) and its data-dictionary drafts are written. Run the prefix compatibility check in WP1. | **Final independent architectural review: SATISFIED** (accepted 2026-11-15; PR4-R1…PR4-R5 closed; GAS-P4-PLAN-001 resolved). **Remaining: a separate owner implementation authorization.** |
 | WP1 | Historical Date model, JDN calendar algorithms, envelope, parser and validation (unit-heavy); the `LockSequence` helper with the Phase 3 locks registered at L1 (LO-1…LO-3); V0024 | `HistoricalDateTest` HD-1…HD-7 green; LO-1…LO-3 for Phase 3 paths; prohibited-inference items 10, 11, 18 |
-| WP2 | People: Person, Names, relationships, identity proposals; V0025 | P-001…P-007, P-009, P-010; prohibited-inference items 1–5, 8, 12, 13, 20 |
-| WP3 | Places: Place, Names, jurisdiction links (kind, basis); V0026; no formation links | L-001…L-003; `PlaceIT` D4-18 scenarios; `countyFormationExpressedByContainmentAndNote`; items 15, 19 |
-| WP4 | Mentions, Candidate Resolution, collective references, Record Role links, **Record Role withdrawal and restoration** (GAS-P4-PLAN-001 C), Record date interpretation, restriction tables and deferred invariant triggers; V0027 | C-001…C-006, A-006, P-008; CR-1…CR-7, RP-1…RP-8, RW-1…RW-10; items 6, 7, 9, 14, 16, 17 |
+| WP2 | People: Person, Names, relationships, identity proposals; V0026 | P-001…P-007, P-009, P-010; prohibited-inference items 1–5, 8, 12, 13, 20 |
+| WP3 | Places: Place, Names, jurisdiction links (kind, basis); V0027; no formation links | L-001…L-003; `PlaceIT` D4-18 scenarios; `countyFormationExpressedByContainmentAndNote`; items 15, 19 |
+| WP4 | Mentions, Candidate Resolution, collective references, Record Role links, **Record Role withdrawal and restoration** (GAS-P4-PLAN-001 C), Record date interpretation, restriction tables and deferred invariant triggers; V0028 | C-001…C-006, A-006, P-008; CR-1…CR-7, RP-1…RP-8, RW-1…RW-10; items 6, 7, 9, 14, 16, 17 |
 | WP5 | Browser workflows, restriction (policy S and the D4-27 protocol), history visibility | `PeopleWebIT`, `PlacesWebIT`, `PeopleRestrictionIT` 1–11, CL-1…CL-11, RO-1…RO-18, LO-4…LO-7, RW-11 (Role withdraw and restore controls) |
 | WP6 | Reference fixture, full CI matrix, completion report (`PHASE-4-COMPLETION.md`), draft PR, then stop for the independent Codex audit | All four jobs green, every job's results checked individually |
 
@@ -612,7 +613,7 @@ notes:
 | U-3 | D4-27 numeric values | **Resolved:** configurable installation settings `people.restriction.*` with defaults 30 min, 5 s, 30 s, 1,000, 10 min, 50,000; validated by `check-config` (ADR-0012 §8). The ceiling is capped at 50,000; raising it needs an approved ADR revision (PR4-R1). Tests set their own values within the cap. |
 | U-4 | Year-start widening in every period (approved behaviour) | Phase 7 search design; no Phase 4 change |
 | U-5 | Phase 6 must explicitly carry formation and boundary-change relationships | Phase 6 planning |
-| GAS-P4-PLAN-001 | **Resolved: Option C approved (2026-11-15).** Record Role withdrawal replaces physical deletion. | V0027 additions; WP4 implements withdraw and restore with RW-1…RW-11; Cl. §11 |
+| GAS-P4-PLAN-001 | **Resolved: Option C approved (2026-11-15).** Record Role withdrawal replaces physical deletion. | V0028 additions; WP4 implements withdraw and restore with RW-1…RW-11; Cl. §11 |
 
 ### 11.3 Acceptance risks
 | Risk | Effect | Mitigation |

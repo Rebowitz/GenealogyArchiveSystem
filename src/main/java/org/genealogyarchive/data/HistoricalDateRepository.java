@@ -72,10 +72,18 @@ public final class HistoricalDateRepository {
                 .param("id", id).query(DATE).optional();
     }
 
-    /** Every date that carries an interpretation (for the envelope integrity scan, HD-6). */
+    /** Every date that carries an interpretation. */
     public List<StoredHistoricalDate> interpreted() {
         return jdbc.sql("SELECT " + COLUMNS + " FROM gas.historical_date WHERE form <> 'NOT_INTERPRETED'"
                 + " ORDER BY historical_date_id").query(DATE).list();
+    }
+
+    /**
+     * Every stored date, uninterpreted ones included, for the integrity scan (HD-6, WP1-R2): a malformed row of any
+     * form must be seen, not filtered out.
+     */
+    public List<StoredHistoricalDate> all() {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM gas.historical_date ORDER BY historical_date_id").query(DATE).list();
     }
 
     private static StoredHistoricalDate map(ResultSet rs, int n) throws SQLException {
@@ -93,13 +101,22 @@ public final class HistoricalDateRepository {
                 rs.getLong("row_version"));
     }
 
+    /**
+     * A point exactly as stored. It is absent only when every one of its fields is empty; any stored field (an
+     * orphan dual year, an uncertain flag, a ghost second point) yields a point, so validation and the integrity
+     * scan see a malformed row instead of having it concealed by the mapping (WP1-R2).
+     */
     private static DatePoint point(ResultSet rs, String prefix) throws SQLException {
         Integer year = rs.getObject(prefix + "year", Integer.class);
-        if (year == null) {
+        Integer month = rs.getObject(prefix + "month", Integer.class);
+        Integer day = rs.getObject(prefix + "day", Integer.class);
+        String modifier = rs.getString(prefix + "modifier");
+        boolean uncertain = rs.getBoolean(prefix + "uncertain");
+        Integer dual = rs.getObject(prefix + "dual_year", Integer.class);
+        if (year == null && month == null && day == null && modifier == null && !uncertain && dual == null) {
             return null;
         }
-        return new DatePoint(year, rs.getObject(prefix + "month", Integer.class),
-                rs.getObject(prefix + "day", Integer.class), DateModifier.valueOf(rs.getString(prefix + "modifier")),
-                rs.getBoolean(prefix + "uncertain"), rs.getObject(prefix + "dual_year", Integer.class));
+        return new DatePoint(year, month, day, modifier == null ? null : DateModifier.valueOf(modifier), uncertain,
+                dual);
     }
 }

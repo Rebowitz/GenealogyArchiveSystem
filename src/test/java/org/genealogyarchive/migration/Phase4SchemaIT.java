@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 class Phase4SchemaIT {
 
     private static final String USER = "66666666-6666-4666-8666-666666666666";
+    private static final String ROW = "e0000000-0000-4000-8000-000000000001";
 
     private TestDatabase db;
     private HikariDataSource ds;
@@ -163,6 +164,96 @@ class Phase4SchemaIT {
         // Dates are permanent; identity is immutable.
         assertThat(failure("DELETE FROM historical_date")).contains("cannot be removed");
         assertThat(failure("UPDATE historical_date SET historical_date_id = gen_random_uuid()")).contains("Immutable");
+    }
+
+    // ---- WP1-R2: NULL-safe point constraints (V0025) ----------------------------------------------
+
+    private static final String CONFIRMED_COLUMNS = "interpretation_origin, interpreted_expression, confirmed_at, created_at";
+    private static final String CONFIRMED_VALUES = "'RESEARCHER', 'x', now(), now()";
+
+    @Test
+    void wp1r2_orphanDualYearsAreRejectedOnInsertAndUpdate() throws Exception {
+        SchemaMigrator.upTo(ds, "0025").migrate();
+        assertThat(failure("INSERT INTO historical_date (historical_date_id, expression, form, p1_dual_year, created_at)"
+                + " VALUES (gen_random_uuid(), 'x', 'NOT_INTERPRETED', 1721, now())")).contains("historical_date_p1_parts");
+        assertThat(failure("INSERT INTO historical_date (historical_date_id, expression, form, p1_year, p1_modifier,"
+                + " p2_dual_year, earliest_jdn, latest_jdn, " + CONFIRMED_COLUMNS + ") VALUES (gen_random_uuid(), 'x', 'POINT',"
+                + " 1847, 'EXACT', 1849, 1, 2, " + CONFIRMED_VALUES + ")")).contains("historical_date_p2_parts");
+        execute("INSERT INTO historical_date (historical_date_id, expression, form, p1_year, p1_modifier, p2_year,"
+                + " p2_modifier, earliest_jdn, latest_jdn, " + CONFIRMED_COLUMNS + ") VALUES ('" + ROW + "', 'x', 'BETWEEN',"
+                + " 1845, 'EXACT', 1849, 'EXACT', 1, 2, " + CONFIRMED_VALUES + ")");
+        assertThat(failure("UPDATE historical_date SET p1_year = NULL, p1_modifier = NULL, p1_dual_year = 1846"))
+                .isNotBlank();
+        assertThat(failure("UPDATE historical_date SET form = 'POINT', p2_year = NULL, p2_modifier = NULL, p2_dual_year = 1850"))
+                .contains("historical_date_p2_parts");
+        assertThat(failure("UPDATE historical_date SET p1_dual_year = 1847")).contains("historical_date_p1_parts");
+        execute("UPDATE historical_date SET p1_dual_year = 1846, p2_dual_year = 1850");
+        assertThat(query("SELECT p1_dual_year, p2_dual_year FROM gas.historical_date")).containsExactly("1846|1850");
+    }
+
+    @Test
+    void wp1r2_unknownAndUninterpretedCarryNoPointFields() throws Exception {
+        SchemaMigrator.upTo(ds, "0025").migrate();
+        for (String field : List.of("p1_dual_year = 1721", "p1_uncertain = true", "p2_dual_year = 1721",
+                "p2_uncertain = true")) {
+            String column = field.substring(0, field.indexOf(' '));
+            String value = field.substring(field.indexOf("= ") + 2);
+            assertThat(catchThrowable(() -> execute("INSERT INTO historical_date (historical_date_id, expression, form, "
+                    + column + ", created_at) VALUES (gen_random_uuid(), 'x', 'NOT_INTERPRETED', " + value + ", now())")))
+                    .as("NOT_INTERPRETED with " + field).isNotNull();
+            assertThat(catchThrowable(() -> execute("INSERT INTO historical_date (historical_date_id, expression, form, "
+                    + column + ", " + CONFIRMED_COLUMNS + ") VALUES (gen_random_uuid(), 'x', 'UNKNOWN', " + value + ", "
+                    + CONFIRMED_VALUES + ")"))).as("UNKNOWN with " + field).isNotNull();
+        }
+        execute("INSERT INTO historical_date (historical_date_id, expression, form, created_at) VALUES ('" + ROW
+                + "', 'x', 'NOT_INTERPRETED', now())");
+        assertThat(failure("UPDATE historical_date SET p1_dual_year = 1721")).contains("historical_date_p1_parts");
+        assertThat(failure("UPDATE historical_date SET p2_uncertain = true")).contains("historical_date_p2_parts");
+    }
+
+    @Test
+    void wp1r2_aFormWithoutASecondPointKeepsNoGhostValues() throws Exception {
+        SchemaMigrator.upTo(ds, "0025").migrate();
+        execute("INSERT INTO historical_date (historical_date_id, expression, form, p1_year, p1_modifier, earliest_jdn,"
+                + " latest_jdn, " + CONFIRMED_COLUMNS + ") VALUES ('" + ROW + "', 'x', 'POINT', 1847, 'EXACT', 1, 2, "
+                + CONFIRMED_VALUES + ")");
+        for (String ghost : List.of("p2_dual_year = 1849", "p2_uncertain = true", "p2_modifier = 'EXACT'", "p2_month = 3")) {
+            assertThat(catchThrowable(() -> execute("UPDATE historical_date SET " + ghost))).as(ghost).isNotNull();
+        }
+        assertThat(query("SELECT conname FROM pg_constraint WHERE conname = 'historical_date_points_by_form'"))
+                .containsExactly("historical_date_points_by_form");
+    }
+
+    @Test
+    void wp1r2_upgradeFromV0024KeepsValidDatesUnchanged() throws Exception {
+        SchemaMigrator.upTo(ds, "0024").migrate();
+        execute("INSERT INTO historical_date (historical_date_id, expression, form, p1_year, p1_month, p1_day, p1_modifier,"
+                + " p1_dual_year, calendar, earliest_jdn, latest_jdn, " + CONFIRMED_COLUMNS + ") VALUES ('" + ROW
+                + "', '12 Feb 1720/21', 'POINT', 1720, 2, 12, 'EXACT', 1721, 'JULIAN', 2349696, 2349696, " + CONFIRMED_VALUES + ")");
+        execute("INSERT INTO historical_date (historical_date_id, expression, form, created_at) VALUES "
+                + "(gen_random_uuid(), 'in the fifth year of the reign', 'NOT_INTERPRETED', now())");
+        List<String> before = query("SELECT * FROM gas.historical_date ORDER BY 1");
+        SchemaMigrator.MigrationReport report = SchemaMigrator.upTo(ds, "0025").migrate();
+        assertThat(report.fromVersion()).isEqualTo("0024");
+        assertThat(report.migrationsApplied()).isEqualTo(1);
+        assertThat(query("SELECT * FROM gas.historical_date ORDER BY 1")).isEqualTo(before);
+    }
+
+    @Test
+    void wp1r2_upgradeStopsVisiblyOnMalformedRowsAndChangesNothing() throws Exception {
+        SchemaMigrator.upTo(ds, "0024").migrate();
+        execute("INSERT INTO historical_date (historical_date_id, expression, form, p1_dual_year, created_at) VALUES ('"
+                + ROW + "', 'orphan', 'NOT_INTERPRETED', 1721, now())");
+        List<String> before = query("SELECT * FROM gas.historical_date ORDER BY 1");
+        Throwable t = catchThrowable(() -> SchemaMigrator.upTo(ds, "0025").migrate());
+        StringBuilder messages = new StringBuilder();
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            messages.append(c.getMessage()).append('\n');
+        }
+        assertThat(messages.toString()).contains("V0025 stopped: 1 historical_date row(s)");
+        assertThat(query("SELECT * FROM gas.historical_date ORDER BY 1")).as("nothing repaired or deleted").isEqualTo(before);
+        assertThat(query("SELECT conname FROM pg_constraint WHERE conname = 'historical_date_points_by_form'")).isEmpty();
+        assertThat(query("SELECT max(version) FROM gas.flyway_schema_history WHERE success")).containsExactly("0024");
     }
 
     // ---- helpers ---------------------------------------------------------------------------------

@@ -234,8 +234,8 @@ register governs, then this ADR.
   shown and never blocks.
 
 ## 5a. Record Role withdrawal (GAS-P4-PLAN-001, Option C approved 2026-11-15; Cl. §11)
-This supersedes the Role-removal behaviour of ADR-0011 §5 for archives at V0027 and later. ADR-0011 is not edited.
-- **Schema (additive, V0027).**
+This supersedes the Role-removal behaviour of ADR-0011 §5 for archives at V0028 and later. ADR-0011 is not edited.
+- **Schema (additive, V0028).**
   - `record_role.lifecycle`: ACTIVE or WITHDRAWN, `NOT NULL DEFAULT 'ACTIVE'`. Existing rows are not rewritten and
     read as ACTIVE.
   - `withdrawn_at` and `withdrawn_by`: system-set, both NULL exactly when ACTIVE.
@@ -381,9 +381,10 @@ This supersedes the Role-removal behaviour of ADR-0011 §5 for archives at V0027
 | Migration | Content |
 |---|---|
 | V0024 | Vocabularies: relationship types, person name types, parentage qualifiers, place types with category, place-name types; seeds per §3 and §4. Also `historical_date`. |
-| V0025 | `person`, `person_name`, `person_relationship`, `person_identity_proposal`; series `P` |
-| V0026 | `place`, `place_name`, `jurisdiction_link`; series `PL` |
-| V0027 | `mention`, `candidate_resolution`, `collective_reference`, `collective_named_mention`, `collective_member` (series `M`, `CP`); `restriction_operation` and items; deferred invariant triggers; `archival_record.record_date_id` and `filing_date_id`; `record_role.lifecycle`, `withdrawn_at`, `withdrawn_by` and its `BEFORE DELETE` trigger (§5a) |
+| V0025 | WP1-R2 correction: NULL-safe Historical Date point constraints (forward-only) |
+| V0026 | `person`, `person_name`, `person_relationship`, `person_identity_proposal`; series `P` |
+| V0027 | `place`, `place_name`, `jurisdiction_link`; series `PL` |
+| V0028 | `mention`, `candidate_resolution`, `collective_reference`, `collective_named_mention`, `collective_member` (series `M`, `CP`); `restriction_operation` and items; deferred invariant triggers; `archival_record.record_date_id` and `filing_date_id`; `record_role.lifecycle`, `withdrawn_at`, `withdrawn_by` and its `BEFORE DELETE` trigger (§5a) |
 
 - **Forward-only, additive and transactional** (ADR-0005). No accepted row is updated or reinterpreted:
   - no date text is parsed;
