@@ -489,7 +489,7 @@ against the existing schema; no production code is involved.
 
 | Schedule | PostgreSQL 16 (builder's local server) | CI (PostgreSQL 16 and 18, Linux and Windows) |
 |---|---|---|
-| G holds F FOR SHARE; C requests F FOR UPDATE (waits, blocker = G); L inserts `record_file` (fk KEY SHARE on F) | L granted immediately; C's blockers = {G}; C granted after G commits | Reported in the checkpoint for `dc274cd` |
+| G holds F FOR SHARE; C requests F FOR UPDATE (waits, blocker = G); L inserts `record_file` (fk KEY SHARE on F) | L granted immediately; C's blockers = {G}; C granted after G commits | Passed: CI run `43831470275` at `9eb66ea`, all four jobs (PostgreSQL 16.16 and 18.7; Linux and Windows) |
 | Same with L issuing `SELECT … FOR KEY SHARE` | L granted immediately | As above |
 
 **Conclusion:** a compatible KEY SHARE does not queue behind a waiting FOR UPDATE on these versions. **This does not
@@ -506,8 +506,12 @@ dismiss SA-R1:** the SA-R1 cycle uses *granted* locks.
 
 - **Local result (PostgreSQL 16):** `ERROR 40P01 deadlock detected`, with the detail "Process G waits for … blocked
   by L; L … blocked by C; C … blocked by G".
-- The same schedule is `Lp6LockBehaviourIT.saR1_theGrantedLockCycleOfTheAcceptedProtocolDeadlocks`, run on every CI
-  job.
+- The same schedule is `Lp6LockBehaviourIT.saR1_theGrantedLockCycleOfTheAcceptedProtocolDeadlocks`. It asserts the
+  blockers by backend pid at each step and requires SQLSTATE 40P01 (a 55P03 lock timeout fails the test). It passed
+  on all four jobs of CI run `43831470275` at `9eb66ea` (PostgreSQL 16.16 and 18.7, Linux and Windows).
+- Harness correction: the first CI run (`43827802869`, at `dc274cd`) failed with 55P03 because the harness read a
+  backend pid from a connection busy in another thread. Fixed in `9eb66ea` by capturing pids at session open; the
+  database behaviour under test was not changed.
 
 ## 12. Residual risks
 
