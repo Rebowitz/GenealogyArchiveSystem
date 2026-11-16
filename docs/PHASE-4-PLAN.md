@@ -405,6 +405,27 @@ test belongs to the later phase.
 | EX-006, EX-007, EX-008 | data-dictionary drafts in ADR-0012 | Foundation (Phase 8) |
 | BI-005, BI-006 | none | Deferred to Phase 7; the Phase 4 framework is what they will use |
 
+#### 9.1a Matrix updates from the architectural clarification (PROPOSED, 2026-11-15)
+
+These rows add to or replace the rows above where they cover the same requirement. Details are in
+[`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md) §9.
+
+| Requirement | Test | Phase 4 coverage |
+|---|---|---|
+| D-001…D-005 | `HistoricalDateTest`: the 18 worked examples (clarifications §2.4) as table-driven cases: stored fields, envelope, "never stored as" | Full (D-005 round trip in Phase 8) |
+| §12 no false precision | `HistoricalDateTest.envelopeNeverNarrowerThanStatedUnit` (property-based), `…yearStartWidening`, `…unspecifiedCalendarWidening`, `…validationPerCalendar` | Full |
+| A-006 (dates) | `HistoricalDateIT.parserProposalNotStoredUntilConfirmed`, `…noParsingOnMigrationOrImport`, `…correctedExpressionMarksInterpretationStale` | Full |
+| C-003…C-005 | `CandidateResolutionIT.transitionsOnlyAsSpecified` (trigger), `…attributionSetOnce`, `…resolveDoesNotCloseOtherProposals`, `…reversalKeepsAttribution`, `…deletedCandidateShownNotCleared` | Full |
+| A-006 (resolution) | `CandidateResolutionIT.noServicePathToResolvedExceptResolve` (enumerates service methods) | Full |
+| P-010 | `PersonIdentityIT.resolvedIdentityChangesNoData`, `…noTransitiveInference`, `…contradictionsFlaggedNotBlocked`, `…noAutomaticProposalFromMatchingNamesOrDates` | Full via resolution (D4-09) |
+| P-008 | `CollectiveReferenceIT`: named individuals are Mentions; unnamed members create no Persons; members explicit; rejected identifications kept; stated count not a limit; membership creates no relationship | Full |
+| L-001, L-002, D4-18 | `PlaceIT.localityChangesCounty`, `…countyBoundaryChangeKeepsIdentity`, `…overlappingAndDisputedJurisdictionsCoexist`, `…historicalAndModernNames`; `MentionIT.ambiguousJurisdictionWordingHasTwoProposals` | Full |
+| SEC-004 (Phase 4 paths) | `PeopleRestrictionIT` tests 1–11 (clarifications §5.4), each asserting equality with an archive where the restricted object never existed | Full |
+| P-002, P-004 | as above | Complete for Phase 4 relationships; **Phase 6** verifies no Marriage Event is created, required or used to assign children |
+| P-003 | `ProhibitedInferenceIT.p003_noCrossObjectDateValidation` | **Partial**; **Phase 6** verifies Birth 1849 / Marriage 1852 with no warning |
+| P-005 | as above | Complete for relationships; **Phase 5** verifies competing Claims |
+| EV-003 | `HistoricalDateIT.recordFilingCaptureDatesDistinct` | **Partial**; **Phase 6** adds Event date |
+
 ### 9.2 Negative tests for prohibited historical inference (`ProhibitedInferenceIT`)
 
 Each test performs the triggering action and then asserts that **no** derived row exists anywhere (relationships,

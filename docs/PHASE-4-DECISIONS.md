@@ -315,3 +315,26 @@ C-001 and BI-006 forbid creating a Person merely to save, or silently.
 - **B.** No shortcut. The researcher creates the Person first, then resolves the Mention. More friction (UI-005).
 
 **Recommendation:** A.
+
+---
+
+## Revisions from the architectural clarification (PROPOSED, 2026-11-15)
+
+**Not approved.** These revise the recommendations above; the original options stay recorded for comparison. Full
+analysis, examples and alternatives: [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md).
+
+| Decision | Revised recommendation (PROPOSED) | Clarification § |
+|---|---|---|
+| D4-04 ⚠ | `form` (POINT, BEFORE, AFTER, BETWEEN, FROM_TO, FROM, TO, UNKNOWN, NOT_INTERPRETED) plus per-point `modifier` (EXACT, ABOUT, ESTIMATED, CALCULATED), per-point `uncertain`, `dual_year`, `calendar` and new `year_start`. `interpreted_expression` exposes stale interpretations after an expression correction. | §2.1–2.2 |
+| D4-05 ⚠ | Search envelope stored as Julian Day Numbers (`earliest_jdn`, `latest_jdn`, NULL = open), derived and non-authoritative. Conservative widening for partial dates, unspecified calendar and unspecified Julian year start; approximation never widened in storage. | §2.3–2.4 |
+| D4-06 ⚠ | Deterministic English grammar; refuses ambiguous numeric dates, regnal years and seasons. Proposals saved only on explicit confirmation, which records origin, actor, time and `interpreted_expression`. No background, import or migration parsing. | §2.5 |
+| D4-07 ⚠ | Unchanged (A). Relationship periods labelled "period as entered", never synchronised with Phase 6 Events. Test status split Complete / Partial with the completing phase named. | §6 |
+| D4-09 ⚠ | Person-identity proposals: PROPOSED, RESOLVED, REJECTED (no SUPERSEDED). RESOLVED changes no data; no merge; no stored or inferred transitivity; contradictions flagged, never blocked. | §3.5 |
+| D4-13 ⚠ | Fixed state meanings and transitions (P→R, P→X, R→X, R→S only as part of Resolve), trigger-enforced; attribution set once; resolving does not close other proposals; deleted candidates shown, not cleared. | §3.2–3.4 |
+| D4-14 | `collective_reference` (Role-backed or wording-backed, anchor Mention, `stated_count` with `count_as_written`), `collective_named_mention`, `collective_member` (PROPOSED/RESOLVED/REJECTED, several RESOLVED). Count is not a limit. Membership creates nothing else. | §4 |
+| D4-15 | Unchanged; adds VIEW_RESTRICTED_PEOPLE (Administrator only), required by D4-16. | §5 |
+| D4-16 ⚠ | Policy S (complete suppression). Restriction on Person, Mention, Collective Reference and identity proposal; invariant that NORMAL objects never target a RESTRICTED Person; restricting a linked Person is a previewed, explicit, single-transaction action; lifting never cascades; several Mentions per Role. | §5.2–5.4 |
+| D4-18 ⚠ | Model A refined: `place_type` category (LOCALITY, JURISDICTIONAL, OTHER); `jurisdiction_link.jurisdiction_kind` and `basis` (RECOGNISED, CLAIMED, DISPUTED, UNKNOWN); optional `place_derivation_link` (owner may defer); documented reading of "physical Place" for jurisdictional units. | §1 |
+| **D4-25 ⚠ (new)** | Calendar UNSPECIFIED is never assumed Gregorian or Julian; the envelope covers both readings. | §7 C-4 |
+| **D4-26 ⚠ (new)** | "YYYY-YYYY" is proposed as BETWEEN; FROM_TO offered at confirmation; never decided silently. | §7 C-5 |
+| **D4-27 ⚠ (new)** | Sanction the explicit, previewed restriction of linked Mentions, collectives and identity proposals when a Person is restricted, as distinct from D3-04's prohibited automatic propagation. | §7 C-1, C-2 |
