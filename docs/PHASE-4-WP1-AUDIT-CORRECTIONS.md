@@ -481,7 +481,34 @@ None is implementation closure.
 - **Tests:** every ACC test is a future test.
 - **Issues:** WP1-R1, GAS-P4-002, GAS-P4-003 and GAS-P4-004 are not closed.
 
-**Status:** revision 3.3 submitted (responds to the fourth assessment). Earlier: revision 3.2 submitted (responds to the third assessment). WP1-R1, GAS-P4-002 and GAS-P4-003 are not
+### Fifth independent architectural assessment (revision 3.3 → revision 3.4)
+
+| | |
+|---|---|
+| Assessment | `Phase-4-WP1-Fifth-Architectural-Assessment.md`. **Not received by the builder.** This response follows the Revision 3.4 direction's relay of its findings (F5-1…F5-4 and direction §6–§10). |
+| Direction | Phase 4 WP1 — Locking-Protocol Revision 3.4 Direction (starting revision `e5bf8c0`); first received truncated in §4.2, then complete |
+| Result | proposal revision 3.4 (same file) |
+
+**Limits.** The assessment's own text, its F4 reconciliation, its source references and its counterexample wording
+could not be checked. The findings are cited by the direction's section numbers. Reconciliation against the
+assessment itself remains open (R34-OPEN-1).
+
+| ID | Finding (direction section) | Response (revision 3.4) | Status |
+|---|---|---|---|
+| F5-1 | §2 (BLOCKING): an unlocked maximum is not a reservation; covers `planRepair` and `quarantinePartialAndReplan`; inventory all allocators | Allocator inventory (`plan`, `planRepair`, `quarantinePartialAndReplan`; nothing clears `target_generation`). Reservation transaction steps 0–7: Ct(X) U first; revalidation; high water in a subsequent statement over recorded and planned generations of **all** states; checked overflow (BLOCKED STATE_UNKNOWN before any filesystem change); compare-and-set transition with the event; commit = reservation. Durability, rollback, crash, same-operation replanning and CAS failure specified. Ct → O(own) safety argued. A counter is not introduced (the existing durable column suffices). Proposal §4.9 P2-8g. | RESPONDED (design); DECISION D-LP-8 |
+| F5-1 tests | §2.4 | LP-15 reservation cases; LP-10h aligned | RESPONDED (future tests) |
+| F5-2 | §3 (BLOCKING): L1p rows treated as globally UUID-ordered; Ct → U → own O rejected when U > O | G1 orders only S, F, Ct, worksheet, R and catalog. G10 admits content-coordinated U (Ct(X) U), owned O (registered advisory, not LOST) and terminal single-resource O/U, each with modes, later-permitted statements, exit, records, missing-coordinator and LOST handling. Late-global prohibition after U or a terminal lock. Implicit effects are those of the window inventory. LP-8c service-path tests. | RESPONDED (design); DECISION D-LP-4 |
+| F5-3 | §4 (BLOCKING): We7 trusts ACTIVE alone; stale g1 evidence vacates repaired g2 | Observation identity (content, state, generation, volume, path); compared under Ct(X) U. Equal: finding and MISSING committed, then the accepted message. Changed: nothing inserted or changed; the accepted state or "cannot be read right now; nothing was changed" message. No filesystem work in the transaction. Authorization snapshot inventoried and unchanged; no File lock (none may follow Ct). LP-16 (i)–(ix). | RESPONDED (design); DECISION D-LP-8 |
+| F5-4 | §5 (BLOCKING): a read-only report does not prevent unsafe rows from participating | Fail-closed admission and controlled isolation (Alternative A): audit AU-1…AU-8 over relational identity; classes (admitted; final stale; UNSAFE-ACTIVE; UNSAFE-AMBIGUOUS; legacy identity; aliases); exact disabled scope; visible outcome; Administrator workflow; activation boundary (the audit runs at startup before any writer starts; no old writer can run after it); recomputed at restart; no schema change, no rewriting. Proposal §5.5. | RESPONDED (design); DECISION D-LP-8 |
+| F5-4 (§5.4) | GAS-P4-004 to MAJOR | Done in `issues.md`; effect bounded as directed; OPEN, source-derived | RESPONDED |
+| §6 | Wh2 tightening | Ct(X) Sh; a separate fresh OPEN query; identity revalidation; no CREATE_NEW or claim when OPEN; Sh held through commit; the COLLISION block committed (not rolled back); retry replans | RESPONDED |
+| §7 | PO-B reconciliation; A3 wording | PO-B attested case (a)–(d) with admission; A3 now names the resources a Ct requester may already hold; KS/NKU compatibility retained; INV-U not restored | RESPONDED; conditional |
+| §8 | LP-10d, LP-10h, LP-10b, LP-15, LP-16 | LP-10d replaced with valid fixtures; LP-10h distinct reservations; the `pg_locks` claim marked historical; LP-15 three classes; LP-16 stale-generation and the authorization contract | RESPONDED (future tests) |
+| §9 | Window counts | P2-8: 19 windows (adds Wh1a, Wh1b, We7, Wh2 to 3.2's 15); Phase 2: 22. Superseded counts marked historical. | RESPONDED |
+| §10 | Decision register | Proposal §8 updated (D-LP-3 explicit Conflict approval; D-LP-4 classes; D-LP-8 scope; D-LP-9 no implementation authorised) | DECISION (owner) |
+| R34-OPEN-1 | Assessment text not received | Reconcile when supplied | OPEN |
+
+**Status:** revision 3.4 submitted (responds to the Revision 3.4 direction). Earlier: revision 3.3 submitted (responds to the fourth assessment). Earlier: revision 3.2 submitted (responds to the third assessment). WP1-R1, GAS-P4-002 and GAS-P4-003 are not
 closed. Awaiting owner decisions D-LP-1…D-LP-9 and an independent assessment. WP1 is not accepted; WP2 remains on
 HOLD.
 

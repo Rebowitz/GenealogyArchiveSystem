@@ -148,13 +148,13 @@ fresh plain read of the enabled administrators in a later statement; then the ta
 compatible with KEY SHARE). `create` and CLI `create-admin` have a documented insert-only exception. **NOWAIT alone is
 not a fix** (proposal §11.7). Keeping the current design is an explicit risk decision only.
 
-## GAS-P4-004: MINOR. Quarantine settlement can release a newer repair's claim after path reoccupation (accepted Phase 2 code)
+## GAS-P4-004: MAJOR. Quarantine settlement can release a newer repair's claim after path reoccupation (accepted Phase 2 code)
 
 | | |
 |---|---|
 | Found | 2026-11-16, analysing fourth-assessment finding F4-1 |
 | Phase | Defect in accepted Phase 2 code; found during Phase 4 WP1 |
-| Status | **OPEN; source-derived, not executed.** Not fixed; no production code changed. Proposed fix: P2-8g (proposal §5.4), part of decision D-LP-8. |
+| Status | **OPEN; source-derived, not executed.** **[3.4] Severity raised from MINOR to MAJOR,** as independently recommended. Not fixed; no production code changed. Proposed fix: P2-8g (Wh1a, Wh1b, Wh2) plus fail-closed admission of pre-existing overlaps (proposal §5.4, §5.5), part of decision D-LP-8. P2-8g is proposed, not implemented or accepted. |
 | Related | Fourth assessment F4-1; `PHASE-4-WP1-AUDIT-CORRECTIONS.md` F4-1; proposal §5.4, LP-15(a) |
 
 **Cause.**
@@ -166,12 +166,11 @@ not a fix** (proposal §11.7). Keeping the current design is an explicit risk de
 - Settlement's `releaseTargetsAt(volume, p)` then releases **every** operation's claim at p, including the new
   repair's legitimate claim on its own copy.
 
-**Effect.**
-- The new repair's copy is no longer recorded as owned.
-- If that repair commits, its generation claims p normally.
-- If it is cancelled or fails, its cancellation sees no claim and may not quarantine its copy. An unexplained object
-  is then left at p, which a later integrity check reports as unexpected. No byte is lost, but ownership evidence is
-  wrong.
+**Effect (bounded, as demonstrated by source analysis) [3.4]:**
+- An older settlement may release a newer operation's legitimate ownership claim.
+- A subsequent cancellation of that newer operation may leave its copy unaccounted for.
+
+No direct byte loss has been established, and the safety of the bytes is **not** asserted in general.
 
 **Evidence.** Source analysis only (`QuarantineMoves.settle`, `OperationProcessor.planRepair` and `createOwned`).
 LP-15(a) characterises it.

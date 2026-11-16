@@ -1,10 +1,19 @@
-# Phase 4 WP1: L1 locking-protocol proposal (WP1-R1, GAS-P4-002), revision 3.3
+# Phase 4 WP1: L1 locking-protocol proposal (WP1-R1, GAS-P4-002), revision 3.4
 
 **Status: REVISED PROPOSAL for owner review and independent Codex assessment. Not implemented.**
 - No production locking code, SQL, trigger or migration in this document has been written.
 - The test designs in §10 are specifications; none of them is claimed to pass.
 - Executed evidence is limited to the bounded, non-production checks in §11.
-- **Revision 3.3** responds to the fourth independent architectural assessment
+- **Revision 3.4** corrects the four blockers named in the Revision 3.4 direction (fifth independent assessment,
+  `Phase-4-WP1-Fifth-Architectural-Assessment.md`, which **was not received by the builder**; the direction's relay
+  of its findings is followed):
+  - **F5-1:** serialised generation reservation (Wh1a, Wh1b);
+  - **F5-2:** preservation-row guard classes (G1, G10);
+  - **F5-3:** generation-bound download evidence (We7);
+  - **F5-4:** fail-closed admission and activation (§5.5).
+
+  Changes are marked **[3.4]**.
+- **Revision 3.3** responded to the fourth independent architectural assessment
   (`Phase-4-WP1-Fourth-Architectural-Assessment.md`, reviewed head `b4c4aca`).
   - **F4-1:** INV-U is withdrawn; path reoccupation is prevented by new change group P2-8g (§5.4).
   - **F4-2:** guard key classes and the order projection are corrected (§6).
@@ -568,7 +577,17 @@ listed with:
   branch on an operation-kind label.
 - A not-yet-committed content row is invisible, so the statement never waits for it.
 
-**Count [3.3].** The **seven** decision groups (P2-8a…g) change **18 transaction windows**:
+**Count [3.4, operative].** The seven decision groups (P2-8a…g) change **19 transaction windows**:
+- the 15 of revision 3.2;
+- **We7** (download MISSING);
+- **Wh1a** (`planRepair` reservation);
+- **Wh1b** (`quarantinePartialAndReplan` reservation; a distinct window that shares Wh1a's allocation design);
+- **Wh2** (`createOwned` OPEN check).
+
+**Phase 2 total: 22 changed windows**: 19 under P2-8a…g, plus 3 under D-LP-3, D-LP-6a and D-LP-6b. The startup
+admission audit (§5.5) is a read-only gate, not a changed window.
+
+*Historical, not operative:* **Count [3.3].** The **seven** decision groups (P2-8a…g) change **18 transaction windows**:
 - the 15 listed below;
 - **We7** (download MISSING, F4-3);
 - **Wh1** and **Wh2** (P2-8g, F4-1).
@@ -585,7 +604,7 @@ listed with:
 Wa1, Wa3, Wc2, Wc3, Wd1′, Wd2′, Wd3, Wd4′, We5, We6, Wf3. Two further rows (Wc7, Wd5) only delegate to Wa1 and Wa2.
 
 Separately, D-LP-3, D-LP-6a and D-LP-6b change **3** further Phase 2 windows: FC restriction, `destroyHolding` and
-`commitShared`. **Phase 2 total [3.3]: 21 changed windows.** That is 18 under the seven P2-8 subdecisions, plus 3
+`commitShared`. *Historical:* **Phase 2 total [3.3]: 21 changed windows.** That is 18 under the seven P2-8 subdecisions, plus 3
 under D-LP-3, D-LP-6a and D-LP-6b: ten Phase 2 subdecision items, not ten top-level D-LP IDs. Wc7 and Wd5 are
 delegates, not windows.
 
@@ -638,7 +657,7 @@ delegates, not windows.
 | We4 `reverify` final transaction | **CHANGED** | no advisory | **Ct(X) U** → Ct NKU → `markVerified` → findings NKU | as We3 | compare-and-set | commit |
 | We5 standalone `record` / `observe` / `insertFindingIfNew` / `observeExisting` (NOT_PROTECTED, LINK_OR_REPARSE, UNREADABLE, UNEXPECTED_OBJECT, `observeUnresolved`, the volume-level findings, `reverify`'s NOT_PROTECTED) | UNCHANGED (**exception E2**) | **outside any transaction**: each statement autocommits | (1) SELECT; (2) finding insert; (3) observation insert, `ON CONFLICT (scan_id, finding_id) DO NOTHING` | (2) fk KS on content, scan, volume, operation; (3) fk KS on scan and finding | — | each statement commits |
 | We6 standalone `markVerified` | UNCHANGED (**exception E1**) | outside any transaction | Ct NKU (`last_verified_at`) | no state trigger | — | statement commit |
-| We7 **[3.3, F4-3]** `FileService.download` on verified absence | **CHANGED** | a reader's request; no advisory; outermost transaction | today: finding insert (`insertFindingIfNew`: SELECT; insert with fk KS on Ct, volume) → Ct NKU (ACTIVE → MISSING). **Proposed:** **Ct(X) U** → re-read state under the lock (proceed only if still ACTIVE; otherwise insert nothing and change nothing) → finding insert (fk KS Ct, held) → Ct NKU | `vacates_current_generation`; `missing_retires_ownership` (generation path, F1) | content state compare-and-set under Ct | **commit, then** throw the accepted "stored original is missing. The problem has been recorded." The committed finding and state are kept; the exception is raised after the transaction completes, as today. |
+| We7 **[3.4, F5-3]** `FileService.download` on verified absence | **CHANGED** | a reader's request. **Authorization snapshot (unchanged):** `get` checks `VIEW_ARCHIVE` and File visibility, then lifecycle (DESTROYED, or DELETED without `EDIT_FILES`, gives not found), then content state (not ACTIVE gives the accepted state message), all as unlocked reads at request start. No File lock is taken (none was before, and none may follow Ct); a Content lock does not stabilise File permissions or roles, and none is claimed. The **observation** O = (content_id, state = ACTIVE, current generation number, volume_id, current storage_path) is taken from the same unlocked read, then the filesystem probe runs **outside any transaction**. | on verified absence, a new outermost transaction: **Ct(X) U** → re-read the locked identity L → if **L = O** (all five fields equal): finding insert (MISSING, with O's generation and path) → Ct NKU (ACTIVE → MISSING compare-and-set). If **L ≠ O**: **insert nothing, change nothing.** | when L = O: `vacates_current_generation` vacates **the generation in O**, which is still CURRENT; `missing_retires_ownership` (generation path, F1) | identity comparison under Ct (state alone is **not** sufficient) | commit. **L = O:** then throw the accepted "This File's stored original is missing. The problem has been recorded." **L ≠ O and L.state ≠ ACTIVE:** throw the accepted state message for L.state (the text of the request-start check). **L ≠ O and L.state = ACTIVE** (a different generation, path or volume): throw the accepted "This File's stored original cannot be read right now. Nothing was changed; try again later." No re-probe inside the transaction; a retry re-observes. `row_version` is not compared (a `markVerified` update must not force a retry). |
 | We5 additions **[3.3]** | UNCHANGED (E2) | `download` SIZE_MISMATCH branch (autocommit `insertFindingIfNew` outside any transaction); `OperationProcessor.tryShare` NOT_PROTECTED (autocommit, outside any transaction; the worker holds its own operation's advisory; the finding's `operation_id` fk references that own operation) | as We5 | fk KS on content, volume, own operation | — | each statement commits |
 
 #### P2-8f: repair cancellation, unverified copies, ingest, private publication
@@ -649,12 +668,64 @@ delegates, not windows.
 | Wf2 `applyCancel` final transaction | **CHANGED** (same rule) | adv(own) (`performCancel`); its pending settlements are Wa2 | **Ct(X) U** (or MISSING) → (`claimBecomesUnresolved`: O NKU → U insert) or O NKU (release) → O NKU (transition) | as Wf1 | compare-and-set on state | commit |
 | Wf3 `commitNewContent` | UNCHANGED (**exception E4**, private publication) | adv(own) | O NKU → O NKU (release own claim) → Ct insert (private) → G insert (claims GENERATION at its own path) → parent F U → F insert (private) → derivation | **at COMMIT:** deferred fk `file_operation.file_id` → own new File (private); `single_owner` read | — | commit |
 
-#### P2-8g [3.3, F4-1]: location reoccupation (Alternative A, recommended; §5.4)
+#### P2-8g [3.4]: generation reservation and location reoccupation (Alternative A; §5.4)
+
+**Allocator call-site inventory** (source analysis at `e5bf8c0`; the only writers of `file_operation.target_generation`):
+
+| Site | Kind | Today | Under 3.4 |
+|---|---|---|---|
+| `OperationProcessor.plan` (line 121) | INGEST | `target_generation = 1` for a fresh planned content id (`GlobalIds`) | **unchanged**: private content, private path (E4 context); no Ct (the content is not persisted) |
+| `OperationProcessor.planRepair` (lines 135–139) | REPAIR | unlocked `max(maxGeneration(X), own previous) + 1`, then `transition` STAGED → PROMOTING | **Wh1a** |
+| `OperationProcessor.quarantinePartialAndReplan` (lines 371–378) | REPAIR and INGEST | unlocked `max(own + 1, maxGeneration(X) + 1)`, then `transition` PROMOTING → PROMOTING | **Wh1b** (REPAIR, or INGEST whose content is persisted). INGEST with unpersisted content: unchanged (own + 1, private path). |
+| any other | — | none: no transition clears or rewrites `target_generation` | — |
+
+**Reservation transaction** (Wh1a and Wh1b share it):
+
+| Step | Statement | Notes |
+|---|---|---|
+| 0 | entry | worker thread holds adv(own operation) (registered, not LOST); **no outer transaction** (G9-style assertion); a new outermost transaction, READ COMMITTED |
+| 1 | `SELECT … FROM gas.file_content WHERE content_id = :x FOR UPDATE` | **Ct(X) U**; the first lock. If no row: Wh1a rejects (the content must exist for a repair); Wh1b proceeds as private INGEST. |
+| 2 | re-read content: state (Wh1a: MISSING or DAMAGED; Wh1b: not DESTROY_PENDING or DESTROYED), size, SHA-256 against the operation's expected values | a mismatch → the accepted `reject` or `block` outcome, inside this transaction; nothing reserved |
+| 3 | `SELECT GREATEST((SELECT COALESCE(MAX(generation), 0) FROM gas.file_content_generation WHERE content_id = :x), (SELECT COALESCE(MAX(target_generation), 0) FROM gas.file_operation WHERE content_id = :x), :own_previous) AS high_water` | a **subsequent statement**, so a fresh snapshot after the lock is granted. All operation states count: planned, failed, cancelled, stopped, rejected and completed. `content_id` is set for every repair and for an ingest once it shares or creates X. |
+| 4 | `next = high_water + 1`, checked: if `high_water ≥ 2147483647` (`integer` maximum), the operation is **BLOCKED (STATE_UNKNOWN)** with "generation numbering is exhausted for this content; nothing was created", recorded in this transaction | visible; before any filesystem or ownership change |
+| 5 | `transition(op, expected state → PROMOTING, …, {target_generation: next, target_path: originalPath(X, next), volume_id, target_created: false})` | **O(own) NKU** plus the event insert (K4). The claim trigger fires on `target_path` and `volume_id` changes: OLD `target_created` is false (planning, or after the partial copy was quarantined and released), so it deletes nothing; NEW is false, so it claims nothing. No fk column changes except `volume_id` (fk KS on the volume: terminal). |
+| 6 | compare-and-set result | **false** (the state moved, for example a concurrent Administrator cancel): **roll back the whole transaction**; no reservation exists; the worker returns as today, and the next step re-reads the operation |
+| 7 | commit | **this commit is the reservation.** Only then does `createOwned` (Wh2) run the filesystem create and the claim, in its own transaction. |
+
+**Durability and meaning:**
+- A committed `target_generation` is never cleared (inventory above), so it survives cancellation, retargeting, cleanup
+  and every final state. It is the durable high-water evidence.
+- A number computed in memory, or in a transaction that rolled back or crashed before commit, **reserves nothing**
+  and may be chosen again. That is safe: no filesystem object or claim was made from it.
+- Same-operation replanning (Wh1b) includes `own_previous`, so it always advances past the operation's own earlier
+  target.
+
+**Why Ct(X) → O(own) is safe:**
+- O(own) is written only by its owner (this worker, under its advisory) and by lemma A1 holders, which are terminal.
+  So the planner can wait on O only for a holder that never waits for Ct(X).
+- Other transactions holding their own O and waiting for Ct(X) (for example another repair's `commitRepair`) wait for
+  the planner. The planner never requests their O.
+
+**Serialisation:** two planners of X serialise on Ct(X) U, so the second's step 3 sees the first's committed
+reservation. **Two ordinary planners always receive distinct committed numbers.**
 
 | Window | Status | Entry | Sequence | Implicit effects | Revalidation | Exit |
 |---|---|---|---|---|---|---|
-| Wh1 `planRepair` transition | **CHANGED** | worker; adv(own repair); outside any other transaction | read (no lock): `g = max(maxGeneration(X), max target_generation over every repair operation of X, own previous) + 1`; then the existing `transition` STAGED → PROMOTING setting `target_generation`, `target_path`, `volume_id` | none new (the claim trigger does not fire: `target_created = false`) | the transition's compare-and-set on state | commit |
-| Wh2 `createOwned` (REPAIR) | **CHANGED** | worker; adv(own repair) | existing **Ct(X) FOR SHARE** and state re-read → **new check:** no OPEN `unresolved_object` at (volume, target) → CREATE_NEW → `markTargetCreated` (claim) | claim trigger (PO-C S1) | the OPEN check runs under Ct(X) Sh, which conflicts with every OPEN-record creator, converter and resolver of X (all hold Ct(X) U after P2-8a…f) | if an OPEN record exists: nothing is created, nothing is claimed; the operation is BLOCKED with the existing COLLISION reason and a message naming the unresolved record. An Administrator retry replans with Wh1 (a new generation). Commit. |
+| Wh1a `planRepair` | **CHANGED** | as step 0 | steps 1–7 | step 5 | steps 2 and 6 | commit (the reservation), or full rollback |
+| Wh1b `quarantinePartialAndReplan` (persisted content) | **CHANGED** (newly counted in 3.4) | as step 0; the partial copy's quarantine settlement (Wa2) has already committed in its own transaction | steps 1–7 with expected state PROMOTING | step 5 | steps 2 and 6 | as Wh1a |
+| Wh2 `createOwned` (REPAIR) **[3.4, tightened]** | **CHANGED** | worker; adv(own); outermost transaction | (1) **Ct(X) FOR SHARE**; (2) a **separate, fresh** statement: `SELECT 1 FROM gas.unresolved_object WHERE volume_id = :v AND path = :target AND status = 'OPEN'`; (3) revalidate that the operation's persisted `content_id`, `volume_id`, `target_path` and `target_generation` equal those planned and that the content state is not DESTROY_PENDING or DESTROYED; (4) only if no OPEN record and identity equal: CREATE_NEW, then `markTargetCreated` (claim); (5) **Ct(X) SHARE is held through the claim and commit** | the claim trigger (PO-C S1) | steps 2 and 3 under Ct(X) Sh | **OPEN present or identity changed:** no CREATE_NEW, no claim. The transaction **commits** a `block(op, COLLISION, "the planned target … has an open unresolved record; nothing was created. An Administrator retry plans a new target.")` (an operation transition plus its event), so the refusal is recorded and not rolled back. Retry: Wh1b-style replan (a new reserved number). |
+
+**Collision and retry semantics:**
+- **New plans:** after Wh1a, distinct planners never share a number, so a COLLISION from plan sharing disappears for
+  new repairs. CREATE_NEW collisions remain possible only from unexpected filesystem objects (accepted behaviour).
+- **Legacy pre-planned repairs** (planned before Wh1a, possibly sharing a number): Wh2 refuses them while an OPEN
+  record exists. Otherwise CREATE_NEW and the claim behave as today. Their admission is governed by §5.5.
+
+**Not a cure for existing owners:** Wh2 governs **new** claims only. Operations already owning a path when the
+protocol is enabled (for example a PROMOTED repair at an OPEN path) are classified by the admission audit (§5.5).
+
+**Owner decision (D-LP-8, pending):** durable cross-operation generation skipping (numbers of failed or cancelled
+plans are never reused) is a **proposed** behaviour change, not approved.
 
 ### 4.10 D-LP-9(a): administrator coordination [3.2, specified]
 
@@ -705,7 +776,7 @@ So the owner may hold O before Ct (P5, P6).
 | **A1: single-operation-row, non-owner** | Administrator `retry` (`transition` with `message` only, or `note`), `cancel` (`note`), `abandonStaleReceiving`, `IngestionService.abandon` and `cleanup`, `RecoveryService.cleanStaging`, post-transaction `markStagingCleaned` calls, receiver `heartbeat` and RECEIVING → STAGED `transition` | The outermost transaction (no outer transaction joined) writes O, and then only O's event row. | **Holder:** after O it waits only on the event key (K4: `max(seq) + 1` under O's own lock, so no other event writer of O is active), on fk KS on O (held), and on the actor's user row (terminal, D-LP-9). **No trigger:** the columns written (`state`, `message`, `received_bytes`, `receiver_alive_at`, `staging_cleaned`) are not `target_created`, `target_path` or `volume_id`, so `file_operation_claims_location` and `single_owner` do not fire. **No fk column changes,** so no immediate or deferred fk check. So the holder is terminal; a terminal holder is never on a cycle. **Entry:** these methods are called outside any transaction today (source); the guard enforces it (§6 rule G9). | source-supported; awaiting LP-10b, LP-10g, LP-10i |
 | **A2: RECEIVING-set update** | `renewReceivers(ids)`: `UPDATE … WHERE state = 'RECEIVING' AND operation_id = ANY(:ids)` | Locks several rows in one statement, in scan order. | **Not single-resource.** A cycle needs another transaction holding a row in `ids` while waiting for a row the statement holds. The other writers of RECEIVING rows are A1 holders (terminal) or another `renewReceivers` call. Two calls never share a row: (i) `ids` is the in-memory `receiving` set of one JVM, and an operation is added only by the request that inserted it (P13) and removed at its transition or abandonment; (ii) the renewal is one scheduled timer per JVM with fixed delay, so calls in one JVM do not overlap; (iii) an operation is never registered in two JVMs. So the sets are disjoint. | **[3.3] Scope:** per **`IngestionService` instance** (a single-thread scheduled executor with fixed delay; `stage` adds and removes only its own operation). The SQL itself (`ANY` over an array) has **no guaranteed row order**, so the lemma holds only while: no caller other than the instance's timer calls `renewReceivers` (to be enforced by an ArchUnit rule); and no operation is staged twice (assertion in `stage`). Overlapping calls are **not supported**; supporting them would need ordered per-row acquisition. **Conditional** on that registration and call protocol; awaiting LP-10l. |
 | **A0 [3.3]: owner `note` holders** | `note` (O FOR UPDATE + event) by the owner: P8 worker notes; DestructionProcessor notes (lines 146, 608, 659, 830); `UnresolvedObjects` release (line 97, last statement) and `attestUnderLock` (line 164, followed only by `enqueue`); `OperationAdminService` cancellation notes under the operation's own lock; `quarantineSuperseded` notes | After its `note`, a window takes no blocking acquisition except O's event key (K4), private inserts (a background job with a fresh PK and no other unique key) and commit. | So an owner `note` holder is terminal **after** the note. Its earlier locks are covered by its own window's classification (§4.9). A waiter on O behind it (an intent fk, a finding fk, an A1 call) waits for a holder that will not wait for it. | source-supported; awaiting LP-10b inventory |
-| **A3: standalone finding and observation statements [3.3, corrected]** (exception E2, We5) | autocommit SELECT, finding insert, observation insert, outside any transaction (including `download` SIZE_MISMATCH and `tryShare` NOT_PROTECTED) | Each statement is its own transaction. | **Finding insert:** a new private row (fresh PK; no shared unique key). Its fk KS checks run in foreign-key trigger order on content, scan, volume and operation; **it may hold an earlier KS while waiting on a later one.** **KS conflicts only with FOR UPDATE and key updates; ordinary NKU is compatible**, so the 3.2 statement "waits for a Ct FOR UPDATE **or NKU** holder" is corrected to **FOR UPDATE only**. The FOR UPDATE holders are: Ct(X) U holders (§4.9 windows); O FOR UPDATE holders (A0 owners and A1 `note`, both terminal after the note); no FOR UPDATE on scan or volume rows. A KS this statement already holds blocks only a later FOR UPDATE requester: a §4.9 window's first Ct lock (taken with nothing else held on its side, L6), or a `note`. A `note` holder waiting for our KS on O holds only O and its own earlier window resources, and we never request those. So no cycle closes through the held KS. **Observation insert:** key (scan, finding); the contender is another autocommit observation statement (terminal); fk KS on scan and finding never waits (those rows are only NKU-updated). **State-changing callers** of the same helpers (We1, We2, We7) run inside their window and join its tracker; they are **not** admitted as E2. | source-supported; awaiting LP-10m |
+| **A3: standalone finding and observation statements [3.3, corrected]** (exception E2, We5) | autocommit SELECT, finding insert, observation insert, outside any transaction (including `download` SIZE_MISMATCH and `tryShare` NOT_PROTECTED) | Each statement is its own transaction. | **Finding insert:** a new private row (fresh PK; no shared unique key). Its fk KS checks run in foreign-key trigger order on content, scan, volume and operation; **it may hold an earlier KS while waiting on a later one.** **KS conflicts only with FOR UPDATE and key updates; ordinary NKU is compatible**, so the 3.2 statement "waits for a Ct FOR UPDATE **or NKU** holder" is corrected to **FOR UPDATE only**. The FOR UPDATE holders are: Ct(X) U holders (§4.9 windows); O FOR UPDATE holders (A0 owners and A1 `note`, both terminal after the note); no FOR UPDATE on scan or volume rows. A KS this statement already holds blocks only a later FOR UPDATE requester: a §4.9 window's Ct lock, or a `note`. **[3.4, corrected]** That Ct requester may already hold resources: an F lock (ordered below Ct; `destroyHolding`, `commitShared`), its own O (owner-only, waited on only by terminal holders: `commitRepair`, `commitNewContent`), or nothing. None of these is a resource our standalone statement will request, so the KS it holds cannot close a cycle. A `note` holder waiting for our KS on O holds only O and its own earlier window resources, and we never request those. So no cycle closes through the held KS. **Observation insert:** key (scan, finding); the contender is another autocommit observation statement (terminal); fk KS on scan and finding never waits (those rows are only NKU-updated). **State-changing callers** of the same helpers (We1, We2, We7) run inside their window and join its tracker; they are **not** admitted as E2. | source-supported; awaiting LP-10m |
 | **A4: terminal contentless and fast paths [3.3, corrected]** | `attest` fast path (E5, Wd3); intent (E3, Wa1) | One explicit lock or one insert, with no later wait except on terminal holders. | **Wd3:** U FOR UPDATE, then return or throw; terminal. The classification is safe because attestation and resolution are irreversible, so a record seen as attested or closed cannot return to the writing branch. **Wa1:** the destination key embeds the operation id, and every application contender holds that operation's advisory. Its fk KS on O waits only for an O FOR UPDATE holder: an **A0 owner `note`** or an **A1 non-owner `note`**, both terminal after the note. KS on the volume never waits. **Wa1 does not establish the safety of Wa2** (§5.4). | source-supported; awaiting LP-10n |
 
 **Rule (guard G9):** a lemma A1, A2, A3 or A4 window may be **entered only with an empty tracker and no active
@@ -743,7 +814,7 @@ transactions, NOWAIT) reproduce cycles.
 | **Generation-keyed writes** | F1. **Source-supported**, unchanged from 3.2. |
 | **Settlement, generation source** | F1. **Source-supported.** |
 | **Settlement, own-target source** | The entry's own operation; the settler holds its advisory. **Source-supported.** |
-| **Settlement, attested source** (s = u.path) | **INV-U is withdrawn [3.3]**: it is contradicted (§5.4). Under **P2-8g** (§5.4), an active (non-final) operation cannot claim s while the OPEN record at s exists, and every record creator and converter of X holds Ct(X) U. So a committed claimant at s is: the entry's own operation (advisory held); or a **final** operation whose claim survived a destruction refusal (case A in §5.4), whose row is written only by terminal holders. **Conditional on P2-8g** (proposed design); awaiting LP-15. |
+| **Settlement, attested source** (s = u.path) **[3.4]** | INV-U stays withdrawn. A committed claimant at s is one of: **(a)** the entry's own operation (advisory held); **(b)** a **final** operation's stale claim (destruction refusal), whose row has only terminal writers (A0, A1); **(c)** an **active** claimant that made its claim **after enablement**, impossible because Wh2 refuses new claims while the OPEN record exists, and the record stays OPEN until Wa2 commits; **(d)** an **active or resumable claimant that already existed at enablement**, which the admission audit classifies UNSAFE and isolates (§5.5), so no settlement of that content runs. **Generation reservations (Wh1a, Wh1b)** make (c) unreachable through planning as well. **Trigger-driven ownership changes** (claims, releases, retirements) are covered by F1, PO-C and the window inventory. **Deferred COMMIT checks** are reads. **Class: conditional on P2-8g and the §5.5 admission policy** (proposed design); awaiting LP-15 and the admission tests. |
 | **Deferred work at COMMIT** | unchanged: no fk column changes; deferred triggers are reads. |
 | **Tests** | LP-10e (i)–(iii) as 3.2. **(iv) is replaced** by LP-15 (the F4-1 schedule) and by runtime assertions on **destruction refusal after inventory** and on **claim creation while an OPEN record exists** (§10). |
 
@@ -821,6 +892,71 @@ operation's copy.
 target. Wh2's OPEN check under Ct(X) still prevents a claim while the record is open. Where no OPEN record exists,
 reuse of an empty unrecorded path is harmless. The data audit in §12 lists such cases.
 
+### 5.5 F5-4: fail-closed admission and activation [3.4]
+
+**Evidence class:** proposed design.
+- **No schema change.**
+- **No rewriting of paths or evidence.**
+- **The admission state is recomputed at each startup** and is not stored.
+
+**Audit inventory** (read-only SQL over relational identity, not path prefixes alone). Each item names its source
+rows:
+
+| # | Check | Unsafe when |
+|---|---|---|
+| AU-1 | generations: `storage_path` against `originalPath(content_id, generation)`; volume | mismatch (legacy identity) |
+| AU-2 | operations: `target_path` against the constructor for (kind, `content_id`, `target_generation`); `target_created`; state | mismatch on a non-final operation |
+| AU-3 | `physical_location_owner`: every row resolves to an existing GENERATION (content, generation) or OPERATION (`operation_id`) whose recorded path equals the owner path | a dangling or mismatched owner |
+| AU-4 | OPEN `unresolved_object` against OPERATION owners at the same (volume, path) | an owner that is **non-final** (active or resumable): **UNSAFE-ACTIVE**. Owner final (CANCELLED, FAILED, COMPLETED, …): **stale, admitted** (terminal writers only). |
+| AU-5 | quarantine entries: INTENDED entries whose source (volume, path) is claimed by an operation other than the entry's own | **UNSAFE-AMBIGUOUS** |
+| AU-6 | quarantine destinations against the `quarantinePath(operation, suffix)` constructor | mismatch |
+| AU-7 | planned generations: repair operations of one content sharing a `target_generation`, where either is non-final | **UNSAFE-ACTIVE** if both could still claim |
+| AU-8 | case-fold and host-normalisation aliases: per volume, distinct relational identities (different generation, operation or unresolved row) whose paths are equal under `lower()` and the platform's NFC normalisation | alias across **independent** identities. Several references to one object (a generation and its own unresolved record, an operation and its own quarantine entry) are **normal** and not flagged. |
+
+**Classification and scope.** Each unsafe finding names a content X; contentless ones name an operation.
+- **Admitted:** clean data and final stale claims (AU-4 final).
+- **Isolated (fail-closed):** every content with an UNSAFE-ACTIVE, UNSAFE-AMBIGUOUS or legacy-identity finding.
+
+**Alternative chosen: A, fail-closed admission and controlled isolation.** It is smaller than B (identity-aware
+settlement), which needs claim-incarnation evidence and therefore a schema change.
+
+| Isolated content X: disabled | Still allowed |
+|---|---|
+| worker steps of any operation on X (planning, creation, commits, replanning) | reads and downloads of ACTIVE content (no state change) |
+| `reconcileAll` and other settlement of X's quarantine entries | standalone E2 findings |
+| unresolved release, attest and close for X | Administrator **cancellation** of an isolated operation (`performCancel`): with every other writer of X disabled, its windows have no concurrent X writer, so no cycle is possible |
+| destruction of X | the Administrator **"re-run admission audit"** action |
+| IntegrityService state changes on X (We1–We4: the finding is recorded through the E2 path; the content state is not changed) | |
+| download MISSING recording for X (We7: the accepted "cannot be read right now; nothing was changed" outcome) | |
+
+**Visible outcome:**
+- At startup, the log and the Administrator operations and integrity views list each isolated content, with its
+  audit category and the rows involved.
+- Each isolated operation shows "held by lock-protocol admission audit (category AU-n)" (a computed flag, not a
+  stored state).
+- Disabled actions return a visible "This content is held for review by the lock-protocol admission audit; nothing
+  was changed."
+
+**Administrative resolution workflow:**
+1. The Administrator reviews the listed rows.
+2. They cancel or allow to finish the isolated operations (cancellation as above).
+3. They use the existing unresolved and quarantine tools, once re-admitted, or record a decision.
+4. They re-run the audit.
+
+Contents whose findings are cleared are admitted; there is no automatic rewrite.
+
+**Activation boundary:**
+1. The release that contains the corrected protocol runs the audit at startup, **before** any preservation writer
+   starts (the worker, recovery, reconciliation, integrity scanner and receivers are not started until the audit
+   completes).
+2. The old release is not running; it is the same process being upgraded.
+3. From the first enabled moment, every writer is a new-protocol writer (Wh1a, Wh1b, Wh2 and Ct coordination), so
+   **no old writer can act between audit and enablement**.
+4. A restart re-runs the audit.
+5. A database restored from backup is audited at its first start.
+
+**Default:** fail-closed for affected unsafe data; everything else is admitted.
+
 ## 6. `LockSequence` contract (revision 3.2, implementable)
 
 **Evidence class:** proposed design. The guard enforces the **instrumented** acquisition order only. It does **not**
@@ -848,7 +984,7 @@ KeyPosition  = (level, index, keyTuple);   comparator: level, then index name, t
 
 | # | Operation | Checks before SQL | Records after |
 |---|---|---|---|
-| G1 **[3.3]** | `acquire(level, table, id, mode)` → Ticket | no open ticket; not FAILED; context allows it (G9); (level, table) matches the method binding. **Order check on the common projection π** (§6.3): let M = the maximum π over **all** held or passed ordered resources (ACQUIRED row locks and INSERTED, TAKEN or DELETED ordered keys), at **any** level. Reject if π(new).(level, sub-level) < M.(level, sub-level). At an equal sub-level, reject if π(new).uuid < M.uuid; equal is admitted only as a re-lock (G5). Then: not an upgrade (a held weaker mode → reject). | `acquired()` → rowLocks; `missing()` → missing; `failed(state)` → FAILED |
+| G1 **[3.4]** | `acquire(level, table, id, mode)` → Ticket | no open ticket; not FAILED; context allows it (G9); (level, table) matches the method binding. **Ordered resources only** (S, F, Ct, worksheet K rows and the ordered worksheet key, R, catalog Source then Repository): projection π = (level, sub-level, uuid). Let M = the max π over all held or passed ordered resources at any level. Reject if π(new).(level, sub-level) < M.(level, sub-level); at an equal sub-level reject if uuid < M.uuid (equal → G5 re-lock). **L1p rows are not ordered by π** (no cross-table UUID comparison) and are admitted by G10 instead. **Late-global prohibition:** after a content-coordinated U lock or a terminal single-resource lock is held, **any** new ordered acquisition is rejected. After an owned O lock, ordered acquisitions proceed under the normal π check (owner-held O is waited on only by terminal holders, lemma L4). Then: not an upgrade. | `acquired()` → rowLocks (with class); `missing()`; `failed()` |
 | G2 **[3.3]** | `insertEffects(table, Effects)` → Ticket, one per INSERT statement. **Effects** declares, per unique index the statement touches: an **ordered** key (projected by π, checked as G1); a **coordinated** key with its coordinator; a **delegated** key (G7); or **private**. | Ordered keys: G1's check. Coordinated keys: **no order check**; the coordinator must be held (S U for the worksheet sequence; Ct(X) U, or the content being private, for generation keys; Ct(X) U or adv(operation) for unresolved OPEN; adv(operation) for the quarantine destination; empty tracker for batch/item, a first wait). **No cross-index ordering by index name.** PostgreSQL's internal index order is not observed and not claimed. | `inserted()`: ordered keys INSERTED (passed), coordinated keys recorded as effects, row private; `taken(index)`: that ordered key TAKEN (passed); `failed`: FAILED |
 | G3 **[3.3]** | `deleteEffects(table, Effects)` | as G2 (ordered keys checked; coordinated keys asserted) | ordered DELETED positions are held until transaction end |
 | G4 | `privateNew(table, id)` | the table is on the ledger's private list **and** the INSERT touches no instrumented or delegated shared index; else rejected | privateRows |
@@ -857,7 +993,7 @@ KeyPosition  = (level, index, keyTuple);   comparator: level, then index name, t
 | G7 | `delegatedKey(trigger, index, keyTuple, proofId)` | for keys taken inside triggers (`claim_physical_location`, owner delete): **not an ordering check**. Records that the statement may wait on that key, under the named proof (PO-C S1, S2, S3); rejects if the proof's precondition is false in tracker terms (S2: Ct(X) held U; S3: own operation; S1: last blocking statement). **[3.3]** For S1 the ticket marks the window **CLOSED**: every later statement through the guarded data source is rejected until commit, including uninstrumented SQL. G7 records proof context; it does not prove path privacy or reoccupation safety (§5.2, §5.4). | delegated positions (for test reporting) |
 | G8 | ownership: `OperationLocks.tryLock`, `tryLockAll` and `tryLockForTransaction` register `adv[key]` when granted; `Held.close()` (after `pg_advisory_unlock` returns true) or the transaction end (for xact locks) deregisters it | — | the registry **survives tracker resets**; a new tracker attempt sees live ownership. Ownership is bound to the **thread** that acquired it. **[3.3]** `Held.handOff(thread)` is allowed only when the giving thread has **no active tracker and no statement in flight**; it does not authorise sharing a tracker or connection across threads. **Connection loss** on the advisory connection, or an unlock returning false, marks the ownership **LOST**. Protected work that relies on it (G10) is then rejected until the operation is re-acquired. |
 | G9 **[3.3]** | `enter(lemma)` for A1, A2, A3 and A4 windows; `standalone()` for E1 and E2 statements, **only at the named entry points** (the scan loop and download branches outside transactions) | **rejects unless** the tracker is empty **and** `!isActualTransactionActive()`, checked **before** the new outermost transaction opens. Helpers called inside a state-changing window (We1, We2, We7) do **not** call `standalone()`; they join the normal tracker. | context set with the lemma's **allowed effects**: A1 = {O row, O event key}; A2 = {the receiving rows of the call}; A3 = {finding insert, observation key}; A4-fast = {U row FOR UPDATE}; A4-intent = {quarantine destination key (coordinated by adv)}. Anything else is rejected. |
-| G10 | L1p checks | an explicit lock on `file_operation` requires `adv[O]` owned by this thread, or SINGLE_RESOURCE(A1) for O; an explicit `unresolved_object` lock requires Ct(X) ACQUIRED (X persisted), or `adv[u.operation]` (contentless), or SINGLE_RESOURCE(A4 fast path) | — |
+| G10 **[3.4]** | L1p admission (one contract with G1) | **Content-coordinated U** (`lockForUpdate`, `recordIfAbsent` effects): precondition Ct(X) ACQUIRED at UPDATE for X = the row's re-read persisted `content_id`. Modes: FOR UPDATE, NKU. Later permitted: other content-scoped rows of X, own O, private inserts, terminal KS; **no new ordered acquisition** (G1). **Owned O** (`note`, `transition`, owner updates): precondition `adv[O]` registered to this thread and not LOST (G8). Modes: FOR UPDATE, NKU. Later permitted: everything the window's §4.9 row lists, subject to G1. **Terminal single-resource O or U** (A1, A4-fast): precondition SINGLE_RESOURCE context (G9) with that declared row. Modes: as the lemma states. Later permitted: event key, then commit only. **Contentless U** (CR-3): precondition `adv[u.operation]` registered. **Missing coordinator** (no Ct, or Ct not at UPDATE) or **ownership LOST:** reject before SQL; the window's transaction rolls back and the worker step ends with the accepted retry-later handling. **Implicit trigger and fk effects** of each admitted statement are those listed for its window in §4.9; the guard records the declared effects and does not observe them. | records (class, coordinator or owner, row, mode) |
 | G11 **[3.3]** | D-LP-9 key | **at entry:** no active outer transaction (asserted before `tx.execute`); **inside** the new transaction the advisory SQL is the first statement and the tracker is empty | registered as transaction-scoped; released at commit or rollback |
 | G12 | completion | `afterCompletion` (commit **and** rollback), including rollback after an exception before a ticket closed: clears rowLocks, keyPositions, missing, privateRows, openTicket, failed, context. **Never** touches the session-ownership registry; transaction-scoped advisory registrations end here. **[3.3]** Unknown completion (connection lost during commit) resets the tracker and marks any session ownership on that thread for revalidation (G8). | — |
 
@@ -924,14 +1060,15 @@ Phase 0, 1, 2 and 3 contracts to preserve in every change below:
 | P2-8c | Phase 2 DestructionProcessor | Wc1 (`newRecord`, via classify, reconcile, refuse, deleteAuthorized), Wc4, Wc5, Wc6 | 4 | as above |
 | P2-8d | Phase 2 unresolved-object decisions | Wd1, Wd2, Wd4 (persisted content); fast path and contentless branches unchanged | 3 | An Administrator decision waits briefly for concurrent work on the content |
 | P2-8e | Phase 2 IntegrityService **and `FileService.download` [3.3]** | We1–We4, **We7** (download MISSING: Ct U first, state re-read; the finding and state still commit before the accepted error is thrown); standalone findings (including download SIZE_MISMATCH and `tryShare` NOT_PROTECTED), observations and `markVerified` unchanged (E1, E2) | 5 | A scan or a download that finds the original missing waits briefly for concurrent work on the content |
-| **P2-8g [3.3]** | Phase 2 repair planning and target creation | Wh1 (monotonic generation planning across all repairs of the content), Wh2 (`createOwned` refuses a target with an OPEN unresolved record, under Ct(X) Sh) | 2 | Generation numbers may skip a failed repair's planned number. A repair whose target has an OPEN record (legacy data only) is BLOCKED (COLLISION) with a message, and a retry replans. |
+| **P2-8g [3.4]** | Phase 2 repair planning and target creation | **Wh1a** (`planRepair`), **Wh1b** (`quarantinePartialAndReplan`): serialised reservation under Ct(X) U, high water over recorded and planned generations of all states, checked overflow; **Wh2**: OPEN check in a fresh statement under Ct(X) Sh, identity revalidation, recorded COLLISION refusal | 3 | Generation numbers skip failed or cancelled plans (**pending owner decision**). New planners never share a number. A legacy pre-planned repair facing an OPEN record is BLOCKED (COLLISION) with a message; a retry replans. |
 | P2-8f | Phase 2 repair cancellation and unverified copies | Wf1, Wf2 (persisted content only); ingest under CR-3; publication E4 | 2 | as above |
 | D-LP-5 | Phase 3 `linkFile` | F Sh before R | 1 | A link waits for a concurrent restriction of the File |
 | D-LP-7 | Phase 3 grouping, `add`, `saveMarks`, `removeFile` | §4.2–§4.4 | 4 | `add` waits for a concurrent restriction or destruction of a candidate File; counts unchanged |
-| D-LP-9 | Accepted user administration (`UserService.update`) | §4.10: first-statement advisory key (7340, 1); plain fresh administrator read; `create` and CLI `create-admin` insert-only exception | 1 | Concurrent role or enable changes queue on the key; other user writes and all history writers no longer wait behind a role change |
+| Admission (§5.5) **[3.4]** | Activation of the corrected protocol | startup audit AU-1…AU-8; fail-closed isolation of unsafe contents; Administrator cancel and re-audit workflow | 0 (a gate) | Isolated contents' preservation work pauses visibly until reviewed |
+| D-LP-9 | Option (a) as specified in §4.10 | 4th: architecturally acceptable as a separately bounded item | Retain the recommendation. **No production implementation is authorised by the 3.4 direction.** |
 
 **Totals:**
-- Phase 2 **[3.3]**: 21 windows: 18 under the seven P2-8 subdecisions, plus 3 under D-LP-3, 6a and 6b.
+- Phase 2 **[3.4]**: 22 windows: 19 under the seven P2-8 subdecisions, plus 3 under D-LP-3, 6a and 6b. *(Historical 3.3: 21; 3.2: 18.)*
 - Phase 3: 5 windows under D-LP-5 and D-LP-7.
 - User administration: 1 window.
 
@@ -941,13 +1078,13 @@ Phase 0, 1, 2 and 3 contracts to preserve in every change below:
 |---|---|---|---|
 | D-LP-1 | Order and rules of §3 (L1p, CR-1…CR-4 with E1–E5, TR with D-LP-9) | acceptable only with amendments | Approve the 3.2 text (CR-1…CR-3 rescoped; PO-A split) |
 | D-LP-2 | Ordered insertion and compaction, F FOR SHARE | architecturally acceptable | Approve |
-| D-LP-3 | Closure; **the three-attempt visible Conflict is a new outcome** | architecturally acceptable; owner approves the new Conflict | Approve |
-| D-LP-4 | Guard contract §6 (G1–G12, key classes §6.3) | 4th: requires a focused correction (F4-2) | **[3.3]** Approve the corrected contract (π projection over all held resources; ordered, coordinated and delegated key classes; per-lemma effects). Does **not** close GAS-P4-002 by specification. |
+| D-LP-3 | Closure; **explicit owner approval required for the new visible Conflict after exactly three abandoned restriction attempts** | architecturally acceptable | Approve |
+| D-LP-4 | Guard contract §6 (G1–G12, key classes §6.3), **[3.4] with preservation-row classes in G1 and G10** | 5th: blocker F5-2 | Approve the 3.4 contract. Does **not** close GAS-P4-002 by specification. |
 | D-LP-5 | File before Record | architecturally acceptable | Approve |
 | D-LP-6a | Destruction ordering | acceptable only with amendments | Approve with the same-id rule and the PO-B narrowing |
 | D-LP-6b | Shared publication ordering | architecturally acceptable | Approve |
 | D-LP-7 | Phase 3 sequences | architecturally acceptable | Approve |
-| D-LP-8 | Modified Option C: **P2-8a…g, 18 windows** (§4.9) | 4th: requires a focused decision on reoccupation (F4-1) | **[3.3]** Approve modified C with **P2-8g = Alternative A** (§5.4); decline Alternative B; decline Options A and B of §3.3 |
+| D-LP-8 | Modified Option C, P2-8a…g (**19 windows**), including **[3.4]**: serialised generation reservation (Wh1a, Wh1b); **durable cross-operation generation skipping**; Wh2 COLLISION and retry behaviour; the We7 generation-bound download correction; **fail-closed admission (§5.5)** | 5th: blockers F5-1, F5-3, F5-4 | Approve the 3.4 design. Each listed behaviour change needs explicit owner approval. |
 | D-LP-9 | Option (a) as specified in §4.10 | **4th: architecturally acceptable as a separately bounded implementation item**; NOWAIT not equivalent | Approve (a). Option (b) NOWAIT is **withdrawn** as an equivalent (counterexample §11.7). (c) keep = explicit risk acceptance only. |
 
 ## 9. Phase 4 writers and LO-1…LO-7
@@ -1092,9 +1229,11 @@ Their references to Source, vocabularies and users are terminal (TR, with D-LP-9
 - **LP-10b [3.2]:** audits **SQL, triggers and foreign keys**, not only Java flags.
   - **Inventory:** for every statement reachable from an A1–A4 window, list the columns written (proving no
     target-field trigger fires) and the fk columns changed (proving no fk check is queued).
-  - **Runtime check:** `pg_locks` after each A1 statement shows only the O row lock and the transaction lock.
+  - ~~**Runtime check:** `pg_locks` after each A1 statement shows only the O row lock and the transaction lock.~~
+    **Historical, not operative [3.4]:** withdrawn in 3.3. Use blocker pids, real conflicting probes and the exact
+    SQL, trigger and fk inventory.
   - **Ownership:** registered ownership is cross-checked against granted advisory locks.
-- **LP-10h (ACC):** two repairs of one content plan one generation; one CREATE_NEW collision, one commit, no 23505;
+- **LP-10h [3.4, aligned]:** two ordinary new planners of one content run concurrently: they serialise on Ct(X) (blocker observed) and receive **distinct committed** generation numbers. A same-generation CREATE_NEW collision is kept only as a **legacy-fixture** or DB characterisation.
   a retry plans `max + 1`. **[3.2]** This tests planning collision and generation retry only; the shared SQL key
   cases are LP-10f.
 - **LP-10i (ACC):** final staging cleanup (P14b) racing the worker that still owns the operation: the cleanup waits
@@ -1120,6 +1259,17 @@ Their references to Source, vocabularies and users are terminal (TR, with D-LP-9
   with its own timeout independent of `deadlock_timeout` and `lock_timeout`; collect every future.
 
 **[3.3] Amendments from the fourth assessment §9:**
+- **LP-8c [3.4, F5-2] (service paths):**
+  - Ct → U → own O with U's UUID greater than O's, **accepted**, and the reverse order, accepted;
+  - owned attestation and unresolved release;
+  - the terminal O and U fast paths;
+  - a new lower-level ordered resource after a higher one, **rejected**;
+  - an unsupported late ordered lock after a coordinated U, **rejected**;
+  - a missing coordinator, **rejected**;
+  - session-advisory ownership LOST, or advisory-connection failure, **rejected**;
+  - worksheet multi-index and descending provisional-sequence acceptance retained.
+
+  The accepted service order is not changed to satisfy UUID comparisons.
 - **LP-8b additions:**
   - **accepted:** several worksheet inserts in one `add`, each touching the ordered `file_id` key and the
     coordinated sequence key; descending request-rank sequence values; LP-3's 6, 8, 9 compaction;
@@ -1136,14 +1286,17 @@ Their references to Source, vocabularies and users are terminal (TR, with D-LP-9
     is a conflicting request with `NOWAIT` from a controller connection: 55P03 means the row is held, success means
     it is not.
   - Identify blockers by `pg_blocking_pids`.
-- **LP-10d (reachable fixtures):** split into:
-  - **(i)** Ct(X) serialisation of two legitimate recorders of X: `commitRepair` recording the old generation path,
-    and Wb1 retiring the superseded generation of the same content. Initial generations, ownership and states are
-    stated. The second recorder is observed waiting **on Ct(X)**; after it, it finds the record and returns the
-    existing one.
-  - **(ii)** A **DB-class** characterisation of the OPEN-key wait with raw SQL.
+- **LP-10d [3.4, corrected]:** revision 3.3's fixture is withdrawn. It assumed `commitRepair` and Wb1 act on the same
+  initial generation, but one needs it CURRENT and the other QUARANTINE_PENDING. Two separate valid fixtures replace
+  it:
+  - **(i) Ct serialisation:** a repair of X in `commitRepair` (generation g_old CURRENT; X MISSING or DAMAGED) races
+    a We1 MISSING recording of X. The second is observed waiting **on Ct(X)** (blocker = first). Final states are
+    consistent, with exactly one CURRENT generation.
+  - **(ii) OPEN-key contention:** two legitimate recorders of one OPEN path for X, both under Ct(X): Wc4 (a stopped
+    repair's copy) and Wf2 (that repair's cancellation path). The fixture states initial generations, ownership and
+    states explicitly. The second returns the existing record after the first commits.
+  - **(iii)** A DB-class characterisation of the raw OPEN-key wait.
 
-  No fixture combines a recorded-generation path with an operation claim at the same path (forbidden by F1).
 - **LP-10e:** (ii) uses the own-target case only. **(iv) is replaced** by runtime assertions at destruction refusal
   after inventory, and at any claim while an OPEN record exists, plus LP-15.
 - **LP-10f:** the uncommitted claim is held by a **server-side seam**: a test-only trigger, installed only in the test
@@ -1164,86 +1317,43 @@ Their references to Source, vocabularies and users are terminal (TR, with D-LP-9
 - **LP-14b:** the full four-job gate of the fourth assessment §8 (items 1–8), including first-changer rollback in the
   last-administrator race, display-only, no-change and self-disable precedence cases, entry rejection from an outer
   transaction, key release on commit and rollback, and no user FOR UPDATE in the service path.
-- **LP-15 [3.3, new] F4-1 schedule:**
-  - **(a) BASE on accepted code (COMPAT-style characterisation):** the settler pauses at AFTER_QUARANTINE_MOVE;
-    repair W reclaims p and commits its claim; settlement runs. Assert W's claim is released by settlement
-    (GAS-P4-004 characterisation). No deadlock is expected, since accepted code takes no Ct.
-  - **(b) DB characterisation of the proposed 3.2 Wa2 order** (Ct(X) U, then the keyed release) against `commitRepair`
-    (O(W), then Ct(X)), with raw SQL: expected 40P01.
-  - **(c) ACC under P2-8g:** with the OPEN record at p, W plans a new generation (Wh1). A legacy fixture with W
-    already planned at p is BLOCKED (COLLISION) at Wh2 under Ct(X) Sh. Settlement completes; W's copy is never
-    released or adopted; no 40P01 or 55P03; complete history.
-- **LP-16 [3.3, new] download (F4-3):**
-  - download MISSING against a concurrent repair commit and a concurrent scan of the same content: serialised on
-    Ct(X);
-  - the finding and state committed and the accepted message thrown;
-  - a state already changed under the lock: nothing inserted;
-  - standalone SIZE_MISMATCH and `tryShare` NOT_PROTECTED findings (E2): terminal statements.
+- **LP-15 [3.4]:** three classes, kept apart.
+  - **(a) Semantic baseline (COMPAT characterisation, accepted code):** a settler pauses at AFTER_QUARANTINE_MOVE;
+    repair W reclaims p and commits its claim; settlement releases W's claim (GAS-P4-004). Assert the ownership
+    outcome. No deadlock is expected.
+  - **(b) Raw-SQL deadlock characterisation (DB):** the 3.2 Wa2 order (Ct(X) U, then the keyed release) against
+    `commitRepair` (O(W), then Ct(X)): 40P01.
+  - **(c) Corrected acceptance (ACC):**
+    - Wh1a with W planning while an OPEN record exists at p: W reserves a new number.
+    - Wh2 in both orders: OPEN creator first (W refused, COLLISION recorded and committed), and Wh2 first (the OPEN
+      creator waits on Ct(X), then records). The settlement completes; W's copy is never released or adopted.
+  - **Reservation cases (ACC):**
+    - two simultaneous planners from one baseline get distinct committed reservations;
+    - one planner rolls back, and the next reuses nothing committed;
+    - a crash between selection and persistence leaves nothing reserved;
+    - cancelled and final historical plans count toward the high water;
+    - partial-copy replanning (Wh1b) competes with an initial plan (Wh1a);
+    - same-operation replanning advances past its own previous plan;
+    - a compare-and-set failure means full rollback, then a retry reads afresh;
+    - at `high_water = 2147483647` the operation is BLOCKED with the exhaustion message, and nothing is created or
+      claimed.
 
-**Database-behaviour characterisation to add to CI** (DB): §11.3 predicate waits and §11.5, on all four jobs.
+    Each case asserts **committed** rows, not in-memory values.
 
-## 11. Bounded verification executed (non-production)
-
-### 11.1 LP-6
-
-Unchanged from revision 2. Harness `Lp6LockBehaviourIT`, CI run `43831470275` at `9eb66ea`: a compatible KEY SHARE
-(foreign-key or explicit) is not queued behind a waiting FOR UPDATE, on PostgreSQL 16.16 and 18.7, Linux and Windows.
-It does not dismiss SA-R1.
-
-### 11.2 SA-R1 cycle reproduction
-
-Unchanged from revision 2: G → L → C → G gives 40P01, with blockers confirmed by pid, on all four CI jobs (run
-`43831470275`).
-
-### 11.3 Predicate waits (new; basis of PO-B)
-
-| | |
-|---|---|
-| Where | Builder's local PostgreSQL 16, scratch database and throwaway table, plain psql. Not part of CI; no project code. |
-| Schedule | A holds an uncommitted UPDATE of row 1 (`owned` false → true). B runs `UPDATE … WHERE path = 'p' AND owned` (the committed version does not match). C runs `UPDATE … WHERE path = 'p'` (the committed version matches). |
-| Result | B: no wait (54 ms). C: waits, ended by `lock_timeout` (55P03, "while updating tuple (0,1)"). |
-| Use | A location-keyed trigger UPDATE waits only on rows whose committed version matches its predicate. PO-B still needs LP-10e on all four CI jobs. |
-
-### 11.4 Schema facts used
-
-Taken from a scratch database migrated with V0001…V0025 (local PostgreSQL 16):
-- every unique and partial-unique index (§2.5);
-- every foreign key, including the deferred `file_operation.file_id`;
-- every non-internal trigger and the bodies of the cross-row trigger functions (§2.2).
-
-### 11.5 Administrator-check cycle (new [3.1]; refutes revision 3's TR (c), (d) and PO-E)
-
-| | |
-|---|---|
-| Where | Builder's local PostgreSQL 16, scratch database migrated with V0001…V0025, real `app_user`, `change_history` and the exact `lockEnabledAdministrators` SQL. One throwaway table `res` stands in for any capture-session, worksheet or File row. Not part of CI; no project code. |
-| Seed | two enabled administrators a1 < a2 |
-| Schedule | T1 (txid 5982, pid 316): inserts history with actor a2 (fk KEY SHARE on a2). T2 (5983, pid 317): `res` FOR UPDATE. A (5984, pid 315): the administrator check; locks a1, then waits for a2 (blockers = {316}). T1: `res` FOR UPDATE, waits (blockers = {317}). T2: inserts history with actor a1, waits (blockers = {315}). |
-| Result | T1: `ERROR 40P01 deadlock detected`, "Process 316 waits … blocked by process 317. Process 317 waits … blocked by process 315. Process 315 waits … blocked by process 316." T2 and A then proceeded. |
-| Meaning | Any transaction that writes history and later takes a blocking lock can play T1 or T2. One example is accepted `add`, which writes history after each insert and then waits on the next insert. This is a defect of the accepted code, reachable with three concurrent actors, one of them changing a role. It is addressed by D-LP-9. |
-
-### 11.6 Advisory key spaces (new [3.2]; basis of D-LP-9's key)
-
-| | |
-|---|---|
-| Class | builder-executed; local PostgreSQL 16; scratch database; no project code |
-| Schedule | session 1 holds `pg_advisory_lock((7340::bigint << 32) \| 1)` (a bigint with the same bits as the pair (7340, 1)); session 2 calls `pg_try_advisory_lock(7340, 1)` |
-| Result | session 2: `true`; `pg_locks` shows the two-int4 lock with `objsubid = 2`, separate from the bigint lock |
-| Use | the two-int4 key (7340, 1) cannot collide with any existing single-bigint `hashtextextended` key. Not yet in CI. |
-
-### 11.7 D-LP-9 schedules (new [3.2])
-
-| | Run 1: NOWAIT variant | Run 2: D-LP-9(a) variant |
-|---|---|---|
-| Class | builder-executed; local PostgreSQL 16; real `app_user`, `change_history`; no project code | same |
-| Seed | administrators a1 < a2; non-administrator target n (EDITOR) | same |
-| P (password reset of n) | `UPDATE app_user … WHERE user_id = n` (holds n NKU), txid 5990 | same, txid 5992 |
-| A (role change) | `SELECT … WHERE role = 'ADMINISTRATOR' AND enabled ORDER BY user_id FOR UPDATE NOWAIT` (**granted**, 2 rows) | `SELECT pg_advisory_xact_lock(7340, 1)` (granted), then a plain administrator read (2) |
-| A updates n | waits on P | waits on P (blocker = 411, P's pid) |
-| P writes history as a1 | waits on A | **no wait** (a1 is not row-locked) |
-| Outcome | **`40P01 deadlock detected`**: "Process 381 waits … blocked by process 380. Process 380 waits … blocked by process 381." | P commits; A's update proceeds; **no deadlock** |
-| Use | refutes NOWAIT as an equivalent fix (third assessment §7) | consistent with §4.10; service-level LP-14b still required on all four jobs |
-
-## 12. Residual risks and open items
+- **LP-16 [3.4]:** download evidence.
+  - **(i)** Ordinary confirmed MISSING: the finding and state are committed, then the accepted message.
+  - **(ii)** ACTIVE(g1) → MISSING(g1) → repair commits ACTIVE(g2), all **before** the delayed download takes Ct. A
+    server-side seam holds the download between probe and transaction. Result: nothing inserted, g2 not vacated,
+    and the accepted "cannot be read right now; nothing was changed" message.
+  - **(iii)** Changed volume, path or current generation only.
+  - **(iv)** Already MISSING at lock time: the accepted state message.
+  - **(v)** Destruction started (DESTROY_PENDING), and restoration or reverification (MISSING → ACTIVE, same
+    generation): identity equal only when all five fields match.
+  - **(vi)** Finding attribution and history exact.
+  - **(vii)** The precedence: not found → state message → unavailable volume → unreadable → missing.
+  - **(viii)** Standalone SIZE_MISMATCH and `tryShare` NOT_PROTECTED (E2).
+  - **(ix)** Authorization snapshot: a File restricted after the request-start check behaves as accepted (no new
+    File lock).
 
 - **[3.3] Changes to the assumptions:**
   - **INV-U is withdrawn (contradicted, §5.4)** and is not restated under another name. P2-8g is a mechanism with
@@ -1251,16 +1361,9 @@ Taken from a scratch database migrated with V0001…V0025 (local PostgreSQL 16):
   - **INV-P is scoped:** the theorem covers the **admitted data set**: rows produced by the audited constructors
     (`ManagedVolume.originalPath` and `quarantinePath`, ingest UUIDs from `GlobalIds`, repair generation planning,
     partial-copy replanning) and preserved known provenance. It is **not** a database constraint.
-- **[3.3] Data-audit obligation (implementation preflight).** A bounded, read-only audit query runs before the
-  protocol is enabled. It lists:
-  - generation `storage_path` values that are not `originalPath(content_id, generation)`;
-  - operation `target_path` values that are not the constructor's output for their content and generation;
-  - unresolved and quarantine paths outside the generated namespaces;
-  - **case-fold collisions** (`lower(path)` duplicates per volume) on supported hosts;
-  - repair operations whose planned generation duplicates another repair's.
+- **[3.4] Data audit:** superseded by the fail-closed admission and activation design of §5.5 (AU-1…AU-8). A read-only
+  report alone is not sufficient.
 
-  Nonconforming rows are reported visibly for an owner decision. Immutable paths are not rewritten, and the proof is
-  not claimed for those rows.
 - **[3.3] Receiver scope:** lemma A2 holds per `IngestionService` instance, with no direct callers and no duplicate
   staging (§5).
 - **[3.2] Unresolved assumptions** (each with a test, none proved by listing; INV-U superseded as above):
