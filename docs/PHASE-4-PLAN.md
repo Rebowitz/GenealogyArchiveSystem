@@ -495,7 +495,7 @@ These rows add to or replace the rows above where they cover the same requiremen
 | D-001…D-005, §12, D4-25, D4-28 | `HistoricalDateTest` HD-1…HD-7 (Cl. §10.5): the 37 worked examples of Cl. §2.4 with JDNs; calendar fixed points and cross-checks; envelope properties; year start respected when recorded and widened in every period when UNSPECIFIED; dual year; per-calendar day validity; integrity scan; **HD-7, no inferred convention** | Full |
 | C-004, SEC-008 (Rev. 2) | `CandidateResolutionConcurrencyIT` CR-1…CR-7 (§10.1) | Full |
 | C-005, A-006 (Rev. 2) | `CandidateReproposalIT` RP-1…RP-8 (§10.2) | Full |
-| P-008, SEC-004 (Rev. 2) | `CollectiveRestrictionLifecycleIT` CL-1…CL-10 (§10.3) | Full |
+| P-008, SEC-004 (Rev. 2, 3) | `CollectiveRestrictionLifecycleIT` CL-1…CL-11 (Cl. §10.3; CL-11 in §10.6) | Full |
 | SEC-004, D4-27 (Rev. 2, 3), U-3 | `PersonRestrictionOperationIT` RO-1…RO-18 (Cl. §10.4, §10.6; RO-18 = configuration bounds and the 50,000 cap) | Full |
 | Supplement area 1: concurrent resolution of one Mention | CR-1, CR-2, CR-3, CR-4, CR-5, CR-7 | Full |
 | Supplement area 2: re-proposal of a rejected candidate | RP-1…RP-8 | Full |
@@ -571,7 +571,7 @@ Names, Persons, Places, resolutions) and that no Change History entry of a forbi
 | WP2 | People: Person, Names, relationships, identity proposals; V0025 | P-001…P-007, P-009, P-010; prohibited-inference items 1–5, 8, 12, 13, 20 |
 | WP3 | Places: Place, Names, jurisdiction links (kind, basis); V0026; no formation links | L-001…L-003; `PlaceIT` D4-18 scenarios; `countyFormationExpressedByContainmentAndNote`; items 15, 19 |
 | WP4 | Mentions, Candidate Resolution, collective references, Record Role links, **Record Role withdrawal and restoration** (GAS-P4-PLAN-001 C), Record date interpretation, restriction tables and deferred invariant triggers; V0027 | C-001…C-006, A-006, P-008; CR-1…CR-7, RP-1…RP-8, RW-1…RW-10; items 6, 7, 9, 14, 16, 17 |
-| WP5 | Browser workflows, restriction (policy S and the D4-27 protocol), history visibility | `PeopleWebIT`, `PlacesWebIT`, `PeopleRestrictionIT` 1–11, CL-1…CL-11, RO-1…RO-18, LO-4…LO-7 |
+| WP5 | Browser workflows, restriction (policy S and the D4-27 protocol), history visibility | `PeopleWebIT`, `PlacesWebIT`, `PeopleRestrictionIT` 1–11, CL-1…CL-11, RO-1…RO-18, LO-4…LO-7, RW-11 (Role withdraw and restore controls) |
 | WP6 | Reference fixture, full CI matrix, completion report (`PHASE-4-COMPLETION.md`), draft PR, then stop for the independent Codex audit | All four jobs green, every job's results checked individually |
 
 The phase gate (§62) is all of §9.1 marked Full, plus §9.2, passing on every job. **No merge, acceptance or tag

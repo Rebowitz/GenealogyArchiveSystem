@@ -195,3 +195,36 @@ the Record exactly as withdrawal does.
 - **ADR-0012 §5a.** States that both actions touch the Record and increment both versions by one.
 
 **Status:** builder-corrected, pending independent verification.
+
+---
+
+## Disposition received after `d821b4d`
+
+The reviewer recorded **PR4-R4: CLOSED (documentation level)**, and opened PR4-R5.
+
+## PR4-R5 — MINOR — CL-11 omitted from one summary row
+
+**Finding (reviewer's text, unaltered):**
+
+> **PR4-R5 — MINOR: CL-11 omitted from one summary row.**
+>
+> In `docs/PHASE-4-PLAN.md`, the collective-restriction test-matrix row lists `CL-1…CL-10`, while the detailed specification and another matrix row require `CL-11`.
+>
+> The detailed requirement is present, so this appears to be a summary omission rather than a missing security design.
+>
+> **Recommended correction:** Change the collective-restriction matrix entry to `CL-1…CL-11`, preserving the existing CL-11 requirement.
+
+**Response.** Agreed. The row was written in Revision 2, before CL-11 was added in Revision 3, and was not updated.
+
+**Changes:**
+- **Plan §9.1a.** The row now reads "P-008, SEC-004 (Rev. 2, 3) | `CollectiveRestrictionLifecycleIT` CL-1…CL-11
+  (Cl. §10.3; CL-11 in §10.6)". The CL-11 requirement itself is unchanged.
+- **Sweep of every test-range reference.** I checked every range of every suite (CR, RP, CL, RO, HD, LO, RW) across
+  the plan, ADR-0012 and the clarifications against the defined tests: CR-1…7, RP-1…8, CL-1…11, RO-1…18,
+  HD-1…7, LO-1…7 and RW-1…11. No other summary range is short.
+  - The narrower ranges that remain are intentional work-package splits: LO-1…LO-3 in WP1 (with LO-4…LO-7 in WP5),
+    and RW-1…RW-10 in WP4.
+  - The sweep found one related gap: **RW-11** (the browser test for the Role withdraw and restore controls) was in
+    the matrix but in no work-package gate. It is now in the WP5 gate, the browser work package.
+
+**Status:** builder-corrected, pending independent verification.
