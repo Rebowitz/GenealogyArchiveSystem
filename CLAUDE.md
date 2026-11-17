@@ -17,6 +17,9 @@ You are implementing the Genealogy Archive System. Work from the repository spec
 
 If genuine ambiguity could change historical semantics, identity, provenance, evidence meaning, preservation behavior, uncertainty, security, portability, or cross-platform behavior, stop and report the design question instead of inventing an answer.
 
+### Mandatory engineering design governance
+Before proposing architecture, implementing a phase, or responding to an independent architectural assessment, read and follow `docs/ENGINEERING-DESIGN-INSTRUCTIONS.md` (owner-approved 2026-11-17). It supplements the authority order above without overriding archival invariants or accepted specifications. Apply its mandatory simplicity assessment, two-/three-review convergence escalation triggers, alternative-design comparison, and explicit CONTINUE/SIMPLIFY/RECONSIDER/READY FOR IMPLEMENTATION REVIEW gate. Do not treat passing the next review as the engineering objective. If a convergence trigger fires, stop incremental architectural revisions and report the required reassessment to the owner. Phase 4 WP1 currently has gate **RECONSIDER**; WP1 is unaccepted and WP2 is HOLD. Do not infer implementation authorization from this file.
+
 ### v1 hosting requirement
 The same application codebase must support independent Archive Instances hosted on **Windows and Linux**. PostgreSQL is authoritative on both. The normal client is a web browser.
 
