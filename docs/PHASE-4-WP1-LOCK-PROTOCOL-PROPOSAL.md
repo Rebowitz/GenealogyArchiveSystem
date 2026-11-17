@@ -1,9 +1,21 @@
-# Phase 4 WP1: L1 locking-protocol proposal (WP1-R1, GAS-P4-002), revision 3.6
+# Phase 4 WP1: L1 locking-protocol proposal (WP1-R1, GAS-P4-002), revision 3.7
 
 **Status: REVISED PROPOSAL for owner review and independent Codex assessment. Not implemented.**
 - No production locking code, SQL, trigger or migration in this document has been written.
 - The test designs in §10 are specifications; none of them is claimed to pass.
 - Executed evidence is limited to the bounded, non-production checks in §11.
+- **Revision 3.7** responds to the eighth independent architectural assessment
+  (`Phase-4-WP1-Eighth-Architectural-Assessment.md`, reviewed head `7a97e70`) and the Revision 3.7 direction (§5.8):
+  - an installation-specific lease;
+  - a continuous legacy freeze (an owner decision);
+  - the bootstrap state machine;
+  - per-transaction identity handover;
+  - the controller-loss latch and drain;
+  - journal reconciliation;
+  - audit corrections.
+
+  It is designed **conditionally** on Q-36-1 (one application host), which is **not approved**. F5-1, F5-2 and F5-3
+  are unchanged. Changes are marked **[3.7]**.
 - **Revision 3.6** responds to the seventh independent architectural assessment
   (`Phase-4-WP1-Seventh-Architectural-Assessment.md`, reviewed head `9993220`) and the Revision 3.6 direction. F5-4
   is answered by:
@@ -139,6 +151,23 @@
 | §11 Tests | LP-17 rebuilt (AA-1…AA-24, including every mandatory scenario); LP-10d (ii-b) split into a coordinator test and a raw-key characterisation | §10 |
 | §12 Reconciliation and decisions | Seventh-assessment matrix in the corrections record; §8 grouped A–E; business windows 19 / 22 unchanged; control units counted separately | §8; correction record |
 | §13, §14 | Documentation and bounded builder checks only (§11.9) | — |
+
+### 0.5 Revision 3.7 response (Revision 3.7 direction §1–§13) [3.7]
+
+| Direction item | Revision 3.7 | Where |
+|---|---|---|
+| §1 Preserve F5-1…F5-3 and Phase 2/3 behaviour | Retained; no new contradiction found | — |
+| §2 R8-1 lease identity | Installation ID; a fixed per-platform lease root with one object per installation; database and Archive ID binding; duplicate-identity refusal; lifetime, replacement, link and alias rules; launcher and service-account contract; Q-36-1 kept as an owner decision | §5.8.1 |
+| §3 R8-2 continuous legacy exclusion | L1…L12 with the owner-approved freeze (D-LP-8 (xi)); automated aids (masking, the required configuration key, two OS verifications by PID and start instant) and fail-closed refusal; corrected COMMIT → terminate → verify → publish order; counterexample under a successful transition | §5.8.2 |
+| §4 R8-3(a) bootstrap | States S0…S9; order B1…B10 (+ B11 restore); crash and unknown outcomes per boundary; no ordinary admission in DRAIN_PENDING; Flyway and `SchemaMigrator` reconciled | §5.8.3 |
+| §5 R8-3(b) identity handover | No session-level declaration on maintenance connections; per-transaction `maintenance_begin` from the committed singleton; a closure sequence without GA001 | §5.8.4 |
+| §6 R8-4 controller loss | F1 is the ultimate authority; point checks are not tokens; latch; bounded continuation; drain by `(pid, backend_start)`; resume reconciliation; single active phase; bound maintenance admission; narrowed waits | §5.8.5 |
+| §7 R8-5 journal and replay | R36-5 withdrawn; stable keys; attempt, observation and reconciliation records; the 9-step unknown-COMMIT algorithm; filesystem matrix; A-1…A-5 reconciliation; A-3 atomic final transaction kept; A-6 inoperative | §5.8.6 |
+| §8 R8-6 audit | Targetless pre-plan and BLOCKED branches; recorded-absent intents; transition-specific quarantine pointer (source-checked); constructor scope limited to the eight identity columns | §5.8.7 |
+| §9 Other corrections | Diagnostic startup kept; effect-free commands; exact disabled exceptions; 48 gated relations; statement-trigger semantics; schema invariants; restore and rewind limits; inoperative markings | §5.8.8, §5.8.9 |
+| §10 Tests | LP-17 3.7 amendments; LP-10d (ii-b1) reachability resolved as helper-level | §10 |
+| §11 Decisions and assumptions | §8 regrouped: Q-36-1 and D-LP-8 (xi) explicit and unapproved; (v-a/b/d) pending; (vi) conditional; (vii) deferred; (x) optional; D-LP-9(a) separately eligible; smallest alternatives | §8, §5.8.10, §5.8.12 |
+| §12, §13 | Documentation only; no new execution (§11.10) | — |
 
 ## 1. Summary
 
@@ -1115,7 +1144,7 @@ on **every** application table in `gas` (the 40 tables at V0025, §11.4 and §11
   true)` with the singleton.
 - It raises SQLSTATE `GA001` ("write refused: this process's build or activation epoch does not match the archive's
   activation") on any difference.
-- It reads the singleton with a plain `SELECT`, so it never waits on the activation barrier.
+- It reads the singleton with a plain `SELECT`, so it never waits on the activation barrier. **[3.7: narrowed: compatible with EXCLUSIVE B0 only; it can wait behind ACCESS EXCLUSIVE DDL (§5.8.5)]**
 
 Layer B refuses writes by:
 - a new-build process started under an earlier epoch (one that stayed undetected during activation);
@@ -1142,7 +1171,7 @@ prevent **accidental** mixed versions and stale processes, which is the threat t
    quiescence (§5.6.3) and increments the epoch. Any process that survived it undetected has every later write
    refused by layer B and fails visibly until it is restarted.
 
-#### 5.6.3 Activation protocol (direction §3, steps 1–10)
+#### 5.6.3 Activation protocol (direction §3, steps 1–10) **[step-4 authority, bootstrap `FOR SHARE` wait and "never waits" wording inoperative 3.6/3.7; see §5.7, §5.8]**
 
 Command: `activate-preservation --administrator <username> --reason <text>` (new CLI command; the
 `preservation-status` command reports state, epoch, protocol and the last report).
@@ -1281,7 +1310,7 @@ check made earlier can never authorise a write after the boundary.
 | ADMITTED-CLEANUP | COMMITTED, or a DESTROY in CLEANUP_PENDING / CLEANUP_INCOMPLETE, whose remaining work is cleanup of its own records | admitted; completes after activation |
 | UNSAFE-ACTIVE | a non-final operation can still create, claim or release at a location another identity also uses | refuses activation |
 | UNSAFE-AMBIGUOUS | which identity an object, claim or pending move belongs to cannot be decided from the records | refuses activation |
-| UNSAFE-LEGACY | identity or provenance does not match the constructors and relations below | refuses activation unless a reviewed acceptance record exists (§5.6.7, action A-6) |
+| UNSAFE-LEGACY | identity or provenance does not match the constructors and relations below | refuses activation ~~unless a reviewed acceptance record exists (§5.6.7, action A-6)~~ **[inoperative 3.7: A-6 deferred; no waiver exists]** |
 | UNSAFE-UNCLASSIFIED | **any combination not listed in the tables below** | refuses activation (fail-closed default) |
 
 Every check reads the locked snapshot. Paths are compared in Java with `PortableRelativePath` semantics (AU-8); no
@@ -1508,7 +1537,7 @@ rejects COMMITTED, which is correct). It is never isolated.
 | A-3 | Cancel a BLOCKED or WAITING_FOR_VOLUME ingest or repair | `performCancel` / `applyCancel` (accepted state rule) | every source its settlement or move would release (`releaseTargetsAt`) has no claimant other than the operation itself and final stale claims (AU-5); otherwise refused, and nothing changes |
 | A-4 | Move an attested object to quarantine | `quarantineAttested` | as A-3 for the attested source |
 | A-5 | **Administrative hold:** PROMOTING, PROMOTED or WAITING_FOR_VOLUME → BLOCKED (STATE_UNKNOWN), recorded with attribution, which makes A-3 or retry applicable | the worker's existing `block` semantics, **not** an existing Administrator action | **New authority; requires explicit owner approval** (D-LP-8 admission (c)). Without approval, a component whose resolution needs it stays refused, and preservation stays disabled. |
-| A-6 | Reviewed legacy acceptance: record that a specific UNSAFE-LEGACY row is accepted as is | none (a decision record only; no data change) | allowed only for a path **outside** the constructor namespaces (`originals/…`, `quarantine/<operation id>-…`), so it can never alias a future constructor path, and only if AU-8 finds no alias for it. The next audit treats the row as ADMITTED-REVIEWED. **Owner approval required** (D-LP-8 admission (d)). |
+| A-6 **[inoperative 3.7; deferred]** | Reviewed legacy acceptance: record that a specific UNSAFE-LEGACY row is accepted as is | none (a decision record only; no data change) | allowed only for a path **outside** the constructor namespaces (`originals/…`, `quarantine/<operation id>-…`), so it can never alias a future constructor path, and only if AU-8 finds no alias for it. The next audit treats the row as ADMITTED-REVIEWED. **Owner approval required** (D-LP-8 admission (d)). |
 
 The procedure meets the direction's seven requirements:
 - **Bytes and evidence are preserved:** no action deletes or overwrites; moves follow intent-before-move with
@@ -1635,7 +1664,7 @@ Retained from §5.6 without change:
 
 | Property | Specification |
 |---|---|
-| Object | One lock file per Archive Instance host: Linux `/var/lib/genealogy-archive/run/instance.lock` (group `genealogy-archive`, mode 0660); Windows `%ProgramData%\GenealogyArchive\run\instance.lock` (ACL: read for `NT SERVICE\GenealogyArchiveWeb` and `…Worker`; read/write for SYSTEM and Administrators). Created by the install scripts (a deployment change; D-LP-8 (v)). Its contents are irrelevant. |
+| Object **[inoperative 3.7: replaced by the installation-specific lease, §5.8.1]** | One lock file per Archive Instance host: Linux `/var/lib/genealogy-archive/run/instance.lock` (group `genealogy-archive`, mode 0660); Windows `%ProgramData%\GenealogyArchive\run\instance.lock` (ACL: read for `NT SERVICE\GenealogyArchiveWeb` and `…Worker`; read/write for SYSTEM and Administrators). Created by the install scripts (a deployment change; D-LP-8 (v)). Its contents are irrelevant. |
 | Holder | Every compatible process: `serve`, `worker` and every CLI command. One JVM opens one channel. |
 | Mode | Services and ordinary CLI commands: `FileChannel.lock(0, Long.MAX_VALUE, shared = true)` on a read channel. Maintenance: `tryLock(…, shared = false)` on a read/write channel. Maintenance **never blocks** on F1. |
 | Acquisition order | **The first action of `main`**, before the configuration is used to open a pool, before Flyway, before any volume access. Rule F1-0 (an ArchUnit and startup test): no `DataSource` or `ManagedVolume` can be created before the lease is held. |
@@ -1857,7 +1886,7 @@ entry is a durable crash state, settled by recovery after activation.
 
 Read-only `preservation-status` and `status` take F1 shared only.
 
-**Acquisition order, never waiting:**
+**Acquisition order** ~~never waiting~~ **[3.7: waits are bounded, not absent, §5.8.5; step 2's session declaration is replaced by `maintenance_begin`, §5.8.4]**:
 1. F1 `tryLock` exclusive.
 2. Open the controller connection (application role; startup options declare the singleton's current identity;
    `application_name = genealogy-archive-maint-<run>`).
@@ -1867,7 +1896,7 @@ Read-only `preservation-status` and `status` take F1 shared only.
    exists (a partial unique index allows at most one). An existing OPEN run can be continued only by
    `maintenance resume` or `maintenance abort` (CU-20).
 
-Any failure releases what was acquired, in reverse order. Nothing waits; the run is refused with a reason.
+Any failure releases what was acquired, in reverse order. ~~Nothing waits~~ **[inoperative 3.7]**; the run is refused with a reason.
 
 **Lifetimes:**
 
@@ -1986,7 +2015,7 @@ DESTROY), with the accepted windows kept separate:
 | W-staging | `markStagingCleaned` | STAGING_CLEANUP | done |
 | Jn | — | COMPLETED | — |
 
-**Resume rule.** For each IN_PROGRESS action, the next window is derived from **business state, not from the
+**Resume rule [inoperative 3.7: replaced by §5.8.6]**. For each IN_PROGRESS action, the next window is derived from **business state, not from the
 journal alone**:
 - an INTENDED Q of this action means settle;
 - a QUARANTINED Q with the operation not final means W-final;
@@ -2106,7 +2135,7 @@ connection is gone (CU-21).
 **AU-2 Operation target meaning:** §5.6.5's table, with these corrections:
 - INGEST COMMITTED or COMPLETED with NEW_CONTENT: the generation `target_generation` of X **is g₀(X)** (any
   number), with `storage_path = target_path`, created by this operation (R7-A1).
-- An INGEST with a partial history has `quarantine_path` = the destination of its latest PARTIAL_COPY Q (set
+- **[inoperative 3.7: replaced by the transition-specific pointer rule, §5.8.7]** An INGEST with a partial history has `quarantine_path` = the destination of its latest PARTIAL_COPY Q (set
   together with the replan in `quarantinePartialAndReplan`).
 - SHARED_CONTENT is unchanged (ADMITTED-CLEANUP, `target_created` false), checked **relationally**. The Y in
   `target_path` must parse as `originalPath(Y, t)` and Y must have no `file_content` row; Y must be referenced by no
@@ -2148,7 +2177,7 @@ connection is gone (CU-21).
 - **Failing fixtures:** a U matching no role; a role relation broken (for example a W1 U whose O targets another
   path); a non-final claimant.
 
-**AU-5 INTENDED quarantine entries: binding by reason (R7-A3)**
+**AU-5 INTENDED quarantine entries: binding by reason (R7-A3)** **[3.7: extended by the recorded-absent rules, §5.8.7]**
 
 | Reason | Source relation | Evidence binding (as recorded; never recomputed, never downgraded, never compared with the full expected hash unless the writer used it) |
 |---|---|---|
@@ -2306,11 +2335,739 @@ wrappers run accepted windows and add a private journal insert.
 | R36-2 | OS file locks are released only after the holding process's threads have ended (Linux `fcntl`; Windows `LockFileEx`) | Linux primitive observed (§11.9 (e)); Windows **unverified**: LP-17 AA-17 on Windows CI |
 | R36-3 | Client premise of layer A (no READ WRITE override by accepted builds) | source-derived; AA-3 with the real driver and pool versions (Spring Boot 4.1.1 BOM; versions to be recorded) |
 | R36-4 | Windows legacy verification relies on SCM state plus operator confirmation of listed Java processes | stated limitation; confirmations journalled |
-| R36-5 | Every business window used by an action is a CAS on its expected state, making repetition after unknown outcome NOT_APPLIED | per-window proof at implementation (CU-18 tests) |
-| R36-6 | No accepted writer fills an identity path column except from the constructors or by copying another identity column | source inventory §5.7.9; LP-10b-style ArchUnit rule at implementation |
+| R36-5 **[inoperative 3.7]** | Every business window used by an action is a CAS on its expected state, making repetition after unknown outcome NOT_APPLIED | per-window proof at implementation (CU-18 tests) |
+| R36-6 **[3.7: scoped as R37-6]** | No accepted writer fills an identity path column except from the constructors or by copying another identity column | source inventory §5.7.9; LP-10b-style ArchUnit rule at implementation |
 | R35-3 | READ COMMITTED application transactions | retained |
 | R35-6 | Killed-process effects are crash-equivalent | retained; now justified by F1 |
 | R35-1, R35-2, R35-4 | 3.5 assumptions | **superseded** by F1, F3 and §5.7.12 |
+
+### 5.8 Revision 3.7: lease identity, continuous legacy exclusion, bootstrap, identity handover, controller loss, reconciliation and audit corrections [3.7]
+
+**Evidence class:** proposed design; source analysis at `7a97e70`. There is no new local execution in 3.7 (§11.10).
+Nothing is implemented, and no LP-17 case is claimed to pass.
+
+**Conditional scope.** Everything in §5.7 and §5.8 is designed **for one designated application host per Archive
+Instance** (Q-36-1). That boundary is an **owner decision that has not been taken**; this document does not record it
+as approved. If the owner rejects it, F1 no longer proves the termination of every writer, and the smallest
+alternative is stated in §5.8.10.
+
+**Precedence.** §5.8 governs over §5.7, which governs over §5.6. Superseded statements are marked
+**[inoperative 3.7]** in place (§5.8.9).
+
+#### 5.8.1 R8-1: installation identity and the lease-object contract
+
+**Identities.**
+
+| Identity | What it is | Provisioned | Never |
+|---|---|---|---|
+| **Installation ID** | A UUID naming one installation of the application on one host: its configuration, its lease object and its database binding. Installation metadata only. | By the install scripts (or `provision-installation`, an effect-free command that writes only the configuration file) **before** any database or storage effect, as the required configuration key `installation.id` | the Archive ID; derived from a hostname or path; a File identity |
+| **Approved host ID** | The host the installation runs on: Linux `/etc/machine-id`, Windows `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` | read at startup | a security credential (a cloned VM shares it: limitation, R37-3) |
+| **Archive ID** | `archive_instance.archive_id` (ADR-0006, immutable) | by `init-archive`, as today | changed by any lease or host operation |
+
+**Lock-object mapping.**
+- **Lease root**, fixed per platform and not configurable:
+  - Linux: `/var/lib/genealogy-archive-leases` (root:root, 0755);
+  - Windows: `%SystemDrive%\ProgramData\GenealogyArchive-Leases`, where `%ProgramData%` comes from
+    `SHGetKnownFolderPath`, not from the configurable `-DataDir`. The ACL grants Full control to SYSTEM and
+    Administrators, and RX to the instance's service SIDs. Inheritance is removed.
+- **Lease object:** `<lease root>/<installation id>.lease`. Exactly one per installation ID, and different IDs give
+  different objects. Two independent installations on one host therefore have independent leases, and maintenance of
+  one never waits for the other. That removes 3.6's single host-wide path.
+- **File contents:** fixed text naming the installation ID, used only for diagnostics.
+- **Ownership and mode:** Linux root:`<service group>` 0640; Windows the same ACL as its directory. The lease root
+  must be on a **local** filesystem: Linux `statfs` type ext4, xfs or btrfs; Windows a fixed NTFS volume. NAS, network
+  and removable filesystems are refused, and archival storage is never used.
+
+**Binding to the database** (columns of the singleton, §5.8.3; set by the transition, never by ordinary processes):
+- `installation_id`, `approved_host_id`, `lease_object` (canonical path text);
+- `cluster_system_identifier` and `database_oid`;
+- `archive_id`: null until `init-archive`, which sets it in the same transaction as the `archive_instance` insert.
+
+Every compatible process's ordinary connection initialisation (`admit_session`, F3) checks its configured
+installation ID, its host ID and its canonical lease path against these columns. A process whose configuration is a
+**copy** with another installation ID, another lease path, or another host fails **before any business statement**
+(GA002). This is how two lease identities for one database are detected and refused. (A copy that keeps the **same**
+installation ID maps to the **same** lease object, so the lease itself excludes it.)
+
+**Acquisition and lifetime.** `LeaseHolder.acquire()` is the first action of `GenealogyArchive.main` for every
+effect-producing command.
+1. Parse only the configuration file (effect-free) to get `installation.id`.
+2. Validate the path: every component from the lease root down must be a real directory (no symbolic link, no
+   Windows junction or reparse point), checked with `NOFOLLOW_LINKS` attributes, `isOther`, and `toRealPath` equal to
+   the constructed path (case-insensitively on Windows). It must have the expected owner and must not be group- or
+   world-writable on Linux.
+3. Open **one** channel.
+   - **Linux:** `READ` (shared) or `READ, WRITE` (maintenance), with `NOFOLLOW_LINKS`.
+   - **Windows:** additionally `ExtendedOpenOption.NOSHARE_DELETE` (and `NOSHARE_WRITE` for the shared holders), so the
+     object cannot be renamed, deleted or replaced while any holder has it open.
+4. Lock:
+   - services and ordinary CLI: `lock(0, MAX, true)`;
+   - maintenance: `tryLock(0, MAX, false)`.
+
+   A shared request that returns `isShared() == false` is an **unsupported platform**: refuse and exit, never
+   serialise silently.
+5. Record the identity: Linux `(dev, ino)` of the opened path; Windows the volume serial and file index of the object
+   opened (implementation via `GetFileInformationByHandle` through the platform package, a "filesystem/path handling"
+   exception allowed by CLAUDE.md).
+
+**Lifetime rules** (application invariants, enforced by code and tests; not OS guarantees):
+- The channel and `FileLock` are held in one static final holder, reachable for the JVM's life. There is no
+  try-with-resources, no shutdown hook and no cleaner that closes it.
+- No other code opens the lease path (ArchUnit). On Linux this is essential, because closing **any** descriptor of
+  the inode releases the process's `fcntl` locks.
+- Pool shutdown, pool replacement, worker cleanup, receiver cleanup and timer shutdown never touch it. The lease ends
+  only with the JVM.
+- **Interruption:** a waiting shared `lock()` runs on a dedicated thread. The main thread waits on it with a
+  supervisor that logs "maintenance in progress" every minute. Interruption, `ClosedChannelException`,
+  `OverlappingFileLockException` or any I/O error means exit, with no effect performed.
+- **Unexpected loss:** at every logical-step `begin` and every minute, `FileLock.isValid()` and the recorded object
+  identity are re-checked. The path must still resolve to the same `(dev, ino)` or file index. On any failure the
+  process latches **FENCED**: no new step; steps in flight run only to the safe boundary defined in §5.7.5. It then
+  exits with code 4. This detects replacement after the fact; non-replacement is enforced by the next rule.
+- **Install, upgrade and uninstall contract:**
+  - The scripts create the lease root and the lease object **once, during provisioning, while no holder can exist**,
+    and never afterwards.
+  - Upgrade replaces the jar only, never the lease object.
+  - Uninstall leaves the lease root in place.
+  - A missing lease object at startup is a **refusal**, not "create a new one". Only offline `provision-installation`
+    (no holder, root/Administrator) may create it.
+  - This excludes the Linux replacement counterexample of the eighth assessment §5 (holder on inode I, maintenance
+    locking a new inode J): J can come into being only through an offline provisioning step that refuses while I's
+    lease root is in use. Its check is `fuser`-style: maintenance `tryLock` on I succeeds only if there is no holder.
+- **Children and helpers:** the application starts no child processes (`ProcessBuilder` and `Runtime.exec` are
+  absent from `src/main`, verified by source search). An ArchUnit rule keeps it so. Any future child that could
+  mutate storage must take the same shared lease first.
+- **Launchers:**
+  - Linux systemd runs `java -jar … serve|worker` directly, so the unit's main PID is the JVM, the holder.
+  - Windows WinSW runs `java.exe` as its child. The child JVM holds the lease, so the death of the WinSW parent says
+    nothing; only the lease does.
+  - Direct CLI use goes through the same `main`. Test scripts must use the same entry or label themselves as
+    non-acceptance harnesses.
+
+**Service-account contract.**
+- **Linux:** services run as `genealogy-archive` (read on the lease object; shared lock on a read channel).
+- **Linux maintenance commands** (`transition`, `migrate`, `activate-preservation`, `preservation-resolve`,
+  `maintenance resume / abort`, `verify-restore`, `rebind-host`) run as **root**. They need write access to the lease
+  object and OS process visibility, and they read the database secret from the protected file as today.
+- **Windows:** web and worker run as `NT SERVICE\GenealogyArchiveWeb` and `…Worker` (RX on the lease root and R on
+  the object); maintenance runs as an elevated Administrator.
+- This **changes** the accepted installer instruction "migrate as the service account" (`deploy/linux/install.sh`
+  step 3). That is a documented deployment change in D-LP-8 (v-a).
+- `web.service` has `ProtectSystem=strict`; the lease root needs no write access for services, but its read
+  visibility under that setting is acceptance test AA-17.
+
+#### 5.8.2 R8-2: continuous legacy-build exclusion
+
+**Two separate layers.**
+1. The **operating-system process fence**, which the database cannot provide. It keeps legacy (accepted, pre-F1)
+   processes from running at all during the transition.
+2. The **database backstops**: the role default (fresh legacy sessions are read-only) and the layer B DML gate. They
+   limit what a legacy *session* can do. They do **not** stop a legacy *process*, or its filesystem work, after its
+   backend is terminated.
+
+**Owner-approved prerequisite (new decision D-LP-8 (xi)): continuous legacy change freeze.** From step L1 to step
+L12 below, no legacy build may start on the approved host. That covers services, service recovery, scheduled tasks,
+manual runs, scripts, copied launchers and copied jars. This is an **operational guarantee given by the operator**,
+not an automated one. The tooling enforces what it can (marked *auto*) and refuses when it cannot verify; it does not
+claim more.
+
+| Step | Action | Kind |
+|---|---|---|
+| L1 | Freeze begins. Linux: `systemctl disable --now` **and `systemctl mask`** both units (mask defeats `Restart=on-failure`, dependencies and manual `start`). Windows: `sc config <svc> start= disabled` and `sc failure <svc> reset= 0 actions= ""` for both services. Disable every scheduled task or cron entry that runs the jar (operator inventory, recorded). | operator; *auto*-verified by L5 (unit and service state, start type, failure actions) |
+| L2 | Services stopped | operator |
+| L3 | Install the new build: **replace the jar in place** (the units and WinSW XML then name new code); provision the installation ID, lease root and lease object; **write the required key `installation.id` into `installation.yml`**. Every accepted build rejects unknown configuration keys (`InstallationConfigLoader`: "Unknown keys are errors"), so any legacy launch that reads **this** configuration file exits at configuration load, **before any database or storage effect**. | *auto* partial fence: it does not stop a legacy launch with a copied configuration |
+| L4 | `transition` takes F1 exclusive on the new lease object | *auto* |
+| L5 | **OS verification 1.** Enumerate every process (`ProcessHandle.allProcesses`, with administrative rights). Record `(pid, start instant, user, command)` for each Java runtime process. **Refuse** if: (a) any process's command or arguments name the installation's jar, any copy of a `genealogy-archive*.jar`, or `org.genealogyarchive`; (b) any Java process's arguments are unavailable (usual on Windows) and the operator has not **confirmed it unrelated by `(pid, start instant)`**; (c) any process information is inaccessible; (d) the L1 unit or service state is not masked/disabled, or recovery is still enabled. | *auto*, fail-closed on uncertainty; confirmations journalled |
+| L6 | Bootstrap controller and advisory (§5.8.3 B2) | *auto* |
+| L7 | Gate-installation migration (§5.8.3 B3–B5), to **known COMMIT** | *auto* |
+| L8 | **After known COMMIT**, on a read-write maintenance connection: terminate every other application-role backend except the run's own (`pg_terminate_backend(pid, 5000)`), and confirm each is gone. **This is not rolled back** by anything. | *auto* |
+| L9 | Coverage verification (§5.8.3 B7) | *auto* |
+| L10 | **OS verification 2, immediately before admission:** repeat L5. Any Java process **not** present at L5 with the same `(pid, start instant)` makes the run refuse (PID reuse is detected through the start instant). Repeat the session check of L8. | *auto*, fail-closed |
+| L11 | Durable `TRANSITION_COMPLETE` publication (§5.8.3 B8) | *auto* |
+| L12 | Normal MA run: admission audit and ACTIVE or REFUSED (B9–B10), then close. **Only then** does the operator unmask and enable the units or services and end the freeze. | operator |
+
+**What remains operator responsibility (stated, not hidden):**
+- a legacy launch from a **copied configuration and copied jar**, started between L5 and L10 and finished before L10;
+- any launch on another host (Q-36-1).
+
+**Interrupted installation:**
+- Before L7 commits, the database is still accepted V0025. The freeze continues, and the new build's units either
+  wait on F1 or refuse (`TRANSITION_PENDING`, §5.8.3).
+- After L7, the state machine resumes at the recorded state.
+- The freeze may end only at L12. Ending it early means L10 or the next `transition resume` refuses whenever it finds
+  a legacy process.
+
+**The administrator/worksheet counterexample after a successful transition.** The eighth assessment's §6 schedule
+needs an old read-write session A holding `app_user(a1)` FOR UPDATE.
+- **Before L8:** A's pre-default backend may exist, but **no** compatible business writer exists. Ordinary
+  `admit_session` refuses every connection until `TRANSITION_COMPLETE` (B8), so T1 and T2 cannot run.
+- **L8** ends A's backend after the role default is known committed.
+- **L5, L10 and the freeze** keep the legacy *process* from running, and with it any not-yet-connected A.
+- **After L11:** any accepted-build session that does appear is fresh, so it inherits the read-only default and its
+  locking `SELECT` fails with 25006 before a row lock, under premise R36-3.
+
+The A edge therefore cannot form, and T1/T2 order under D-LP-7 and D-LP-9(a). This is a **conditional** result: it
+depends on the freeze, on Q-36-1 and on R36-3. A legacy process already executing filesystem work is **not** stopped
+by L8; only the freeze and the L5/L10 verification address it.
+
+#### 5.8.3 R8-3(a): bootstrap state machine
+
+**Durable transition state** (column `transition_state` of `gas.preservation_activation`, created by V0026) and
+observed schema state:
+
+| State | How recognised | Ordinary `admit_session` | Permitted next |
+|---|---|---|---|
+| **S0 FRESH** | no `gas` schema, or an empty history | n/a (no gate) | B3 (all migrations V0001…V0026) |
+| **S1 ACCEPTED_V0025** | history top = V0025; no singleton | n/a (no gate); legacy builds could run, hence the freeze | B3 (V0026) |
+| **S2 INSTALL_UNKNOWN** | migration outcome not known (lost connection at COMMIT) | refuses (S3) or n/a (S1) | B4: drain the Flyway backends, then read the history for V0026 success → S3 or S1 |
+| **S3 DRAIN_PENDING** | singleton exists with `transition_state = 'DRAIN_PENDING'` | **refuses** (GA002: "transition not complete") | B6 → B7 → B8 |
+| **S4 TRANSITION_COMPLETE / NOT_ACTIVATED** | `transition_state = 'COMPLETE'`, state NOT_ACTIVATED | admits, with preservation disabled (pre-ACTIVE metadata allowed) | MA run → B9 |
+| **S5 ACTIVE** / **S6 REFUSED** | state | admits | MA runs |
+| **S7 MAINTENANCE_OPEN** | an OPEN `maintenance_run` (any S3…S6) | **refuses** | `maintenance resume` or `maintenance abort` |
+| **S8 PHYSICAL_RESTORE** | identity columns equal; OS evidence of a restore (operator) | admits per state (limitation, §5.8.8) | `verify-restore` recommended |
+| **S9 LOGICAL_RESTORE** | `cluster_system_identifier` or `database_oid` ≠ current | **refuses** | `verify-restore` (bound restore bootstrap B11) |
+
+**Bootstrap order** (direction §4; numbered B1…B10 to match items 1–12):
+
+| B | Action | Connection | Crash or unknown outcome here |
+|---|---|---|---|
+| B1 | F1 exclusive (L4) + legacy exclusion (L1–L5) | — | nothing durable; restart |
+| B2 | **Bootstrap controller:** a dedicated non-pooled connection from `MaintenanceConnectionFactory` (`application_name = genealogy-archive-maint-<run>`, `default_transaction_read_only = off`, **no** epoch declaration). `pg_try_advisory_lock(7340, 2)`. **Pre-gate inspection:** schema present? history top? singleton present? OPEN run? Only catalog and history reads, which work in every state. The run id is generated in memory. Registered connections are tracked **in process** (the tables may not exist yet). | controller | nothing durable; the advisory goes with the session |
+| B3 | **Flyway** `migrate` through `SchemaMigrator` on a **maintenance DataSource**: non-pooled, every connection created by the same factory and registered in process, with `lock_timeout` and `statement_timeout`. Accepted behaviour is kept: one transaction per versioned migration including its history row; no `group`; `outOfOrder` false; validation on migrate; refusal when AHEAD, FAILED or INVALID. **V0026** runs in **one** transaction, in this order: (i) create the 8 control tables (§5.8.8); (ii) seed the singleton (`NOT_ACTIVATED`, protocol 1, epoch 1, `transition_state = 'DRAIN_PENDING'`, binding columns from Flyway placeholders `${installationId}`, `${hostId}`, `${leaseObject}`, `${runId}`, and `cluster_system_identifier`/`database_oid` read in SQL); (iii) create the functions (`gate`, `admit_session`, `admit_maintenance`, `maintenance_begin`, `require_maintenance`); (iv) insert the **TRANSITION run row** (OPEN, controller pid and `backend_start` from placeholders that the controller read about itself in B2); (v) create the gate triggers `ENABLE ALWAYS` on every table; (vi) `ALTER ROLE ${applicationRole} IN DATABASE <current_database()> SET default_transaction_read_only = on` (dynamic SQL; the configured role is the connecting role, so it is "for self"); (vii) the history row (Flyway). Every statement after (v) passes the gate because V0026's **first** statement is `SET LOCAL gas.preservation_protocol = '1'; SET LOCAL gas.activation_epoch = '1'` and its rows match. | Flyway connections | **before COMMIT:** the whole of V0026 rolls back (role default included) → S1. **Unknown:** S2 → B4. |
+| B4 | **Known-COMMIT determination:** close the maintenance DataSource; confirm from the controller that every registered Flyway backend `(pid, backend_start)` is gone (terminate with timeout if not); then read the history: V0026 success → S3, else S1. Only the controller connection, which survived, is used. | controller | repeatable |
+| B5 | **Run adoption:** the controller now declares identity per transaction through `maintenance_begin(run)` (§5.8.4). It persists the in-process connection registrations into `maintenance_connection`. | controller | the OPEN run row survives (S7 ∧ S3). Resume re-adopts it. |
+| B6 | L8: terminate legacy backends (not rolled back) | controller | repeatable; terminations stay done |
+| B7 | **Coverage verification** (§5.8.8): catalog check of every relation, trigger event, timing, level, function OID and enabled-ALWAYS state; the role default row for the configured role and database; function definitions (by OID and a stored digest) | controller | read only |
+| B8 | L10, then `UPDATE preservation_activation SET transition_state = 'COMPLETE'` in a `maintenance_begin` transaction | controller | before COMMIT → still S3 (repeat B6–B8); unknown → read after confirming the backend is gone (the controller itself: if it is lost, resume uses a new controller and the drain rule §5.8.5) |
+| B9 | **Normal MA phase** within the same run: the action connection runs the activation barrier, audit and publication (§5.7, CU-4/CU-5) | action | §5.8.4 / §5.8.5 |
+| B10 | Close the run (§5.8.4) and exit (F1 released) | controller | the run stays OPEN → S7 → resume |
+
+**No ordinary writer between gate installation and drain.** From V0026's COMMIT until B8 commits, every ordinary
+connection fails `admit_session` (S3). Compatible services cannot even take F1 while `transition` holds it
+exclusively. The pre-seeded NOT_ACTIVATED row therefore does **not** admit pre-ACTIVE metadata; only `COMPLETE` does.
+
+**Fresh installation (S0).** The same machine runs: B3 applies V0001…V0026, and B6 has no backends to end (L5 still
+runs).
+
+**Permitted bootstrap connections, and why this is not an ungated runtime connection:**
+1. Only `MaintenanceConnectionFactory` makes them, only while its process holds F1 exclusive and its controller holds
+   advisory (7340, 2).
+2. **Before V0026 commits**, no gate exists. Their writes are DDL and seed under F1, the freeze and L5.
+3. **After V0026 commits**, they are gated like every connection. Their declaration comes only from
+   `maintenance_begin` / `admit_maintenance` for the OPEN run (§5.8.4, §5.8.5).
+
+There is no flag that disables layer B.
+
+**Logical restore (S9).** `verify-restore` is bootstrap path B11.
+1. F1 exclusive and the advisory.
+2. A controller whose `admit_maintenance` is allowed in S9 **only** for a run of kind `RESTORE_REBIND`, inserted
+   under advisory self-check, the bootstrap exception: the gate admits an INSERT into `maintenance_run` when no run is
+   OPEN and the inserting session itself holds (7340, 2), verified on `pg_backend_pid()`.
+3. Record the old identity in the run.
+4. Re-install the role default (the dump may not carry it) and verify coverage.
+5. Require the operator statement that the database and storage were restored **as a coherent set**, and record it.
+6. Rebind `cluster_system_identifier`/`database_oid` (and the host ID if the host changed: `rebind-host`).
+7. Run the admission audit; publish epoch + 1; close.
+
+#### 5.8.4 R8-3(b): epoch and protocol identity handover
+
+**Rule.** Maintenance connections carry **no session-level epoch or protocol declaration**. Every maintenance
+transaction (controller, action, Flyway after the gate exists) begins with:
+
+```sql
+SELECT gas.maintenance_begin(:run_id);
+-- 1. requires an OPEN maintenance_run row :run_id;
+-- 2. requires this session to be registered for that run (pid and backend_start in maintenance_connection), and the
+--    run's controller (recorded pid and backend_start) to hold advisory (locktype 'advisory', database = this
+--    database's OID, classid 7340, objid 2, objsubid 2 = two-int4 key space, mode 'ExclusiveLock', granted);
+-- 3. reads the COMMITTED singleton (a READ COMMITTED statement snapshot) and executes
+--    set_config('gas.preservation_protocol', P, true), set_config('gas.activation_epoch', E, true)
+--    (transaction-local);
+-- 4. raises GA003 on any failure, before any business lock is taken.
+```
+
+Every later gated write in that transaction therefore uses the identity of the **committed** singleton. A publication
+updates the singleton and, in the same transaction, re-runs `set_config(…, true)` with the new values for its
+remaining inserts. When it commits, the local settings vanish. The **next** transaction on **any** maintenance
+connection reads the new committed values in its own `maintenance_begin`. **No connection can carry a stale
+identity into a later transaction**, because none carries one at session level. A maintenance write outside a
+`maintenance_begin` transaction has no declaration and fails GA001 (fail-closed).
+
+**Successful sequence without GA001:**
+
+```
+controller C (idle, session advisory)        action A
+                                             BEGIN; SELECT maintenance_begin(R) -> P1,E (local)
+                                             LOCK … NOWAIT; audit; UPDATE singleton SET epoch=E+1 …  (gate: E = E ✓)
+                                             SELECT set_config('gas.activation_epoch', E+1, true)
+                                             INSERT event, findings  (gate: E+1 = E+1 ✓); COMMIT (known)
+BEGIN; SELECT maintenance_begin(R) -> P1,E+1 (local)
+UPDATE maintenance_run SET state='CLOSED' (gate: E+1 = E+1 ✓); COMMIT
+pg_advisory_unlock(7340,2); close; JVM exits -> F1 released
+```
+
+| Case | Handling |
+|---|---|
+| New activation epoch | as above |
+| New protocol version (a future protocol migration) | the migration's first statement is `SELECT gas.maintenance_begin('${runId}')` (Flyway placeholder, explicit in the SQL, no callback dependency); it updates the singleton to (P + 1, E + 1, NOT_ACTIVATED) and `set_config`s the new values; later transactions read them |
+| Action connection after COMMIT | next `maintenance_begin` |
+| Controller | next `maintenance_begin` |
+| Registered additional connections | the same rule; registration lives in `maintenance_connection` |
+| Flyway connections | before V0026: no gate; V0026 sets its own local identity (B3); later migrations call `maintenance_begin` first |
+| Run closure | a `maintenance_begin` transaction, as shown |
+| Unknown publication COMMIT | identity choice needs no outcome: the next `maintenance_begin` reads whatever committed. The **outcome** (published or not) is determined by CU-21 / §5.8.5 before the run proceeds. |
+| Crash between publication and close | no refresh exists to be lost. Resume (§5.8.5) re-adopts the run, and its `maintenance_begin` reads the committed epoch. |
+| Resumed maintenance | the same; the new controller is registered and rebound first |
+
+**Ordinary processes are unchanged:** a compiled protocol plus the epoch read at start under F1, declared as startup
+options, validated by `admit_session` on every physical connection. Their epoch cannot change while they hold F1
+shared.
+
+#### 5.8.5 R8-4: maintenance authority, controller loss and backend drain
+
+**Authority statement.** On the approved host, **F1 exclusive is the ultimate run-lifetime process-exclusion
+authority.** While the maintenance JVM lives, no compatible process, maintenance or ordinary, can start on the host.
+The controller advisory **serialises database-side controllers** and records which backend is the controller. The
+OPEN row is **recovery information** that keeps services out after a crash. `require_maintenance` and
+`maintenance_begin` are **point checks**, not fencing tokens: a controller may be lost one instant after a check
+succeeds. Under single-host F1 that is acceptable, by the bounded-continuation rule below. **No remote maintenance
+controller is admitted:** `admit_maintenance` requires the host ID of the binding. Cross-host maintenance would need
+a different fencing architecture (§5.8.10).
+
+**Single active phase.**
+- The maintenance JVM runs **one phase at a time** on one thread, where a phase is one business window, one
+  filesystem primitive, one Flyway migration, one barrier/audit transaction or one journal transaction.
+- At most one action connection has an open transaction. The controller opens transactions only while no action
+  transaction is open, and it never holds a table or row lock across a phase: between its own short transactions it
+  holds only its session advisory.
+- Therefore no controller statement can wait on the action connection, and no action statement can wait on the
+  controller. The idle controller cannot self-block.
+
+**Loss detection and latching.**
+- The controller is probed (`SELECT pg_backend_pid(), now()`) before every phase and every 10 s while idle. Each
+  `maintenance_begin` also re-checks the advisory.
+- Any failure (connection error, advisory not shown, pid or `backend_start` changed) sets the process-wide
+  **MAINTENANCE_FENCED** latch, which is never reset in that JVM.
+- After the latch: **no new phase** starts, including any unstarted filesystem primitive or any next window of an
+  action.
+- **Bounded continuation:** the one phase already admitted may finish.
+  - A database transaction that has passed `maintenance_begin` may commit or roll back. Its outcome is **unknown**
+    until determined below.
+  - A filesystem primitive already called (one `move`, `copy` or `delete`) completes or fails.
+- **Why the continuation cannot overlap a replacement:** a replacement maintenance process needs F1 exclusive, which
+  this JVM holds until it exits. It exits only after the drain below. A replacement on another host is outside the
+  design (Q-36-1).
+
+**Drain before exit or replacement.**
+1. Wait for the admitted phase to end. It is bounded by the action connection's `statement_timeout` and the
+   primitive's own completion.
+2. Close the action and Flyway connections.
+3. From a **fresh** connection (or the controller, if alive), for each registered `(pid, backend_start)` of this run:
+   if still present in `pg_stat_activity` for this database, `pg_terminate_backend(pid, 10000)`, then confirm it is
+   absent (with `pg_stat_clear_snapshot()`).
+4. If the database is unreachable or a backend survives, exit with "drain unconfirmed". The OPEN row remains, and
+   resume must complete the drain first.
+5. Only then exit, which releases F1.
+
+A killed maintenance JVM (SIGKILL) skips this. Its server-side transactions may stay alive until PostgreSQL notices
+the closed socket. Resume handles that.
+
+**Resume (`maintenance resume`, CU-20):**
+1. F1 exclusive.
+2. A new controller with `pg_try_advisory_lock(7340, 2)`. If refused, a live old controller backend exists:
+   terminate it by its recorded `(pid, backend_start)` and retry. This works only when that pid and start match the
+   row, so an unrelated session is never terminated.
+3. **Old-run reconciliation:** every `maintenance_connection` row of the run whose `(pid, backend_start)` is still in
+   `pg_stat_activity` is terminated with timeout and confirmed absent. Every other application-role backend except
+   the new controller is treated as stray (L8 rule).
+4. Rebind:
+   `UPDATE maintenance_run SET controller_pid, controller_backend_start, controller_generation = controller_generation + 1`
+   in the bootstrap-exception transaction. The gate admits it because the inserting session itself holds (7340, 2) and
+   the row is OPEN.
+5. Determine outcomes (§5.8.6), only after step 3.
+
+**Bound maintenance admission versus ordinary admission:**
+- `admit_session` (ordinary) refuses while any run is OPEN or `transition_state ≠ COMPLETE`.
+- `admit_maintenance(run)` (maintenance factory only, as connection-initialisation SQL) requires all of: the OPEN run
+  `run`; this host's ID equal to the binding; and the run's controller pid/`backend_start` holding (7340, 2) in this
+  database, or the session itself holding it for the controller connection. It then registers the session in
+  `maintenance_connection`.
+- The ordinary factory never sets the run setting, so it cannot obtain maintenance admission.
+
+**Waits (narrowed, replacing "nothing waits"):**
+- These never wait: F1 `tryLock`, `pg_try_advisory_lock`, and CU-4's `LOCK … NOWAIT` statements.
+- These can wait, each bounded:
+  - connection establishment (`connectTimeout`);
+  - `pg_terminate_backend(pid, timeout)` (its timeout);
+  - catalog reads and run-row writes (`lock_timeout` 5 s, `statement_timeout` 60 s on maintenance connections);
+  - Flyway DDL (`lock_timeout`);
+  - startup waiting for F1 shared (supervised, with no effects before acquisition).
+- No maintenance statement is claimed never to wait.
+
+#### 5.8.6 R8-5: journal and replay correctness
+
+**Withdrawn:** R36-5 ("every business window is a CAS; repetition is NOT_APPLIED") is **inoperative**. Accepted source
+contradicts it:
+- `markStagingCleaned` updates `updated_at` unconditionally;
+- `note` appends an event each time;
+- `UnresolvedObjects.release` throws on a closed record;
+- `QuarantineMoves.move` finds or inserts (`ON CONFLICT DO NOTHING`);
+- `settle` examines and renames **before** its state CAS.
+
+**Stable identities and records** (journal schema, final; §5.8.8):
+
+| Record | Key | Meaning |
+|---|---|---|
+| Logical action | `maintenance_action.action_id`; unique `(run_id, seq)` | one authorised decision with an immutable scope, authorisation and precondition snapshot |
+| **Original committed window** | `maintenance_action_window` unique `(action_id, window_no)`; `window_no` is fixed by the action kind's plan (A-3: 1 pending settlement, 2 intent, 3 settlement, 4 final, 5 staging mark; A-1: 1; A-2: 1; A-4: 1 intent, 2 settlement; A-5: 1) | inserted **in the same transaction** as the business window; exists iff that window committed |
+| **Attempt** | `maintenance_action_event` (kind `ATTEMPT_STARTED`, `ATTEMPT_ROLLED_BACK`, `ATTEMPT_UNKNOWN`) with `attempt_no` | written in a **separate** transaction (before, and after a known rollback). A failure description therefore survives a rolled-back business transaction. |
+| **Observation** | `maintenance_action_event` (kind `OBSERVATION`) | what a probe saw (path, presence, size, SHA-256, file key, times, inconclusive reason) and when |
+| **Filesystem reconciliation** | `maintenance_action_event` (kind `FS_RECONCILED`) | the reconciliation decision with its evidence (it never claims that PostgreSQL committed a rename) |
+| **Follow-up action** | a new `maintenance_action` with `follows_action_id` | any new authorised decision after a failure; never a silent continuation |
+
+**Unknown-COMMIT algorithm** (any window of any action):
+1. Confirm that the original backend can no longer commit: drain by `(pid, backend_start)` (§5.8.5).
+2. Read the window key `(action_id, window_no)`.
+3. Read the authoritative business state of the window's rows.
+4. **Row present:** the window committed. Reuse its recorded outcome, and **do not** repeat its mutation, event or
+   timestamp. Record `ATTEMPT_UNKNOWN` resolved as committed.
+5. **Row absent:** under the atomic journal contract the business transaction did not commit. Verify this against
+   the business state with the window's **expected post-state predicate** (table below).
+6. **Inconsistent** (row absent but post-state present, or row present but post-state absent and not explained by a
+   later window): **stop**, record an `OBSERVATION` of the inconsistency, and refuse to continue that action. The run
+   stays OPEN for review; it is never silently treated as a no-op.
+7. Reconcile external filesystem effects **separately** (matrix below).
+8. Record truthful observations, including "inconclusive".
+9. Persist the failure or rollback description in a separate `maintenance_begin` transaction.
+
+**Resume set.** INTENDED actions (after J0, possibly before any window) and IN_PROGRESS actions are resumed. FAILED
+actions are terminal for that action: a new follow-up action is needed. `maintenance abort` records
+`ABANDONED_AT_SAFE_BOUNDARY`, with the remaining durable work described (for example "Q INTENDED at
+volume:source→dest; ordinary recovery settles after ACTIVE").
+
+**Filesystem reconciliation of a quarantine move** (accepted `settle` rules; a path's existence is never taken as
+identity):
+
+| Source | Destination | Recorded evidence | Outcome |
+|---|---|---|---|
+| present | absent | trusted, matching (attested: full V0020 identity and binding) | may move (the accepted `settle` rename, then re-verify what arrived) |
+| present | absent | absent-at-intent, no evidence, untrusted, or not matching | **not moved, not adopted** (accepted refusal); the action FAILS: "source not identified" |
+| absent | present | trusted, and the destination object matches (`arrived`) | settle QUARANTINED ("an earlier attempt had already moved it") |
+| absent | present | no evidence or no match | **refuse** (accepted); FAILED with an observation |
+| absent | absent | any | settle SOURCE_ABSENT |
+| present | present | any | **refuse** (accepted `FileAlreadyExistsException`) |
+| inaccessible or inconclusive at either end | | | no outcome; the attempt is recorded as inconclusive; retry later |
+
+**A-3 cancellation** (`requireCancellable`: kind ≠ DESTROY; BLOCKED or WAITING_FOR_VOLUME). The accepted atomic
+transaction is kept: `claimBecomesUnresolved` **or** `releaseTarget`, **and** the CANCELLED transition, in one
+transaction (`applyCancel`, `OperationAdminService` lines 269–280). It is window 4, and its journal row is inserted
+in **that** transaction.
+
+| Window | Accepted effect | Claimant revalidation (inside the window's transaction, after Ct(X) U where it applies, immediately before the keyed release) | Post-state predicate |
+|---|---|---|---|
+| 1 pending settlement | `settle` of each own INTENDED entry | before `releaseTargetsAt(source)`: the claimants at the source are ⊆ {this operation} ∪ final operations; otherwise roll back → FAILED | Q not INTENDED |
+| 2 intent | `move` → `intend` (find or insert). **Recorded-absent** intent if nothing is there: null size, time and hash, `ABSENT_AT_INTENT`; trusted evidence is stored only for a present, matching object. | — (no release) | Q exists for (volume, `cancelled` destination) |
+| 3 settlement | `settle` (filesystem first, then the state CAS + `releaseTargetsAt` + U resolution + generation retirement) | as window 1 | Q QUARANTINED or SOURCE_ABSENT |
+| 4 final (atomic) | unverified copy: `claimBecomesUnresolved` (U OPEN + own claim released) **or** release-only `releaseTarget` **or** nothing; **plus** the CANCELLED transition with `quarantine_path` set when Q is QUARANTINED | before `claimBecomesUnresolved` or `releaseTarget`: the claimants at the target are ⊆ {this operation} ∪ final operations, and **no OPEN U** at the target belongs to another role | operation CANCELLED (+ U OPEN, or claim ended) |
+| FS staging | `StagingArea.delete` (returns true when already absent) | — | staging absent |
+| 5 staging mark | `markStagingCleaned`, **only if** `staging_cleaned = false` (the predicate is read in the window; never re-run once the window row exists) | — | `staging_cleaned = true` |
+
+**The ordinary owned target is the passing case.** The cancelling operation's own `target_created` claim is
+**allowed**: it is what A-3 resolves. The disqualifying conflicts are: a **non-final foreign** claimant; an **OPEN
+U** at the target of another writer role (AU-4); a changed operation identity (kind, state, target, target
+generation, attempts against the J0 snapshot); and DESTROY.
+
+| State found on resume | Next |
+|---|---|
+| action INTENDED, no window row | revalidate eligibility (J1) → continue, or NOT_APPLIED |
+| own Q INTENDED | filesystem reconciliation, then window 3 |
+| Q QUARANTINED, operation still eligible | window 4 with `quarantine_path` = Q destination |
+| Q SOURCE_ABSENT, operation still eligible | window 4 (release-only path as accepted) |
+| unverified-copy decision recorded in J1 | window 4 atomic (U + release + CANCELLED) |
+| CANCELLED **with** window 4 row | completed; continue at FS staging |
+| CANCELLED **without** window 4 row | inconsistent (cancelled by another path?): stop; observation; not counted as this action's success |
+| CANCELLED, staging not cleaned | FS staging, then window 5 |
+| staging already absent, flag false | window 5 only |
+| ineligible, DESTROY, or changed identity | NOT_APPLIED (J1), never forced |
+
+`performCancel`'s `false` return ("not applied") is never treated as proof that a cancellation did not happen; the
+window row and the business state decide.
+
+**A-1 attestation** (accepted `attest`: V0020 identity evidence, named Administrator; it enqueues
+`JOB_QUARANTINE_ATTESTED` as accepted, and the job stays queued while preservation is disabled):
+- **Completion predicate:** U attested, its `attested_by` = the action's named Administrator, its decision evidence
+  CONFIRMED, its recorded identity equal to the J0-observed identity, **and** window 1's row.
+- **Already attested without this action's row:** NOT_APPLIED, with an observation "attested earlier by …, at …".
+  There is no second attestation and no second job.
+
+**A-2 release:**
+- **Completion predicate:** U RESOLVED with resolution RELEASED **and** window 1's row.
+- **Closed otherwise** (another resolution, or by another actor): NOT_APPLIED, with an observation. The accepted
+  method is never invoked on a closed record (it would throw).
+- **Precondition, immediately before the decision, inside window 1:** no non-final claimant, own or foreign; only
+  the exact generation-own relation may pass.
+
+**A-4 attested move** (accepted `quarantineAttested` eligibility **unchanged**):
+- U open and attested; kind is not CURRENT_COPY and not QUARANTINED_COPY; content not DESTROY_PENDING or DESTROYED;
+  full V0020 binding.
+- **Windows:** intent and settlement, through the filesystem matrix.
+- **Completion predicate:** Q QUARANTINED with U RESOLVED QUARANTINED, or Q SOURCE_ABSENT with U RESOLVED ABSENT, and
+  window 2's row.
+- Attestation alone never broadens eligibility.
+- **Byte classes (terminology corrected):**
+  - **Authoritative originals:** the objects at the storage path of a generation in **CURRENT** state, and of
+    QUARANTINE_PENDING generations, whose move belongs to accepted superseded-generation quarantine. **No resolution
+    action moves or deletes them.**
+  - **An attested unidentified object** at the storage path of a historical **UNRESOLVED** generation is **not** an
+    authoritative original. A-4 may move it, as accepted (`retireGeneration` UNRESOLVED → QUARANTINED).
+
+**A-5 administrative hold (D-LP-8 (vi), conditional), one window:**
+
+```sql
+UPDATE gas.file_operation
+   SET state = 'BLOCKED', blocked_reason = 'STATE_UNKNOWN', message = :m, updated_at = clock_timestamp()
+ WHERE operation_id = :o
+   AND kind IN ('INGEST', 'REPAIR') AND state IN ('PROMOTING', 'PROMOTED') AND state = :expectedState
+   AND target_path IS NOT DISTINCT FROM :tp AND target_generation IS NOT DISTINCT FROM :tg
+   AND target_created = :tc AND attempts = :a
+   AND expected_size IS NOT DISTINCT FROM :es AND expected_sha256 IS NOT DISTINCT FROM :eh
+```
+
+- It runs inside the accepted `transition` window (owner advisory first), with its event and window 1's row.
+- **Completion predicate:** BLOCKED STATE_UNKNOWN with window 1's row. Zero rows means NOT_APPLIED.
+- Target, generation, high water, `target_created`, owner row and expected evidence are unchanged. The hold is not a
+  waiver.
+
+**A-6** is deferred and **inoperative**: no table, command or code path exists for it.
+
+#### 5.8.7 R8-6: audit corrections (deltas to §5.7.9)
+
+**AU-2: targetless and pre-plan states.** Source: `OperationProcessor.plan` checks staging **before** any content id
+or target is assigned (lines 105–122). Ingest planning assigns `content_id` Y, target generation 1 and the target in
+one transition; `planRepair` (Wh1a) assigns a REPAIR's target.
+
+| Kind | State | Blocked reason | Required (no target created) | Class |
+|---|---|---|---|---|
+| INGEST | RECEIVING, STAGED | — | `content_id`, `target_path`, `target_generation` **null**; `target_created` false; **no** owner row; no Q or U naming it | ADMITTED |
+| INGEST | BLOCKED | STAGING_INVALID (from `plan`) | as above | ADMITTED (cancellable; not retryable, as accepted) |
+| INGEST | STAGED or BLOCKED STAGING_INVALID **after a COLLISION retry** | — / STAGING_INVALID | the earlier private plan retained: Y unpersisted, `target_path = originalPath(Y, t)`, `target_created` **false**, no owner row | ADMITTED (history; AU-7 not able) |
+| REPAIR | RECEIVING, STAGED, BLOCKED STAGING_INVALID (from `plan`) | — / STAGING_INVALID | `content_id` X **persisted**; `target_path` null **or** an earlier plan with `target_created` false; no owner row | ADMITTED (**never private**) |
+| INGEST or REPAIR | BLOCKED | STAGING_INVALID (from PROMOTING: staging missing or changed), PROTECTION, VERIFY_MISMATCH, UNSAFE_PATH, STATE_UNKNOWN, COLLISION | a target as §5.6.5; `target_created` true ⇒ own owner row; false ⇒ no owner row | per AU-4/AU-7 |
+
+A BLOCKED operation with `target_created = true` and no own owner row, or with an owner row and `target_created =
+false`, is AU-3 UNSAFE-LEGACY. No target is ever manufactured.
+
+**AU-2: the operation's quarantine pointer** (`file_operation.quarantine_path`). Its writers (source):
+- the replan transition in `quarantinePartialAndReplan`, which sets the PARTIAL_COPY destination together with the
+  new target;
+- the final CANCELLED transition in `applyCancel`, which sets the CANCELLED_COPY destination when the move
+  QUARANTINED.
+
+The rule is transition-specific, and all Q history is preserved and unchanged:
+- The replan transition sets the pointer to `moved.quarantinePath()` **whether the partial settled QUARANTINED or
+  SOURCE_ABSENT** (source, lines 349–381).
+- Only replans change an INGEST's or REPAIR's target, and each moves it to a new generation path.
+- After a crash between the partial's settlement and its replan, `promote` settles the entry and **writes the same
+  target again, without a replan**. That partial is then never followed by a pointer update.
+
+Validation:
+- Let `QP*` be the operation's settled PARTIAL_COPY entries whose `source_path` ≠ the current `target_path`; their
+  replan committed. Let `QC` be its CANCELLED_COPY entry.
+- **CANCELLED with QC QUARANTINED** whose source = the current target: the pointer = QC's destination (set by the
+  final transition).
+- **Otherwise:** the pointer = the destination of the **newest** entry of `QP*` (by attempt suffix), or **null** if
+  `QP*` is empty.
+- PARTIAL entries whose source = the current target (the crash-then-rewrite case, possibly more than one over time)
+  are valid history and never the pointer's subject.
+- Any other value, or a pointer naming a Q of another operation, is UNSAFE-LEGACY.
+
+**AU-5: recorded-absent intent** (source: `QuarantineMoves.move` / `QuarantineRepository.intend`). A move whose
+source is absent at intent stores `source_size`, `source_modified_micros` and `source_sha256` all **null**, with
+`detail = ABSENT_AT_INTENT` (`recordedAbsent()`), and keeps the evidence basis as recorded. This applies to **every
+reason** that `move` serves: PARTIAL_COPY, UNVERIFIED_COPY, CANCELLED_COPY and ATTESTED_OBJECT.
+
+| Recorded evidence | AU-5 admission | Settlement meaning (accepted, unchanged) |
+|---|---|---|
+| **recorded absent** (three nulls + `ABSENT_AT_INTENT`) | ADMITTED if the role's **source relation** holds. The size and hash bindings of §5.7.9 are **not applied**: there are no values. The three columns must be null together. | both ends absent → SOURCE_ABSENT. An object that **later** appears at the source is not authorised by the earlier absence: it stays unmoved and unadopted. A destination-only object is not confirmed (no evidence). |
+| trusted, present | the §5.7.9 per-reason bindings (trusted partial prefix; measured copy; observed copy **or** expected values; attested identity) | as accepted |
+| no evidence (before V0017) or UNTRUSTED (before V0019) | ADMITTED if the source relation holds | the move is refused while an object is present; an Administrator must verify (accepted messages) |
+
+- A **present object lacking identifying evidence** therefore stays a visible refusal. It never becomes a trusted
+  move.
+- **SOURCE_ABSENT** settled entries are admitted with any of the three evidence kinds. Their destinations never
+  received bytes, so AU-6 expects no object reference there beyond the Q itself and the operation pointer rule above.
+- The A-3 window 2 wording "expected_* when absent" is corrected: those values are the **argument** to `move`, but
+  what is persisted for an absent source is three nulls.
+
+**AU-8: constructor-provenance scope.**
+- The constructor claim (R36-6, now **R37-6**) covers **only the eight AU-8 identity columns**: generation
+  `storage_path` and `quarantine_path`, operation `target_path` and `quarantine_path`, Q `source_path` and
+  `quarantine_path`, U `path`, and owner `path`. It covers them only for their audited application writers
+  (`ManagedVolume.originalPath`, `quarantinePath`, or a relational copy of another identity column).
+- It does **not** apply to `integrity_finding.path` or other observation fields. `IntegrityService` deliberately
+  records enumerated unexpected paths, link names, the directory label `originals` and staging leftovers. These are
+  **observations**: they never become ownership identities, and a non-constructor or Unicode observation path never
+  refuses activation.
+- `PortableRelativePath`'s accepted NFC Unicode behaviour is unchanged.
+- A non-constructor value in an ownership identity column stays UNSAFE-LEGACY whatever its characters. Ambiguous
+  ownership identities stay fail-closed (non-waivable).
+- Repository methods accept arbitrary strings, so the provenance claim is an audited-writer property checked by the
+  audit, not a database constraint.
+
+**AU-4: "exactly one role"** means one **writer and provenance classification** per U, not one physical join row: a
+same-object closure may join several references.
+
+**Per-check summary after 3.7** (invariant, source writers, passing, failing, joins, fixtures; full text in §5.7.9
+plus the deltas above):
+
+| Check | Passing additions in 3.7 | Failing kept | New fixtures |
+|---|---|---|---|
+| AU-1 | — | as §5.7.9 | — |
+| AU-2 | targetless pre-plan and STAGING_INVALID states (INGEST, REPAIR); retained earlier plans; transition-specific quarantine pointer, including the crash before replan | a manufactured or claimed target where none was created; a pointer from no assigning transition | AA-11d (targetless BLOCKED INGEST), AA-11e (targetless BLOCKED REPAIR), AA-11f (partial history then cancellation pointer), AA-11g (crash after partial settlement before replan) |
+| AU-3 | — | owner/`target_created` mismatch | — |
+| AU-4 | writer-classification wording | non-final claimant; another object's generation row | — |
+| AU-5 | recorded-absent intents for every reason; pre-V0017 and pre-V0019 evidence; SOURCE_ABSENT | role relation broken; partial nulls | AA-14c (recorded-absent INTENDED per reason), AA-14d (SOURCE_ABSENT), AA-14e (present object without evidence → admitted; settlement refuses) |
+| AU-6 | SOURCE_ABSENT destinations | foreign references at a destination | — |
+| AU-7 | targetless and retained-plan states are not "able" | duplicate able or holding target generation | — |
+| AU-8 | observation paths out of scope; Unicode NFC observation paths | ambiguous identity aliases; non-constructor identity values | AA-9b (Unicode unexpected-object finding does not refuse) |
+
+#### 5.8.8 Other specification corrections
+
+**Startup and offline commands:**
+
+| Process or command | Accepted behaviour | 3.7 behaviour | Owner approval? |
+|---|---|---|---|
+| `help`, `version`, `check-config` | effect-free | effect-free: **no lease, no database** | no |
+| `status` | read-only database inspection | **no lease**; a *diagnostic* connection: read-only (`default_transaction_read_only = on`, set explicitly), no declaration, plain `SELECT`s only, allowed in every state (layer B gates only DML) | no |
+| `serve` with PostgreSQL unavailable | starts; status page shows "not ready" (`initializationFailTimeout(-1)`) | **kept as diagnostic mode.** It takes F1 shared, then serves only the status page until a bootstrap read succeeds. Then, once, CU-14 eligibility. If that is refused (S3, S7, S9, binding mismatch), it **stays** in diagnostic mode with the reason (no business routes) instead of exiting. | no (accepted behaviour kept) |
+| GA002 at a **later** reconnect (identity changed under a live process) | n/a | process latches FENCED and exits | yes: part of D-LP-8 (v-a) |
+| `worker` | refuses to start unless ready | unchanged (exit); additionally refuses unless eligible | no |
+| `init-archive`, `create-admin`, `register-volume`, `init-volume`, `set-ingestion-volume` | writers | F1 shared + F3; require S4…S6 (`TRANSITION_COMPLETE`). They are **not** pre-gate commands. | no |
+| `provision-installation` | new | effect-free except writing the configuration key and (offline, admin) the lease object | yes (v-a) |
+
+**Disabled-preservation exceptions** (the precise list replacing "E-1…E-21 refused"). While not ACTIVE, the
+preservation operations marked *refused* in §5.6.4 are refused. **Permitted**, each holding F1 shared and passing F3:
+- E-11's READ_ONLY download branch (§5.7.10);
+- E-12 volume administration;
+- E-14 job bookkeeping (claim, renew, succeed or fail of non-preservation kinds) and worker presence;
+- THUMBNAIL generation (cache files only);
+- E-24 and E-26 metadata.
+
+**Control schema: 8 tables, 48 gated relations.**
+- The 3.6 tables: `preservation_activation`, `preservation_activation_event`, `preservation_audit_finding`,
+  `maintenance_run`, `maintenance_connection`, `maintenance_action`, `maintenance_action_window`.
+- **New:** `maintenance_action_event` (attempts, observations, reconciliations).
+- The binding columns live in the singleton, not in a new table.
+- 40 + 8 = **48**, a **source count to be verified** by the catalog check below.
+
+**Invariants:**
+- **Singleton:**
+  - exactly one row (`singleton boolean PRIMARY KEY CHECK (singleton)`, with an INSERT trigger refusing a second row);
+  - DELETE refused by a row trigger; TRUNCATE refused by a statement trigger;
+  - `protocol_version` and `epoch` strictly increasing (row trigger: NEW > OLD on change; `epoch < 2^62`);
+  - `transition_state` only DRAIN_PENDING → COMPLETE;
+  - identity and binding columns changed only by B8, B11 and `rebind-host` runs.
+- **Event and finding rows:** INSERT only (row trigger refuses UPDATE and DELETE; statement trigger refuses
+  TRUNCATE). FK to `(run_id)`; `epoch` equals the epoch published in the same transaction.
+- **Run:**
+  - at most one OPEN (partial unique index);
+  - state changes OPEN → CLOSED or OPEN → ABORTED only;
+  - `controller_*` columns change only through a rebind (`controller_generation + 1`);
+  - the immutable columns are `run_id`, `kind`, `opened_at`, `host`, `operator_principal`.
+- **Connection rows:** INSERT only; `(run_id, pid, backend_start)` unique.
+- **Action rows:**
+  - `(run_id, seq)` unique;
+  - immutable: scope, authorisation, `named_administrator`, `reason`, precondition snapshot;
+  - mutable: only `state`, forward (INTENDED → IN_PROGRESS → COMPLETED | NOT_APPLIED | FAILED |
+    ABANDONED_AT_SAFE_BOUNDARY), and `updated_at`.
+- **Window rows:** INSERT only, `(action_id, window_no)` unique.
+- **Event rows (`maintenance_action_event`):** INSERT only.
+
+**Trigger coverage verification (CU-12, CU-14, B7).** For every relation of `relkind IN ('r', 'p')` in schema `gas`
+except `flyway_schema_history`, exactly one trigger must have:
+- the exact `tgfoid` of `gas.gate`;
+- `tgtype`: BEFORE, STATEMENT, INSERT | UPDATE | DELETE | TRUNCATE;
+- `tgenabled = 'A'` (ALWAYS).
+
+The function's definition digest must also match. A partition is checked **individually**: a direct write to a
+partition fires that partition's statement triggers, not the parent's. Any future write target (a new table, a
+partition, or a foreign or write-through relation) fails the check until it is covered.
+
+**Statement-level semantics** (scope stated, to be confirmed by installation tests):
+- BEFORE STATEMENT triggers fire for zero-row DML and for TRUNCATE.
+- `INSERT … ON CONFLICT DO UPDATE` fires the INSERT and the UPDATE statement triggers.
+- `MERGE` fires the statement triggers of its actions.
+- `COPY FROM` fires INSERT's.
+- DML performed by triggers fires the target's own gate.
+- A DML statement takes its **relation-level** lock **before** its BEFORE STATEMENT trigger. "Before business row
+  work" therefore does **not** mean "before any database lock". Early exclusion is F1, F2 and F3.
+
+**Restore and same-cluster rewind:**
+- System identifier and database OID detect a logical restore into a new database or cluster (S9). They do **not**
+  detect a physical restore, a PITR or a rewind in the same cluster, which keeps both values and may keep an ACTIVE
+  epoch.
+- Every restore procedure therefore requires, operationally: all application processes stopped on the approved
+  host (F1 exclusive held by `verify-restore`); no writer on any former host (Q-36-1; an unresponsive former host is
+  **not** shown stopped by absent sessions, and the operator must establish it, for example by powering it off or
+  isolating its storage and network); the database and storage restored **as a coherent set**, recorded by the
+  operator; and `verify-restore`, which re-installs and verifies the role default and coverage and re-audits.
+- After a physical restore the operator **must** run `verify-restore`. The tooling cannot detect that one happened,
+  which is a stated limitation.
+
+#### 5.8.9 Superseded language made inoperative
+
+The places below are marked **[inoperative 3.7]** in place, and the operative replacements are in §5.8:
+- §5.6.5 ADMITTED-REVIEWED / "unless a reviewed acceptance record exists";
+- §5.6.7 A-6;
+- §5.6.2 / §5.6.3 "never waits", "all old builds read-only", the bootstrap `FOR SHARE` wait and the step-4 authority;
+- §5.7.2's fixed host-wide lease path;
+- §5.7.7 "Nothing waits" and "never waiting", and the session-level epoch declaration of maintenance connections;
+- §5.7.8 R36-5 and the resume rule;
+- §5.7.9's AU-2 partial-pointer rule and AU-5's evidence table without recorded absence;
+- R36-6's unscoped wording.
+
+#### 5.8.10 If an assumption is not approved: the smallest alternative
+
+| Not approved | Consequence | Smallest alternative |
+|---|---|---|
+| **Q-36-1** (one application host) | F1 cannot prove the termination of writers on another host. A database advisory cannot replace process or host death (eighth assessment §4). | **Single-writer-host by deployment, plus database login denial for other hosts:** a per-host login role (D-LP-8 (x)), with `pg_hba` restricting the role to the approved host's address. A host change then requires the old host's role `NOLOGIN` plus OS-verified shutdown. Live multi-host writers would need a fencing-token protocol carried into every filesystem step, which is **out of v1 scope** (ADR-0002 forbids distributed locking). |
+| **D-LP-8 (xi)** (legacy change freeze) | L5/L10 are point observations; a legacy launch with a copied configuration between them is not excluded | Per-generation login roles (D-LP-8 (x)), with the accepted role set `NOLOGIN` **before** L5, so a legacy launch cannot connect at all. Its filesystem work without a database is then limited to effects possible without database reads (receiver staging needs a database insert first; workers need the database for every job), which reduces but does not eliminate the residual. |
+
+#### 5.8.11 Control units added in 3.7
+
+Business windows are unchanged: **19 P2-8 and 22 Phase 2**. CU-0…CU-21 are retained (with CU-10, CU-12, CU-14,
+CU-20 and CU-21 amended as above), and nine are added, for **31 control units, CU-0…CU-30**:
+
+| Unit | Entry | Effects |
+|---|---|---|
+| CU-22 Installation provisioning | `provision-installation` / install scripts | configuration key; lease root and object (offline) |
+| CU-23 Lease-object verification | `LeaseHolder` at start, at step `begin`, every minute | path, type, owner, identity; FENCED on failure |
+| CU-24 Bootstrap controller | `transition`, `verify-restore` (B2) | pre-gate inspection; advisory; in-process registration |
+| CU-25 Gate-installation migration | B3 (V0026) | the one Flyway transaction |
+| CU-26 Known-COMMIT determination | B4 | Flyway backend drain; history read |
+| CU-27 Transition-complete publication | B8 | `transition_state = COMPLETE` |
+| CU-28 Identity handover | `maintenance_begin` | per-transaction committed identity |
+| CU-29 Controller-loss latch and drain | §5.8.5 | latch; bounded continuation; drain by `(pid, backend_start)` |
+| CU-30 Journal reconciliation | §5.8.6 | unknown-COMMIT algorithm; filesystem matrix; attempt and observation rows |
+
+Journal wrappers add statements and transactions (window rows, attempts, observations) and guard effects. These are
+control scope, declared to the guard (D-LP-4), and are not hidden in the unchanged business count.
+
+#### 5.8.12 Assumptions and proof obligations after 3.7
+
+| ID | Statement | Status |
+|---|---|---|
+| Q-36-1 | One designated application host per installation; PostgreSQL may be remote under an approved application-host policy (sessions accepted only for the binding's host ID; `pg_hba` restriction recommended); no overlapping failover; a host move or restore requires verified old-writer exclusion; the lease is local and independent of NAS | **owner decision, not approved** |
+| D-LP-8 (xi) | Continuous legacy change freeze, L1…L12 | **owner decision, not approved** |
+| R36-2 | Windows lock release only after the holder's end; `NOSHARE_DELETE` prevents replacement | unexecuted; AA-17 |
+| R36-3 | Accepted builds do not override read-only | unexecuted with real versions; AA-3b |
+| R37-1 | V0026's single-transaction contents (including `ALTER ROLE … IN DATABASE` and the run insert) commit or roll back as one unit under Flyway | unexecuted; AA-19 |
+| R37-2 | Flyway runs one transaction per versioned migration and uses only connections created by the provided DataSource | accepted configuration; confirm against the pinned version at implementation |
+| R37-3 | Host ID (machine-id or MachineGuid) distinguishes hosts; cloned VMs must be re-provisioned | limitation; documented |
+| R37-4 | PostgreSQL ends a killed JVM's backends when it detects the closed socket; resume terminates them by `(pid, backend_start)` | drain rule |
+| R37-5 | Each window's post-state predicate distinguishes committed from not committed (§5.8.6) | per-window proof at implementation |
+| R37-6 | Constructor provenance of the eight identity columns' audited writers | source inventory; scoped |
+| R37-7 | The pointer rule above matches the only two writers of `file_operation.quarantine_path` (replan; final cancel) | source-derived at `7a97e70`; ArchUnit or inventory check at implementation |
 
 ## 6. `LockSequence` contract (revision 3.2, implementable)
 
@@ -2429,56 +3186,51 @@ Phase 0, 1, 2 and 3 contracts to preserve in every change below:
 - Phase 3: 5 windows under D-LP-5 and D-LP-7.
 - User administration: 1 window.
 
-## 8. Decisions requested (revision 3.6)
+## 8. Decisions requested (revision 3.7)
 
-**None of these is approved by this document. Nothing is implemented.** The rows are grouped as the Revision 3.6
-direction §12 asks.
+**None of these is approved by this document. Nothing is implemented.**
 
-**(A) Already architecturally supported (seventh assessment §13); owner approval still needed:**
+**(Q) Deployment boundary (owner decision; not approved):**
 
-| ID | Decision | Seventh assessment | Builder recommendation |
+| ID | Decision | Eighth assessment | Builder recommendation |
 |---|---|---|---|
-| D-LP-2 | Ordered insertion and compaction, F FOR SHARE | acceptable; retained | Approve |
-| D-LP-4 | Guard contract §6 (G1–G12; §6.3 aligned), with control and fence effects declared honestly | acceptable as the retained bounded design | Approve. Does not close GAS-P4-002. |
-| D-LP-5 | File before Record | acceptable; retained | Approve |
-| D-LP-6a | Destruction File and replacement before Ct | acceptable; inherited-data admission conditional (now §5.7) | Approve |
-| D-LP-6b | Shared-publication ordering | acceptable; retained | Approve |
-| D-LP-7 | Phase 3 sequences, for compatible participants | acceptable; connected incompatible sessions must not reintroduce cycles (§5.7.3, §5.7.6) | Approve |
-| D-LP-8 (iv) | Generation-bound download (We7) | acceptable; retained | Approve |
+| **Q-36-1** | (1) Every web, worker, receiver and timer, recovery, CLI, maintenance, restore and upgrade process of an installation runs on **one designated application host** (the binding's host ID). (2) No second active application host, detached helper or overlapping failover. (3) PostgreSQL **may be remote**, under an approved application-host policy: maintenance and ordinary admission accept only the binding's host ID, and `pg_hba` restriction of the application role to that host's address is recommended. (4) The lease is local and independent of NAS or mirrored storage. (5) A host move, failover or restore requires verified shutdown of the old host's writers (an unresponsive old host is not shown stopped by absent sessions) and `rebind-host` / `verify-restore`. | owner decision required | Recommend approval. Without it, see §5.8.10. |
+| **D-LP-8 (xi)** | **Continuous legacy change freeze** (L1…L12, §5.8.2) as a mandatory operational prerequisite, with the stated automated aids and fail-closed refusals | required as an explicit owner-approved prerequisite | Recommend approval. Without it, see §5.8.10. |
+
+**(A) Architecturally supported; owner approval still needed:** D-LP-2, D-LP-4 (with control and journal effects
+declared to the guard), D-LP-5, D-LP-6a, D-LP-6b, D-LP-7 (compatible participants), D-LP-8 (iv). Recommendation:
+approve each.
 
 **(B) New owner behaviour approvals:**
+- **D-LP-3:** the Conflict after exactly three abandoned attempts.
+- **D-LP-8 (i):** durable generation skipping.
+- **D-LP-8 (ii):** exhaustion → BLOCKED STATE_UNKNOWN.
+- **D-LP-8 (iii):** Wh2 COLLISION and retry.
+- **D-LP-8 (v-c):** while not ACTIVE, the preservation operations marked refused in the inventory are refused; the
+  permitted exceptions are listed in §5.8.8 (the E-11 read branch, E-12, E-14 job bookkeeping and presence,
+  THUMBNAIL, E-24, E-26); diagnostic startup is kept (§5.8.8).
 
-| ID | Decision | Seventh assessment | Builder recommendation |
-|---|---|---|---|
-| D-LP-3 | Derivative closure, including **the visible Conflict after exactly three abandoned attempts** | acceptable; explicit approval needed | Approve, including that Conflict |
-| D-LP-8 (i) | Durable cross-operation generation skipping | acceptable; explicit decision | Approve |
-| D-LP-8 (ii) | Overflow → BLOCKED STATE_UNKNOWN, nothing created | acceptable; explicit decision | Approve |
-| D-LP-8 (iii) | Wh2 COLLISION and retry | acceptable; explicit decision | Approve |
-| D-LP-8 (v-c) | **While not ACTIVE:** every preservation write entry refused (E-1…E-21); the download read-mode exception E-11 exactly as §5.7.10 (authorisation precedence; no evidence written; no claim that a finding was recorded; no new rehash) | disabled-download sub-policy acceptable with the §10 clarifications | Approve |
-| D-LP-8 (vi) | **A-5 administrative hold**: INGEST and REPAIR only, PROMOTING or PROMOTED only, CAS, attribution, target and high water unchanged, ownership unchanged, no admission waiver (§5.7.8) | conditional owner choice | Owner choice. Without it, components that need it stay refused. |
+Recommendation: approve each.
 
-**(C) New schema and control approvals:**
+**(C) Schema and control: pending architectural closure (not recommended for authorisation before the ninth
+assessment):**
 
-| ID | Decision | Seventh assessment | Builder recommendation |
-|---|---|---|---|
-| D-LP-1 | Order and rules of §3, plus **L-ACT, F1 and MA** as actual early fence and maintenance authority (§5.7) | acceptable only with admission/control amendments | Approve together with D-LP-8 (v-a, v-b) |
-| D-LP-8 (v-a) | **Fence architecture:** F1 instance lease (a lock file, created by the install scripts on both platforms); F2 one-time legacy transition (OS verification; role default; same-role termination); F3 connection identity (`admit_session` as connection-init SQL); layer B gate (`ENABLE ALWAYS`, `VOLATILE`, fail-closed); step admission; global fail-closed activation | (v) requires revision; this is the revision | **Recommend approval** (a recommendation, not an approval) |
-| D-LP-8 (v-b) | **Schema:** 7 control tables (`preservation_activation`, `preservation_activation_event`, `preservation_audit_finding`, `maintenance_run`, `maintenance_connection`, `maintenance_action`, `maintenance_action_window`); functions `gate`, `admit_session`, `require_maintenance`; triggers on all 47 tables; the role default for the configured role. **Commands:** `transition`, `migrate` (under MA), `activate-preservation`, `preservation-status`, `preservation-resolve`, `maintenance resume` or `maintenance abort`, `verify-restore`. **Control units** CU-0…CU-21 (business windows unchanged at 19 / 22). | — | **Recommend approval** |
-| D-LP-8 (v-d) | **Corrected audit** AU-1…AU-8 (§5.7.9), with the non-waivable categories | — | Recommend approval |
+| ID | Content | Status |
+|---|---|---|
+| D-LP-1 | business order plus L-ACT, F1 and MA as the actual early fence and authority | pending (v-a/v-b) |
+| D-LP-8 (v-a) | F1 installation-specific lease (§5.8.1), F2 with the continuous freeze (§5.8.2), F3 with host and installation binding, diagnostic mode, the GA002 runtime exit, root/Administrator maintenance (replacing "migrate as the service account") | pending; depends on Q-36-1 and (xi) |
+| D-LP-8 (v-b) | 8 control tables / 48 gated relations; V0026 contents; functions `gate`, `admit_session`, `admit_maintenance`, `maintenance_begin`, `require_maintenance`; bootstrap state machine; identity handover; controller-loss latch and drain; journal reconciliation; commands (`provision-installation`, `transition`, `migrate`, `activate-preservation`, `preservation-status`, `preservation-resolve`, `maintenance resume / abort`, `verify-restore`, `rebind-host`); control units CU-0…CU-30 | pending |
+| D-LP-8 (v-d) | AU-1…AU-8 (§5.7.9 + §5.8.7) | pending |
 
-**(D) Separately bounded:**
+**(D) Separately bounded:** **D-LP-9 (a)** is eligible for separate bounded authorisation, which it does not have
+automatically.
 
-| ID | Decision | Seventh assessment | Builder recommendation |
-|---|---|---|---|
-| D-LP-9 (a) | `pg_advisory_xact_lock(7340, 1)` first in `UserService.update` (§4.10) | appropriate as a separate bounded authorisation; NOWAIT not equivalent | Approve as a **separate** bounded item |
-
-**(E) Explicitly deferred or optional:**
-
-| ID | Decision | Seventh assessment | Builder recommendation |
-|---|---|---|---|
-| D-LP-8 (vii) | A-6 reviewed legacy acceptance | not acceptable as scoped; defer or revise | **Deferred.** Not in the initial scope; a future owner-reviewed remedy (§5.7.8). |
-| D-LP-8 (viii) | A conservative Unicode admission restriction | a new explicit decision if wanted | **Not proposed.** AU-8 refuses non-constructor values whatever their characters; `PortableRelativePath` is unchanged. |
-| D-LP-8 (x) | Optional hardening: a per-generation login role, with `NOLOGIN` for legacy roles (alternative 1, §5.7.1); needs `CREATEROLE` at each transition | — | Optional. Only needed if deliberate legacy `READ WRITE` overrides must also be excluded. |
+**(E) Conditional, deferred or optional:**
+- **D-LP-8 (vi) A-5 hold:** conditional owner choice, with kind and state in the update predicate (§5.8.6).
+- **D-LP-8 (vii) A-6:** deferred and inoperative.
+- **D-LP-8 (viii) Unicode restriction:** not proposed.
+- **D-LP-8 (x) per-generation login roles:** optional. It is required only if Q-36-1 or (xi) is not approved
+  (§5.8.10), and it would need its own role, ownership and credential contract.
 
 ## 9. Phase 4 writers and LO-1…LO-7
 
@@ -2926,6 +3678,58 @@ Their references to Source, vocabularies and users are terminal (TR, with D-LP-9
 | AA-23 | Sequence policy | A refused writer consumes `friendly_id` values; the gaps are accepted and no row is written |
 | AA-24 | Trigger coverage check | A table without the gate trigger (or with it disabled) makes CU-12 and CU-14 refuse |
 
+- **LP-17 [3.7] amendments** (eighth assessment §12). These amend the 3.6 group: where a row below names a case, it
+  replaces or extends that case. These are still **future implementation acceptance tests**; none is claimed to pass.
+  - **Determinism:** explicit Java and process barriers and server-side seams, never sleeps. Every probe releases its
+    own locks before participants proceed.
+  - **Unexpected outcomes:** zero unexpected 40P01 or 55P03. An unexpected timeout is a failure, not evidence of
+    deadlock prevention.
+
+| # | 3.7 specification |
+|---|---|
+| AA-1 | as 3.6, also recording the resolved pgjdbc, Hikari and Flyway versions, and every physical connection's declaration and `admit_session` result |
+| AA-2 | as 3.6; a worker killed mid-step; assert every effect (bytes, Q, U, owner rows, events), not only disjoint job ids |
+| AA-3a | **Split.** (i) *Transition acceptance:* a live legacy administrator process makes L5 refuse; after a verified stop, the transition completes. (ii) *Database companion (labelled):* an **orphaned pre-default backend** with no live process (a raw psql session as the application role, read-write, opened before V0026) is terminated at L8 and confirmed gone; the worksheet T1/T2 run only after B8. (iii) *Characterisation (labelled, not acceptance):* the original A→T1→T2→A cycle reproduced with a surviving read-write session and B8 bypassed in a raw-database fixture. Its purpose is to show what L8 prevents; T2 is never weakened. |
+| AA-3b | (i) A legacy restart attempted **after L5 and before L7 commits** through the unit or service (masked or disabled: refused by the service manager), through the shared `installation.yml` (exits at configuration load: unknown key), and through a copied jar and configuration (detected at L10 → refuse). (ii) Service-recovery and scheduled-task launch cases. (iii) A fresh post-L7 accepted-build reconnect with the **real old driver and pool**: locking reads and DML fail with 25006. |
+| AA-3c | as 3.6, also with an **admitted INTENDED move** in progress: source and destination bytes asserted; no rename after publication |
+| AA-3d | **No inevitable failure is asserted.** After the database restart, either the pool has reconnected (same epoch; the step continues) or the next window fails with a connection error at a durable boundary. Assert safety in both cases: epoch unchanged while the holder lives; maintenance refused at F1; accepted recovery |
+| AA-4 | (i) A **committed REFUSED** publication (findings, epoch + 1) is distinguished from (ii) an audit exception, (iii) a NOWAIT conflict and (iv) a killed activation, each of which rolls back with every earlier lock released (probes). The run stays OPEN, giving S7. Bootstrap crash states B1…B10 are covered by AA-19. |
+| AA-5 | Acknowledged **and** unknown publication; the controller **closes the run at the new epoch** through `maintenance_begin` with no GA001 (§5.8.4 sequence) |
+| AA-6 | Startup during maintenance waits on F1 shared on a **supervised** thread (logged every minute); **no effect** (configuration aside) before acquisition |
+| AA-7 | as 3.6; the stale-literal F3 refusal is labelled a negative fixture, not proof that a compliant worker straddles maintenance |
+| AA-8 | (i) **An ordinary owned target is cancelled successfully** (normal A-3: own `target_created` claim allowed). (ii) Negatives only for an **OPEN U at the target of another writer role** and a **non-final foreign claimant**. (iii) Every release path revalidated: pending settlement, settlement, release-only final and the unverified-copy final. (iv) The unverified-copy final is **one transaction** (U + release + CANCELLED + window row). |
+| AA-9 | as 3.6, plus non-constructor **observation** paths (integrity findings, including Unicode NFC names) that must **not** refuse (AA-9b) |
+| AA-10a/b/c | as 3.6, seeded through the real accepted writers (`DestructionProcessor.newRecord`, `claimBecomesUnresolved`) where possible |
+| AA-11…AA-11c | as 3.6, plus **AA-11d** targetless BLOCKED STAGING_INVALID INGEST produced by the real `plan`; **AA-11e** targetless BLOCKED STAGING_INVALID REPAIR; **AA-11f** partial history, then cancellation (pointer = CANCELLED_COPY destination); **AA-11g** crash after partial settlement before replan (pointer older or null; same target rewritten) |
+| AA-12 | as 3.6, plus: the lease channel survives pool shutdown and replacement, receiver and timer shutdown, and routine cleanup (`isValid` and object identity unchanged) |
+| AA-13 | (a) Fresh bootstrap (S0); (b) pre-gate dump (S1 → transition); (c) logical dump without the role default (S9 → `verify-restore` reinstalls and verifies it); (d) physical restore: the operational exclusion procedure, with **no** claim that the identity values detect it; (e) another protocol's build: F3 refuses at first connection; (f) database and storage coherence statement recorded |
+| AA-14…AA-14b | as 3.6 (present-source prefix), plus **AA-14c** a recorded-absent INTENDED for each of PARTIAL_COPY, UNVERIFIED_COPY, CANCELLED_COPY and ATTESTED_OBJECT; **AA-14d** SOURCE_ABSENT settled; **AA-14e** a present object without evidence (admitted; settlement refuses visibly); every null-target branch of the AU-2 table |
+| AA-15 | Hold: kind and state enforced **in the UPDATE predicate** (DESTROY and RECEIVING give zero rows → NOT_APPLIED); ledger, high water and evidence unchanged; no waiver. A concurrent ordinary writer is unreachable under MA, so stale preconditions are tested through a **precheck-to-CAS seam** or a labelled raw database mutation. |
+| AA-16 | **Split:** (i) a database characterisation (labelled): an existing prepared session after a protocol change shows execution-time gate evaluation (GA001); (ii) acceptance: F3 refusal of new connections; (iii) `set_config(…, true)` reversion at COMMIT and ROLLBACK on controller and action connections; (iv) missing, empty or invalid declarations; (v) closure at the new epoch |
+| AA-17 | Lease contract on Linux and Windows: actual systemd units and WinSW virtual accounts with a **custom DataDir** (the lease root stays fixed); protected-directory ownership and mode; an interrupted shared wait; an unsupported shared mode; a channel closed by a second open (must be impossible: ArchUnit); **replacement** (Linux new inode; Windows `NOSHARE_DELETE` refuses the rename or delete); symbolic link, junction, reparse point and alias refusal; WinSW parent versus `java.exe` child termination; **two independent installations** on one host (independent maintenance); a duplicate installation ID copy (same lease) versus a different ID against one database (GA002) |
+| AA-18 | Ordered phases inside one run (resolution, then activation), and exclusion of a second maintenance command (F1). **No cross-host claim.** |
+| AA-19 | **Bootstrap:** S0 and S1 through B1…B10, with a crash or unknown outcome at each B boundary (expected state per §5.8.3); Flyway connections registered in process before V0026 and persisted at B5; V0026 rollback including the role default; no ordinary admission in S3 |
+| AA-20 | Controller loss **after `maintenance_begin` and before business SQL/COMMIT**, and between windows: the latch is set; the admitted phase finishes with its outcome determined; **no new phase**; full backend drain by `(pid, backend_start)` before exit; resume drains a surviving old backend of a SIGKILLed JVM before rebinding |
+| AA-21 | **Journal-aware reconciliation replaces "repeated windows NOT_APPLIED".** Crashes after J0; after each window; after release, attest and hold; after SOURCE_ABSENT; within the atomic unverified-copy final; after the staging delete and before the mark; with unknown COMMIT of a **successful** window. The original window row's outcome, event and timestamp are reused and **not** repeated. Inconsistent business and journal states stop the run with an observation. |
+| AA-22 | as 3.6, also keeping valid disabled downloads served |
+| AA-23 | sequence gaps characterised; no application row or owner change |
+| AA-24 | Coverage by **trigger function OID, `tgtype` bits and `tgenabled = 'A'`**, per relation, including a disabled trigger, a wrong function, a missing TRUNCATE event, and a direct partition target fixture |
+
+- **LP-10d (ii-b) [3.7].** The 3.6 split is retained.
+  - **(ii-b1)**: source inspection at `7a97e70` found **no pair of service-level recorders** of one OPEN key that is
+    not already serialised by a shared operation advisory or excluded by the protocol:
+    - destruction holds every writer's advisory (`tryLockAll`);
+    - `claimBecomesUnresolved` records only its own operation's target;
+    - `commitRepair` and `quarantineSuperseded` record only their own content's superseded generation paths, under the
+      repair's advisory.
+
+    (ii-b1) therefore drives the two real repository recorder windows (`recordIfAbsent` under the real Ct(X) U
+    coordinator) directly. It observes the second waiting at Ct and then returning the committed OPEN record, and it
+    is **labelled helper-level**. No service race is claimed.
+  - **(ii-b2)** remains a raw database characterisation without the coordinator.
+  - **(ii-a)** keeps the accepted "not applied" result when cancellation or destruction has already changed
+    eligibility.
+
 ## 11. Bounded verification executed (non-production) [restored in 3.5]
 
 **[3.5]** Revision 3.4 (`fe197ed`) dropped this section and the §12 heading by an editing error, which left the
@@ -3044,6 +3848,23 @@ Taken from a scratch database migrated with V0001…V0025 (local PostgreSQL 16):
 - autovacuum interaction;
 - every LP-17 case.
 
+### 11.10 Revision 3.7 verification [3.7]
+
+**No new local execution was performed for revision 3.7.** The revision rests on source inspection at `7a97e70`:
+- `OperationProcessor` `plan`, `quarantinePartialAndReplan` and `promote`;
+- `QuarantineMoves` `move` and `settle`;
+- `QuarantineRepository.intend`;
+- `OperationAdminService.applyCancel`;
+- `UnresolvedObjects` `release`, `attest`, `quarantineAttested` and `retireGeneration`;
+- `SchemaMigrator`;
+- `InstallationConfigLoader` (rejection of unknown keys);
+- the deployment scripts and unit files;
+- `BlockedReason`;
+- the writers of `file_operation.quarantine_path`;
+- the absence of `ProcessBuilder` and `Runtime.exec` in `src/main`.
+
+The §11.9 primitives (3.6) are not re-executed and remain Linux PostgreSQL 16 / OpenJDK 21 observations only.
+
 ## 12. Residual risks and open items
 
 - **[3.3] Changes to the assumptions:**
@@ -3055,6 +3876,9 @@ Taken from a scratch database migrated with V0001…V0025 (local PostgreSQL 16):
 - **[3.4] Data audit:** superseded by the fail-closed admission design of §5.5 (AU-1…AU-8). A read-only report
   alone is not sufficient. **[3.5]** §5.5 is itself historical. The operative design is §5.6: global fail-closed
   activation, the corrected AU-1…AU-8 (§5.6.5) and assumptions R35-1…R35-6 (§5.6.10).
+- **[3.7]** The operative admission design is §5.7 as amended by §5.8. It is conditional on **Q-36-1** and
+  **D-LP-8 (xi)**, neither of which is approved. Assumptions and proof obligations are listed in §5.8.12, and the
+  alternatives if those decisions are not approved in §5.8.10.
 - **[3.6]** The operative admission design is §5.7, with assumptions and proof obligations R36-1…R36-6
   (§5.7.13); R35-1, R35-2 and R35-4 are superseded. Open spec question **Q-36-1**: confirm that an Archive Instance's
   processes run on one host (F1's scope). A-6 is deferred (D-LP-8 (vii)).

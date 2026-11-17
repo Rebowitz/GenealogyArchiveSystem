@@ -216,3 +216,8 @@ termination during the one-time transition (proposal §5.7.3). Compatible builds
 and the per-connection identity check (§5.7.1–§5.7.5). The remedy does **not** make "all older sessions" read-only.
 Status unchanged: OPEN.
 
+**[3.7]** Excluding a running older build is now an **operating-system** matter: the continuous legacy change freeze
+(proposal §5.8.2, owner decision D-LP-8 (xi)), with automated aids. Two of those aids apply directly here: an
+older build reading the shared configuration exits at load because of the new required key, and a fresh older-build
+session is read-only. Neither stops an older process already running filesystem work. Status unchanged: OPEN.
+

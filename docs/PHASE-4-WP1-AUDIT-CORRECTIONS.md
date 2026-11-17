@@ -664,6 +664,60 @@ eighth independent assessment and owner decisions (proposal §8). WP1 is not acc
 
 ---
 
+### Eighth independent architectural assessment (revision 3.6 → revision 3.7)
+
+| | |
+|---|---|
+| Assessment | `Phase-4-WP1-Eighth-Architectural-Assessment.md` (reviewed head `7a97e70`), received complete |
+| Direction | Phase 4 WP1 — Locking Protocol Revision 3.7 Direction (baseline `7a97e7077bee22cb72d364674fa1fe1ed24b0783`), received complete |
+| Result | proposal revision 3.7 (same file), documentation only; no new local execution |
+| Disposition received | PROPOSAL REQUIRES REVISION. F5-4 PARTIAL, OPEN; F5-1…F5-3 retained; all five named issues OPEN; WP1 unaccepted; WP2 HOLD |
+
+The findings are cited by section and are not restated or altered here.
+
+| Ref | Finding | Response (proposal revision 3.7) | Status |
+|---|---|---|---|
+| §1 / §4 Q-36-1 | Single host is essential and not owner-confirmed; remote PostgreSQL is distinct from a second application host; host move, failover and NAS | Designed conditionally. Q-36-1 is restated in five parts in §8 and **not** recorded as approved. The binding's host ID is checked by ordinary and maintenance admission. The alternative is in §5.8.10. | DECISION (owner) |
+| §4 R8-1 installation identity | Fixed host-wide path couples installations; copies with other paths reach one database | Installation ID; fixed per-platform lease root; one object per ID; database binding (installation, host, lease object, sysid/OID, Archive ID); GA002 for a mismatched copy (§5.8.1) | RESPONDED (design) |
+| §5 F1 contract | Early release, multiple channels, interruption, unsupported shared mode, protected directories, links and reparse points, local filesystem, no unlocked recreation, children, launchers, shutdown | §5.8.1 lifetime rules; Windows `NOSHARE_DELETE`; Linux inode check and FENCED latch; offline-only provisioning; no child processes (source); WinSW child versus parent; supervised wait | RESPONDED (design); future tests AA-17 |
+| §5 replacement counterexample | Inode I versus J | Installer and uninstaller non-replacement contract; refusal on a missing object; inode/file-index re-check latch | RESPONDED |
+| §5 service accounts | Migrating as the service account versus admin visibility | Maintenance as root/Administrator; installer instruction change listed in D-LP-8 (v-a) | RESPONDED; DECISION |
+| §6 database semantics | Role-default scope; privileges for the configured role; terminate after known COMMIT; termination not rolled back | V0026 sets the default for the connecting configured role; L8 after known COMMIT on a read-write connection; termination stated as non-transactional (§5.8.2, §5.8.3) | RESPONDED |
+| §6 R8-2 continuous exclusion | A point scan does not exclude a restart | Owner-approved freeze D-LP-8 (xi), L1…L12; automated aids (mask or disable, the required configuration key that accepted builds reject, OS verification at L5 and L10 by PID and start instant, fail-closed on unverifiable); operator residuals stated (§5.8.2) | RESPONDED (design); DECISION (owner) |
+| §6 administrator/worksheet schedule | Valid if an old session survives | Shown to be excluded after a successful transition, with its conditions (freeze, Q-36-1, R36-3) (§5.8.2) | RESPONDED (conditional) |
+| §7 F3 | Compiled protocol; reconnect revalidation; fatal-signal path; versions to record | §5.8.1 binding checks; §5.8.8 GA002 runtime exit (owner approval); AA-1 version recording | RESPONDED |
+| §7 stale RecoveryService | Excluded under one protected lease object | Retained; AA-3c/AA-3d amended (no inevitable failure asserted) | RETAINED |
+| §7 startup behaviour | Diagnostic web start versus hard exit; `check-config` and `help` | Diagnostic mode kept; effect-free commands without lease or database; `status` on a read-only diagnostic connection; writers require COMPLETE (§5.8.8) | RESPONDED |
+| §8 R8-3(a) bootstrap circularity | MA requires objects V0026 creates | States S0…S9; B1…B10 (+ B11); in-process registration before V0026; V0026's single-transaction order; S3 refuses ordinary admission; known-COMMIT determination (§5.8.3) | RESPONDED (design); future AA-19 |
+| §8 Flyway contract | "First statement of every maintenance transaction" with Flyway internals | Connection registration by factory; V0026 sets its own local identity; later migrations call `maintenance_begin` explicitly; one transaction per migration (R37-2) | RESPONDED |
+| §8 R8-3(b) stale identity | Publication leaves the controller at E; GA001 at close | No session-level maintenance declaration; per-transaction `maintenance_begin`; closure sequence without GA001 (§5.8.4) | RESPONDED |
+| §8 R8-4 controller loss | A point check is not a fencing token; drain; resume; single phase; exact predicate; bound admission; cross-host | F1 as the ultimate authority; latch; bounded continuation with a non-overlap argument; drain by `(pid, backend_start)`; resume reconciliation; single active phase; exact advisory predicate; `admit_maintenance`; no remote controller (§5.8.5) | RESPONDED |
+| §8 CU table | CU-0, CU-1…3/13, CU-4…6, CU-7…8, CU-9, CU-10…12, CU-14…16, CU-17…19, CU-20, CU-21 | Amended in §5.8.3–§5.8.6; CU-22…CU-30 added (31 units); "nothing waits" made inoperative; CU-21 runs in resume under F1 exclusive, never from read-only status | RESPONDED |
+| §9 R8-5 replay premise | `markStagingCleaned`, `note`, `release`, `move`, `settle` | R36-5 inoperative; stable window keys; attempt, observation and reconciliation records; 9-step algorithm; filesystem matrix (§5.8.6) | RESPONDED |
+| §9 A-3 branches | INTENDED, own Q INTENDED, QUARANTINED, SOURCE_ABSENT, unverified atomic, CANCELLED with or without window, staging, ineligible | Resume table; window 4 keeps `applyCancel`'s single transaction; revalidation on every release path; the owned target is the passing case | RESPONDED |
+| §9 A-1, A-2, A-4 | Completion predicates; A-4 eligibility; byte terminology | Predicates; eligibility unchanged; authoritative originals versus an attested unidentified object at an UNRESOLVED generation path | RESPONDED |
+| §9 A-5, A-6 | Kind in the predicate; A-6 inoperative | SQL with kind and state; A-6 marked inoperative in §5.6 | RESPONDED; DECISION (vi) |
+| §10 R8-6(a) targetless BLOCKED | `plan` blocks before planning | AU-2 targetless branches by kind, state and reason; no manufactured target; REPAIR never private | RESPONDED |
+| §10 R8-6(b) recorded absence | Null evidence at intent | AU-5 recorded-absent rules for every reason; later objects unauthorised; SOURCE_ABSENT; the A-3 wording corrected | RESPONDED |
+| §10 R8-6(c) pointer | Pointer replaced by a CANCELLED_COPY destination; crash before replan | Transition-specific rule from the two source writers (replan sets it for QUARANTINED **or** SOURCE_ABSENT; crash-then-rewrite partials never set it) | RESPONDED |
+| §10 constructor and Unicode scope | Eight identity columns only; observation paths; NFC | R37-6 scoped; observation paths never refuse; Unicode NFC accepted | RESPONDED |
+| §10 AU-1…AU-8 table | Per-check residuals | Summary table and fixtures (§5.8.7) | RESPONDED |
+| §11 table count and coverage | 40 + 7; catalog verification | 40 + **8** = 48 (`maintenance_action_event` added for attempts and observations); coverage by function OID, `tgtype`, `tgenabled`, digest, per partition | RESPONDED |
+| §11 statement semantics | Relation locks before triggers; MERGE, ON CONFLICT, TRUNCATE | §5.8.8 | RESPONDED |
+| §11 control invariants | Singleton, events, run, action, window rows | §5.8.8 invariants | RESPONDED |
+| §11 restore | Identity is not a certificate; rewind | §5.8.8 restore procedure and limitation; B11 | RESPONDED |
+| §11 disabled behaviour | Exact exceptions | §5.8.8 list; D-LP-8 (v-c) wording corrected | RESPONDED |
+| §12 AA-1…AA-24 | Per-case amendments | LP-17 3.7 amendments table (§10) | RESPONDED (future tests) |
+| §12 LP-10d(ii-b) | Reachable recorders | No reachable service pair found; (ii-b1) labelled helper-level; (ii-b2) raw; (ii-a) unchanged | RESPONDED |
+| §13 decisions | Matrix | §8 regrouped; (v-a/b/d) pending; (vi) conditional; (vii) deferred; (x) optional; (xi) new; D-LP-9(a) separately eligible | DECISION (owner) |
+| §14 1–10 | Minimum corrections | 1: owner decisions requested, not granted; 2–10: §5.8.1–§5.8.9 and §10 | RESPONDED (design); items 1 open |
+
+**Status:** revision 3.7 submitted. Nothing implemented; no new execution. F5-4 is **not claimed closed**: the design
+is conditional on Q-36-1 and D-LP-8 (xi), both unapproved. WP1-R1 and GAS-P4-002…GAS-P4-005 remain OPEN. Awaiting
+the ninth independent assessment and owner decisions. WP1 is not accepted; WP2 remains on HOLD.
+
+---
+
 ## WP1-R2: Historical Date database constraints (BLOCKING; corrected)
 
 **Finding (direction sheet, unaltered):**
