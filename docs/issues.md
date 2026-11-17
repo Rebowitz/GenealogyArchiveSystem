@@ -82,7 +82,7 @@ TO.
 | | |
 |---|---|
 | Found | 2026-11-16, registering the Phase 3 row locks (LO-1 to LO-3) |
-| Status | **OPEN, escalated.** **SUPERSEDED ASSERTION:** the deadlock-freedom premise stated below (L1 is safe because session-first locking serialises it) is **wrong across sessions and subsystems** and must not be relied on; see WP1-R1 (BLOCKING), Scenarios A–D and GAS-P4-003. The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3.3 (D-LP-1…D-LP-9; modified Option C with P2-8g), and is not implemented. Not closed by specification. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
+| Status | **OPEN, escalated.** **SUPERSEDED ASSERTION:** the deadlock-freedom premise stated below (L1 is safe because session-first locking serialises it) is **wrong across sessions and subsystems** and must not be relied on; see WP1-R1 (BLOCKING), Scenarios A–D and GAS-P4-003. The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3.5 (D-LP-1…D-LP-9; modified Option C with P2-8g; global fail-closed activation, §5.6), and is not implemented. Not closed by specification. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
 
 > **Superseded assertion (kept for the record, do not rely on it):** the text below describes the original premise.
 
@@ -154,7 +154,7 @@ not a fix** (proposal §11.7). Keeping the current design is an explicit risk de
 |---|---|
 | Found | 2026-11-16, analysing fourth-assessment finding F4-1 |
 | Phase | Defect in accepted Phase 2 code; found during Phase 4 WP1 |
-| Status | **OPEN; source-derived, not executed.** **[3.4] Severity raised from MINOR to MAJOR,** as independently recommended. Not fixed; no production code changed. Proposed fix: P2-8g (Wh1a, Wh1b, Wh2) plus fail-closed admission of pre-existing overlaps (proposal §5.4, §5.5), part of decision D-LP-8. P2-8g is proposed, not implemented or accepted. |
+| Status | **OPEN; source-derived, not executed.** **[3.4] Severity raised from MINOR to MAJOR,** as independently recommended. Not fixed; no production code changed. Proposed fix: P2-8g (Wh1a, Wh1b, Wh2) plus fail-closed admission of pre-existing overlaps (proposal §5.4; **[3.5]** global fail-closed activation, §5.6, replacing 3.4's §5.5 isolation), part of decision D-LP-8. P2-8g is proposed, not implemented or accepted. |
 | Related | Fourth assessment F4-1; `PHASE-4-WP1-AUDIT-CORRECTIONS.md` F4-1; proposal §5.4, LP-15(a) |
 
 **Cause.**
@@ -177,4 +177,36 @@ LP-15(a) characterises it.
 
 **Proposed fix (not applied).** P2-8g: monotonic generation planning (Wh1) and the OPEN-record check in
 `createOwned` under Ct(X) Sh (Wh2).
+
+## GAS-P4-005: MINOR. An older web process keeps writing against a newer schema (accepted Phase 1–2 code)
+
+| | |
+|---|---|
+| Found | 2026-11-16, feasibility analysis for lock-protocol revision 3.5 (proposal §5.6.1) |
+| Phase | Defect in accepted code (web process); found during Phase 4 WP1 |
+| Status | **OPEN; source-derived, not executed against the application.** Not fixed; no production code changed. Proposed remedy: layer A of the activation write gate (proposal §5.6.2, part of decision D-LP-8 (v)). |
+| Related | Sixth assessment §7 A (`PHASE-4-WP1-AUDIT-CORRECTIONS.md`, sixth-assessment section); proposal §5.6.1, LP-17 AA-3 and AA-13 |
+
+**Cause.**
+- `SchemaMigrator.status()` reports AHEAD when the database holds migrations unknown to the build ("do not run this
+  older version against it").
+- The worker refuses to start, and stops claiming work, when the status is not ready.
+- The web process does not:
+  - only `HomeController` checks `SystemStatus.ready()`, and no filter or interceptor gates requests;
+  - `IngestionService.readiness` checks the ingestion volume and staging, not the schema;
+  - the readiness health group reports OUT_OF_SERVICE without stopping handlers.
+
+**Effect.** A web process of an older build left running, or started by mistake, after a newer build's migration
+still accepts uploads, retries, cancellation requests, unresolved decisions, destruction requests and download
+evidence writes against a schema it does not know. Nothing is known to be lost. The writes fail visibly where a
+constraint rejects them, but the "fail visibly when integrity is uncertain" rule is not met by construction.
+
+**Evidence.** Source analysis at `fe197ed`: `HomeController`, `IngestionService.readiness`, `WorkerProcess.start` and
+heartbeat, `SchemaMigrator.status`, `WebSecurityConfiguration`, and the absence of any `HandlerInterceptor` or request
+filter other than `TransportSecurityFilter`. The database primitive of the remedy was checked locally (proposal
+§11.8 (c)).
+
+**Proposed remedy (not applied).** The activation migration sets the role-in-database default
+`default_transaction_read_only = on`. New builds override it at connection start, so any older build becomes
+read-only at the database, for writes and locking reads alike. This is part of D-LP-8 (v), not a separate change.
 

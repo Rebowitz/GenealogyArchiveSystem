@@ -1,16 +1,28 @@
-# Phase 4 WP1: L1 locking-protocol proposal (WP1-R1, GAS-P4-002), revision 3.4
+# Phase 4 WP1: L1 locking-protocol proposal (WP1-R1, GAS-P4-002), revision 3.5
 
 **Status: REVISED PROPOSAL for owner review and independent Codex assessment. Not implemented.**
 - No production locking code, SQL, trigger or migration in this document has been written.
 - The test designs in §10 are specifications; none of them is claimed to pass.
 - Executed evidence is limited to the bounded, non-production checks in §11.
+- **Revision 3.5** responds to the sixth independent architectural assessment
+  (`Phase-4-WP1-Sixth-Architectural-Assessment.md`, reviewed head `fe197ed`) and the Revision 3.5 direction:
+  - **F5-4** is answered by **globally quiesced, fail-closed preservation activation** (§5.6), with a durable
+    activation record and a database write gate (a **schema requirement**, owner decision D-LP-8 (v)). Revision
+    3.4's process-local isolation (§5.5) is withdrawn as a safety authority and kept only as history.
+  - AU-1…AU-8 are rewritten on the real states (§5.6.5). The writer inventory is per entry point (§5.6.4). The
+    offline resolution procedure is §5.6.7, the control units §5.6.8 and the admission tests LP-17 (§10).
+  - §11 and the §12 heading, lost in 3.4, are restored; §6.3 is aligned with G1/G10.
+  - F5-1, F5-2, F5-3 and Wh2 are retained unchanged. R34-OPEN-1 was reconciled by the sixth assessment for
+    reviewer access only; the builder never received the fifth report.
+
+  Changes are marked **[3.5]**.
 - **Revision 3.4** corrects the four blockers named in the Revision 3.4 direction (fifth independent assessment,
   `Phase-4-WP1-Fifth-Architectural-Assessment.md`, which **was not received by the builder**; the direction's relay
   of its findings is followed):
   - **F5-1:** serialised generation reservation (Wh1a, Wh1b);
   - **F5-2:** preservation-row guard classes (G1, G10);
   - **F5-3:** generation-bound download evidence (We7);
-  - **F5-4:** fail-closed admission and activation (§5.5).
+  - **F5-4:** fail-closed admission and activation (§5.5; **withdrawn in 3.5**, replaced by §5.6).
 
   Changes are marked **[3.4]**.
 - **Revision 3.3** responded to the fourth independent architectural assessment
@@ -30,7 +42,7 @@
   PO-B…PO-D, the invariant INV-P (scoped to admitted data, §12) and P2-8g (INV-U withdrawn in 3.3).
 - **Evidence classes:**
   - **independently verified:** CI run `43831470275`, checked by the second review;
-  - **builder-executed:** local PostgreSQL 16 (§11.3, §11.5–§11.7);
+  - **builder-executed:** local PostgreSQL 16 (§11.3, §11.5–§11.8);
   - **source analysis** (§2, §4.9, §5);
   - **proposed design** (§3–§6, §4.10);
   - **future test** (§10).
@@ -49,7 +61,7 @@
 | Direction item | What revision 3 does | Where |
 |---|---|---|
 | §1 Replace PO-1 and I-ADV | I-ADV and PO-1 withdrawn. Writer-by-writer resource-protection matrix for every preservation writer and every cross-row trigger, built from source and the live catalog. The false claims it exposes are listed (§2.3). | §2.3, §2.4 |
-| §2 D-LP-8 as an active decision | Options A, B and C evaluated. **Recommendation: Option C**, content-row coordination (CR-1), with operation rows classified by writer kind (CR-2), content-less rows under their operation (CR-3) and location-key invariants (CR-4). Existing operation-before-content paths are analysed, not assumed away. No blocking advisory acquisition is added by Option C (D-LP-9 adds one first-acquisition key, §4.10). **[3.2]** Six decision groups changing 15 transaction windows (§4.9). | §3.2, §4.9, §7 |
+| §2 D-LP-8 as an active decision | Options A, B and C evaluated. **Recommendation: Option C**, content-row coordination (CR-1), with operation rows classified by writer kind (CR-2), content-less rows under their operation (CR-3) and location-key invariants (CR-4). Existing operation-before-content paths are analysed, not assumed away. No blocking advisory acquisition is added by Option C (D-LP-9 adds one first-acquisition key, §4.10). *Historical [3.2]:* six decision groups changing 15 transaction windows; **operative count [3.4, unchanged in 3.5]: 19 P2-8 windows, 22 Phase 2 business windows (§4.9)**. | §3.2, §4.9, §7 |
 | §3 PO-2 unique-key ledger | Every primary, unique, partial-unique and logical conflict key: contenders, holder, first conflicting wait, protection, classification, tests and assumptions. No constraint is weakened. | §2.5 |
 | §4 Guard contract | Batches removed. Every blocking acquisition is checked immediately before its SQL; inserted rows keep their public keys; modes, duplicates and strongest-mode handling are explicit; re-lock protection of WP1-R3 is kept; the `commitShared` parent re-lock is replaced by an assertion; rollback resets state. The false "never explicitly locked" assertion is replaced. | §6 |
 | §5 Catalog and reference locks | Source → Repository dependency, terminal reference waits from Record, Citation, worksheet overrides, session correction, history, vocabularies and users. A narrowly scoped terminal-reference rule (TR) is proved; no lock is claimed to be held that is acquired implicitly. | §4.8, §5 (L7) |
@@ -74,10 +86,29 @@
 | Class | Meaning | Where |
 |---|---|---|
 | **Independently verified** | Confirmed by another party | Only LP-6 and the SA-R1 reproduction ran in CI on all four jobs (run `43831470275`); the reviewer has not yet assessed revision 3 |
-| **Executed (builder)** | Run by the builder outside CI, on local PostgreSQL 16 | §11.3 predicate waits; §11.4 schema extraction |
+| **Executed (builder)** | Run by the builder outside CI, on local PostgreSQL 16 | §11.3 predicate waits; §11.4 schema extraction; §11.5–§11.7 (historical, restored in 3.5); **§11.8 activation-gate primitives [3.5]** |
 | **Builder source analysis** | Read from source, schema and triggers at `d2c96f2`, not executed | §2.1–§2.5 |
 | **Proposed design** | Not implemented | §3–§9 |
 | **Test specification** | Not implemented | §10 |
+
+### 0.3 Revision 3.5 response (Revision 3.5 direction §1–§14) [3.5]
+
+| Direction item | Revision 3.5 | Where |
+|---|---|---|
+| §1 Preserve F5-1, F5-2, F5-3, Wh2 and earlier directions | Unchanged except editorial alignment. The REPAIR missing-content case is now explicitly not private (INGEST-only), as the sixth assessment §4 requires. | §4.9, §6.3 |
+| §2 Prefer Option 1; feasibility | **Option 1 selected.** Feasibility per participant from source. Accepted code alone cannot exclude an old web process. Enforceable with a durable activation record and a two-layer database write gate (**schema requirement**, owner decision). No Option 2. | §5.6, §5.6.1, §5.6.2 |
+| §3 Quiescence and activation protocol | A controlled maintenance command. Database-verified absence of sessions, then a NOWAIT barrier, the audit, an epoch publication and startup eligibility. Mixed-version exclusion at three points. | §5.6.3 |
+| §3.2 Restart and failure | 15 cases | §5.6.6 |
+| §4 Writer inventory | E-1…E-27, per entry point | §5.6.4 |
+| §5 Cancellation and resolution | Cancellation is no exception. Offline `preservation-resolve` with existing authorities A-1…A-4; A-5 (hold) and A-6 (legacy acceptance) are owner decisions. | §5.6.7 |
+| §6 AU-1…AU-8 | Rewritten on the real states, outcomes and ownership facts. The SHARED_CONTENT COMMITTED case is ADMITTED-CLEANUP and completes through `finish`. | §5.6.5 |
+| §7 Conflicting-identity closure | A component over all identities and AU-8 keys. Any unsafe component refuses activation as a whole. | §5.6.5 |
+| §8 Control units | CU-0…CU-11, with SQL and lock order. Business-window counts (19 and 22) unchanged and kept separate. | §5.6.8 |
+| §9 Admission tests | LP-17 AA-1…AA-16 | §10 |
+| §10 LP-10d(ii) | Replaced by (ii-a) service-level advisory skip and retry, and (ii-b) helper/DB OPEN-key fixture | §10 |
+| §11 Documentation | §11 restored verbatim from `e5bf8c0`; the §12 heading restored; §6.3 aligned; superseded tables marked; F5 matrix reconciled; R34-OPEN-1 recorded as reconciled for reviewer access; GAS-P4-004 unchanged in severity and status | §6.3, §11, §12; correction record |
+| §12 Decisions | D-LP-1…D-LP-9 updated | §8 |
+| §13, §14 | Documentation and bounded non-production checks only (§11.8). No production code, migration, merge or tag. | — |
 
 ## 1. Summary
 
@@ -337,7 +368,7 @@ L7 is implicit only.
 | | **A: extend the total order to all shared preservation rows** | **B: smaller ordered core plus individually proven exceptions** | **C (recommended): content coordination plus classified exceptions** |
 |---|---|---|---|
 | What it requires | Pick a global position for O, G, U, Q and location keys, and reorder every writer to it. Operation-before-content paths (P5, P6) and content-before-operation paths (P2, D1, D6, the I and P16 triggers) disagree. One of them must change in every pairing, and trigger-driven location writes (which pick their rows by predicate at run time) must also be ordered. | Keep F, Ct, K, R and C ordered and prove each other writer acyclic one by one: terminal, first-wait or single-resource. | One coordinator (Ct FOR UPDATE) for every content-scoped row; the remaining shared rows (O, content-less U and Q, location keys) are covered by three classification rules, each checkable by a test. |
-| Phase 2 changes | Most preservation writers, plus the triggers (they would have to lock in a defined order instead of by predicate). | Few now, but every new preservation writer needs a new proof; the I1/I2 and DP paths cannot be shown terminal (they hold Ct and then write G and O). | **[3.2]** Six decision groups P2-8a…f changing **15 transaction windows** (§4.9), plus D-LP-6a and 6b; all of the form "lock Ct FOR UPDATE first". No trigger changes. No advisory waits added by Option C. |
+| Phase 2 changes | Most preservation writers, plus the triggers (they would have to lock in a defined order instead of by predicate). | Few now, but every new preservation writer needs a new proof; the I1/I2 and DP paths cannot be shown terminal (they hold Ct and then write G and O). | *Historical [3.2]:* six decision groups P2-8a…f changing 15 transaction windows, plus D-LP-6a and 6b (**operative [3.4/3.5]: 19 P2-8 windows; 22 Phase 2**, §4.9); all of the form "lock Ct FOR UPDATE first". No trigger changes. No advisory waits added by Option C. |
 | Strength of the safety argument | Strong in principle, but the triggers' predicate-chosen rows make the order hard to enforce or test. | Weakest: a list of special cases. | Strong: content-scoped rows are serialised by one exclusive lock; the remaining cases reduce to proof obligations PO-A…PO-D with tests. |
 | Behavioural change | Large | Small | Small: some preservation transactions wait for the content row where they now race; outcomes unchanged |
 
@@ -573,8 +604,11 @@ listed with:
   `quarantine_object.content_id`, `unresolved_object.content_id`, `file_operation.content_id` or the generation's
   `content_id`.
 - If the statement returns no row, the content is not persisted, which can only be a planned INGEST content (see
-  P2-8f). The guard records MISSING and the window proceeds under CR-3 (the operation's advisory lock). There is no
-  branch on an operation-kind label.
+  P2-8f). The guard records MISSING and the window proceeds under CR-3 (the operation's advisory lock).
+- **[3.5] INGEST only** (sixth assessment §4). The MISSING outcome is accepted as private **only when the operation's
+  kind is INGEST**. For REPAIR or DESTROY a missing content row is malformed: the window refuses with no
+  filesystem change, the step fails visibly (BLOCKED STATE_UNKNOWN, recorded), and AU-2 refuses activation for such
+  rows. This replaces 3.4's "no branch on an operation-kind label".
 - A not-yet-committed content row is invisible, so the statement never waits for it.
 
 **Count [3.4, operative].** The seven decision groups (P2-8a…g) change **19 transaction windows**:
@@ -584,15 +618,16 @@ listed with:
 - **Wh1b** (`quarantinePartialAndReplan` reservation; a distinct window that shares Wh1a's allocation design);
 - **Wh2** (`createOwned` OPEN check).
 
-**Phase 2 total: 22 changed windows**: 19 under P2-8a…g, plus 3 under D-LP-3, D-LP-6a and D-LP-6b. The startup
-admission audit (§5.5) is a read-only gate, not a changed window.
+**Phase 2 total: 22 changed windows**: 19 under P2-8a…g, plus 3 under D-LP-3, D-LP-6a and D-LP-6b. **[3.5]**
+Admission and activation are **control units**, inventoried separately (§5.6.8, CU-0…CU-11); they are not part of
+these 22 business windows.
 
 *Historical, not operative:* **Count [3.3].** The **seven** decision groups (P2-8a…g) change **18 transaction windows**:
 - the 15 listed below;
 - **We7** (download MISSING, F4-3);
 - **Wh1** and **Wh2** (P2-8g, F4-1).
 
-**Revision 3.2's count was:** the six decision groups (P2-8a…f) change **15 transaction windows** (marked **CHANGED**):
+*Historical, not operative:* **Revision 3.2's count was:** the six decision groups (P2-8a…f) change **15 transaction windows** (marked **CHANGED**):
 - Wa2;
 - Wb1;
 - Wc1, Wc4, Wc5, Wc6;
@@ -684,7 +719,7 @@ delegates, not windows.
 | Step | Statement | Notes |
 |---|---|---|
 | 0 | entry | worker thread holds adv(own operation) (registered, not LOST); **no outer transaction** (G9-style assertion); a new outermost transaction, READ COMMITTED |
-| 1 | `SELECT … FROM gas.file_content WHERE content_id = :x FOR UPDATE` | **Ct(X) U**; the first lock. If no row: Wh1a rejects (the content must exist for a repair); Wh1b proceeds as private INGEST. |
+| 1 | `SELECT … FROM gas.file_content WHERE content_id = :x FOR UPDATE` | **Ct(X) U**; the first lock. If no row: Wh1a rejects (the content must exist for a repair); Wh1b proceeds as private **only if the operation is an INGEST [3.5]**; a REPAIR without persisted content is refused (BLOCKED STATE_UNKNOWN, nothing created). |
 | 2 | re-read content: state (Wh1a: MISSING or DAMAGED; Wh1b: not DESTROY_PENDING or DESTROYED), size, SHA-256 against the operation's expected values | a mismatch → the accepted `reject` or `block` outcome, inside this transaction; nothing reserved |
 | 3 | `SELECT GREATEST((SELECT COALESCE(MAX(generation), 0) FROM gas.file_content_generation WHERE content_id = :x), (SELECT COALESCE(MAX(target_generation), 0) FROM gas.file_operation WHERE content_id = :x), :own_previous) AS high_water` | a **subsequent statement**, so a fresh snapshot after the lock is granted. All operation states count: planned, failed, cancelled, stopped, rejected and completed. `content_id` is set for every repair and for an ingest once it shares or creates X. |
 | 4 | `next = high_water + 1`, checked: if `high_water ≥ 2147483647` (`integer` maximum), the operation is **BLOCKED (STATE_UNKNOWN)** with "generation numbering is exhausted for this content; nothing was created", recorded in this transaction | visible; before any filesystem or ownership change |
@@ -719,10 +754,12 @@ reservation. **Two ordinary planners always receive distinct committed numbers.*
 - **New plans:** after Wh1a, distinct planners never share a number, so a COLLISION from plan sharing disappears for
   new repairs. CREATE_NEW collisions remain possible only from unexpected filesystem objects (accepted behaviour).
 - **Legacy pre-planned repairs** (planned before Wh1a, possibly sharing a number): Wh2 refuses them while an OPEN
-  record exists. Otherwise CREATE_NEW and the claim behave as today. Their admission is governed by §5.5.
+  record exists. Otherwise CREATE_NEW and the claim behave as today. **[3.5]** Their admission is governed by §5.6
+  (AU-7: a live duplicate refuses activation as a whole).
 
 **Not a cure for existing owners:** Wh2 governs **new** claims only. Operations already owning a path when the
-protocol is enabled (for example a PROMOTED repair at an OPEN path) are classified by the admission audit (§5.5).
+protocol is enabled (for example a PROMOTED repair at an OPEN path) are classified by the admission audit
+(§5.6.5, AU-4 (b): UNSAFE-ACTIVE), which refuses activation as a whole [3.5].
 
 **Owner decision (D-LP-8, pending):** durable cross-operation generation skipping (numbers of failed or cancelled
 plans are never reused) is a **proposed** behaviour change, not approved.
@@ -814,7 +851,7 @@ transactions, NOWAIT) reproduce cycles.
 | **Generation-keyed writes** | F1. **Source-supported**, unchanged from 3.2. |
 | **Settlement, generation source** | F1. **Source-supported.** |
 | **Settlement, own-target source** | The entry's own operation; the settler holds its advisory. **Source-supported.** |
-| **Settlement, attested source** (s = u.path) **[3.4]** | INV-U stays withdrawn. A committed claimant at s is one of: **(a)** the entry's own operation (advisory held); **(b)** a **final** operation's stale claim (destruction refusal), whose row has only terminal writers (A0, A1); **(c)** an **active** claimant that made its claim **after enablement**, impossible because Wh2 refuses new claims while the OPEN record exists, and the record stays OPEN until Wa2 commits; **(d)** an **active or resumable claimant that already existed at enablement**, which the admission audit classifies UNSAFE and isolates (§5.5), so no settlement of that content runs. **Generation reservations (Wh1a, Wh1b)** make (c) unreachable through planning as well. **Trigger-driven ownership changes** (claims, releases, retirements) are covered by F1, PO-C and the window inventory. **Deferred COMMIT checks** are reads. **Class: conditional on P2-8g and the §5.5 admission policy** (proposed design); awaiting LP-15 and the admission tests. |
+| **Settlement, attested source** (s = u.path) **[3.4]** | INV-U stays withdrawn. A committed claimant at s is one of: **(a)** the entry's own operation (advisory held); **(b)** a **final** operation's stale claim (destruction refusal), whose row has only terminal writers (A0, A1); **(c)** an **active** claimant that made its claim **after enablement**, impossible because Wh2 refuses new claims while the OPEN record exists, and the record stays OPEN until Wa2 commits; **(d)** an **active or resumable claimant that already existed at enablement**: **[3.5]** the audit classifies it UNSAFE-ACTIVE (AU-4 (b), AU-5) and **activation is refused as a whole**, so no settlement runs anywhere (§5.6.9). **Generation reservations (Wh1a, Wh1b)** make (c) unreachable through planning as well. **Trigger-driven ownership changes** (claims, releases, retirements) are covered by F1, PO-C and the window inventory. **Deferred COMMIT checks** are reads. **Class: conditional on P2-8g and the §5.6 activation policy [3.5]** (proposed design); awaiting LP-15 and LP-17. |
 | **Deferred work at COMMIT** | unchanged: no fk column changes; deferred triggers are reads. |
 | **Tests** | LP-10e (i)–(iii) as 3.2. **(iv) is replaced** by LP-15 (the F4-1 schedule) and by runtime assertions on **destruction refusal after inventory** and on **claim creation while an OPEN record exists** (§10). |
 
@@ -890,9 +927,21 @@ operation's copy.
 
 **Legacy data.** Repair operations planned before Wh1 may already share a generation number with a failed repair's
 target. Wh2's OPEN check under Ct(X) still prevents a claim while the record is open. Where no OPEN record exists,
-reuse of an empty unrecorded path is harmless. The data audit in §12 lists such cases.
+reuse of an empty unrecorded path is harmless. **[3.5]** AU-7 classifies such cases (§5.6.5): a duplicate that
+can still create or holds its target refuses activation; terminal duplicates are history.
 
-### 5.5 F5-4: fail-closed admission and activation [3.4]
+### 5.5 F5-4: fail-closed admission and activation [3.4] — **historical, superseded by §5.6 in 3.5**
+
+> **Historical, not operative.** The sixth assessment found this design insufficient (F5-4 OPEN):
+> - Its activation premise ("the same process being upgraded") is false for separate web, worker and CLI
+>   processes.
+> - Its isolation table omitted the direct RecoveryService loop and other entry points.
+> - Its allowed cancellation runs the very settlement it disabled.
+> - Its isolation did not follow every conflicting identity.
+> - Its AU-2 rejected a valid SHARED_CONTENT COMMITTED ingest.
+>
+> Revision 3.5 withdraws it in favour of §5.6. The text below is kept unchanged for traceability only.
+
 
 **Evidence class:** proposed design.
 - **No schema change.**
@@ -957,6 +1006,531 @@ Contents whose findings are cleared are admitted; there is no automatic rewrite.
 
 **Default:** fail-closed for affected unsafe data; everything else is admitted.
 
+### 5.6 F5-4: globally quiesced, fail-closed preservation activation [3.5, replaces §5.5]
+
+**Evidence class:** proposed design, with source analysis at `fe197ed` and bounded builder-local PostgreSQL 16
+checks (§11.8). Nothing here is implemented.
+
+**Selected architecture: the sixth assessment's Option 1.** Preservation is enabled globally or not at all.
+- Activation is a **controlled maintenance operation**, run by an operator from the CLI while every service is
+  stopped. It is never an automatic startup action.
+- The audit runs once, under a database barrier that no writer can pass.
+- If any unsafe component exists, nothing is enabled; resolution is offline and reviewed (§5.6.7), then the audit
+  is re-run.
+- Revision 3.4's process-local isolation (§5.5) is **withdrawn as a safety authority**. There is no partial
+  isolation, isolated-content set or held-for-review flag.
+
+**Schema consequence (stated, not assumed away).** Option 1 is enforceable on the actual deployment only with a
+durable activation record and a database write gate (§5.6.2). That is a schema change in the authorised
+implementation (a future migration, not written). It is an explicit part of owner decision D-LP-8 (§8). The
+reason is the feasibility finding below; it is not a live partial-isolation system (Option 2).
+
+#### 5.6.1 Feasibility on the actual processes (direction §2.1)
+
+Source at `fe197ed`. "Mutating" means the process can write preservation rows or archival-volume bytes.
+
+| Participant | How it runs (source) | Mutating? | What accepted code does against a newer schema | Excludable by |
+|---|---|---|---|---|
+| Web (`serve`) | `ProcessLauncher.startWeb` → `WebApplication`; one context per process; any number of web processes is possible | **Yes**: uploads, repair uploads, retry, cancel request, unresolved release/attest, reverify and scan requests, destroy, download MISSING recording, volume administration | **Keeps serving.** Only `HomeController` checks `SystemStatus.ready()`. No interceptor or filter gates requests on schema state. `IngestionService.readiness` checks the ingestion volume and staging, **not** the schema. The readiness health group reports OUT_OF_SERVICE but does not stop handlers. | **Not by accepted code.** Needs the write gate (§5.6.2). |
+| Worker (`worker`), one or many | `startWorker` → `WorkerProcess`; each has its own worker id, presence row and `JobRunner` | **Yes**: every preservation job kind; recovery | **Refuses to start** (`WorkerProcess.start` requires `ready()`; `SchemaMigrator.status` reports AHEAD for unknown migrations because `ignoreMigrationPatterns` is empty and `outOfOrder` is false). A worker that is **already running** stops recovery and job claims at its next heartbeat check (default 60 s). A job already running continues to its end. | Startup: accepted code. Running: drain evidence (§5.6.3) plus the write gate. |
+| Multiple workers | `JobRunner` claims by registered kind with `FOR UPDATE SKIP LOCKED` and lease tokens; another worker reclaims an expired lease | via jobs | A lease or presence row says nothing about whether the process is alive | Session evidence and the write gate, not presence |
+| Receivers and ingestion | inside the web process: `IngestionService.receive` streams to staging; the instance timer `renewReceivers` renews leases | Yes (staging files, RECEIVING rows) | as web | as web |
+| Recovery | `RecoveryService.runOnce`, called only by `WorkerProcess.recover()` when the heartbeat said ready | Yes (P15, P16, `reconcileAll`, every `needingAttention` operation, staging cleanup) | as worker | as worker |
+| Administrative preservation actions | web requests; worker jobs (`JOB_CANCEL`, `JOB_QUARANTINE_ATTESTED`, `JOB_REVERIFY`) | Yes | as web and worker | as web and worker |
+| CLI | `Cli` commands, each its own short-lived process and pool (application name `genealogy-archive-<command>`) | `migrate` (DDL), `init-archive`, `create-admin`, `register-volume`, `init-volume`, `set-ingestion-volume`; the rest read only | The volume commands and `create-admin` check `ready()`; `init-archive` checks the schema is current | accepted checks plus the write gate |
+| Deployment | Separate web and worker processes per instance (Windows service or Linux unit per installation); one configured database role (`DatabaseSettings`); Hikari keeps `minimumIdle = 1` per pool, so a running process normally holds at least one visible session | — | — | operator stop, verified by the database (§5.6.3) |
+
+**Read-only versus mutating.** No process type is read-only by construction: every web and worker process can
+mutate. The design therefore makes **old builds read-only at the database** (§5.6.2, layer A). An old web process
+may still serve reads; it can no longer write or lock rows.
+
+**Conclusion.**
+- With accepted code alone, Option 1 is **not enforceable**: an old web process keeps serving preservation writes
+  against a newer schema, and a stopped-service checklist cannot be verified from inside the database.
+- With the durable activation record, the two-layer write gate and the database-verified quiescence of §5.6.3,
+  Option 1 **is enforceable and testable** (§10 LP-17).
+- No alternative is substituted. Option 2 (live partial isolation) is not proposed.
+
+#### 5.6.2 Durable activation authority and write gate (schema requirement; proposed, not written)
+
+**Tables** (new; every row insert-only except the singleton; nothing rewrites existing preservation data):
+
+| Table | Content |
+|---|---|
+| `gas.preservation_activation` (singleton) | `state` ∈ {NOT_ACTIVATED, ACTIVE, REFUSED}; `protocol_version` int; `epoch` bigint; `decided_at`; `decided_by` (operator label and the Administrator account named on the command); `run_id` uuid; `audit_digest` (SHA-256 of the audit report) |
+| `gas.preservation_activation_event` | one row per publication: run id, epoch, state, protocol, time, attribution, per-check counts |
+| `gas.preservation_audit_finding` | one row per unsafe finding of a REFUSED run: epoch, check (AU-n), component id, the referenced rows (table, key), detail |
+| `gas.preservation_resolution` | one row per offline resolution decision (§5.6.7): component, action, rows, before/after values, evidence, attribution, reason |
+
+The migration that adds them sets the singleton to (NOT_ACTIVATED, protocol 1, epoch 1). Preservation protocol 1
+is the protocol of this proposal (P2-8a…g, D-LP-3, 6a, 6b, 9). A later migration that changes the preservation
+protocol resets the singleton to (NOT_ACTIVATED, new protocol, epoch + 1).
+
+**Layer A: old builds are read-only.** The same migration runs
+`ALTER ROLE CURRENT_USER IN DATABASE <current database> SET default_transaction_read_only = on` (an ordinary role
+may set its own defaults).
+- Accepted builds never override it: no `setReadOnly`, `BEGIN READ WRITE` or session characteristic exists in
+  `src/main/java` (source search).
+- Every write **and every locking read** (`SELECT … FOR UPDATE/SHARE`) of an old build fails at statement start with
+  SQLSTATE 25006, **before** any row lock (§11.8 (c)). Plain reads still work.
+- Session advisory try-locks still work, but they never wait. A held one makes a new-protocol `tryLock` report
+  "busy", which is the accepted retry outcome.
+- New builds open every connection with the startup options
+  `-c default_transaction_read_only=off -c gas.preservation_protocol=<P> -c gas.activation_epoch=<E>`.
+
+**Layer B: protocol and epoch gate.** A `BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE … FOR EACH STATEMENT` trigger
+on **every** application table in `gas` (the 40 tables at V0025, §11.4 and §11.8 (f), plus the four new ones;
+`flyway_schema_history` excluded):
+- It compares `current_setting('gas.preservation_protocol', true)` and `current_setting('gas.activation_epoch',
+  true)` with the singleton.
+- It raises SQLSTATE `GA001` ("write refused: this process's build or activation epoch does not match the archive's
+  activation") on any difference.
+- It reads the singleton with a plain `SELECT`, so it never waits on the activation barrier.
+
+Layer B refuses writes by:
+- a new-build process started under an earlier epoch (one that stayed undetected during activation);
+- a build of another protocol;
+- a session that forgot the options.
+
+Locking reads of such a process are not refused by layer B. They come from new-protocol code (same order rules), or
+from a different-protocol build, which a protocol migration must exclude as layer A excludes accepted builds
+(§12, R35-4).
+
+**Neither layer is a security boundary.** Anyone holding the database password can set the options. The layers
+prevent **accidental** mixed versions and stale processes, which is the threat the sixth assessment names.
+
+**Startup eligibility (each new web, worker and CLI process).**
+1. The process opens **one** bootstrap connection, with read_only off and the protocol option, and nothing held.
+2. Its first statement: `SELECT state, protocol_version, epoch FROM gas.preservation_activation FOR SHARE`. This
+   waits while an activation holds the barrier, so it reads the published result, never a half-finished one.
+3. It closes the bootstrap connection and builds its pool with `gas.activation_epoch = <epoch read>`.
+4. **Preservation is enabled in the process iff** `state = ACTIVE` and `protocol_version` equals the build's
+   protocol. The decision is an immutable in-memory **cache** of the durable record (`PreservationAdmission`).
+   Otherwise every preservation entry point refuses visibly (§5.6.4), and the status page and `status` command show
+   the state and its reason.
+5. The cache cannot silently go stale. The durable record changes only through activation, which requires global
+   quiescence (§5.6.3) and increments the epoch. Any process that survived it undetected has every later write
+   refused by layer B and fails visibly until it is restarted.
+
+#### 5.6.3 Activation protocol (direction §3, steps 1–10)
+
+Command: `activate-preservation --administrator <username> --reason <text>` (new CLI command; the
+`preservation-status` command reports state, epoch, protocol and the last report).
+
+| Step | Action | Authority and evidence | On failure |
+|---|---|---|---|
+| 1 Identify participants | Every web process, every worker process and every CLI process of the instance (§5.6.1). Operating-system services and units per the installation guide. | §5.6.1 table | — |
+| 2 Stop new work | The operator stops all web and worker services and runs no other CLI command. | operating-system service state (operator) | — |
+| 3 Drain | **Drain by termination, not completion.** Every preservation step is a durable state machine with crash recovery (Phase 2): stopped work is left in its committed state. RUNNING job leases expire; RECEIVING uploads are abandoned later by recovery; INTENDED moves are settled later. The audit classifies all of this durable state (§5.6.5). | Phase 2 recovery design | — |
+| 4 Verify absence | Inside the activation transaction: (a) the activation-table barrier; (b) **no other client session** on the database (`pg_stat_activity`; a row whose `backend_type` is hidden is counted as a client); (c) no `worker_presence` heartbeat newer than twice the heartbeat interval (supplementary, never sufficient alone); (d) every gated table locked `EXCLUSIVE NOWAIT`; (e) `pg_stat_clear_snapshot()` and check (b) again (the statistics view is cached per transaction, §11.8 (d)); (f) layer A's role setting and layer B's trigger present on every table. | the database: sessions and locks | any check fails → ROLLBACK; nothing published; the report names the sessions, presence rows or busy table |
+| 5 Audit | AU-1…AU-8 (§5.6.5) as reads in the same transaction, after the locks. With EXCLUSIVE held, no other transaction can write or row-lock any audited table, so the READ COMMITTED statements see one stable state. | the locks | an exception → ROLLBACK; nothing published |
+| 6 Unsafe found | Publish **REFUSED**: findings rows plus the event row. Preservation stays disabled everywhere. Resolution is offline (§5.6.7). | — | — |
+| 7 Publication boundary | `UPDATE` the singleton to ACTIVE (or REFUSED) with `epoch = epoch + 1`, `run_id`, digest and attribution; insert the event row; COMMIT. The commit is the boundary. | the epoch | COMMIT fails → nothing published; unknown → step 10 |
+| 8 Start participants | The operator starts the services. Each bootstraps (§5.6.2) and enables preservation only for ACTIVE plus a matching protocol. | startup eligibility | a mismatch → disabled, visibly |
+| 9 Late joiners | An accepted build is read-only at the database (layer A); an accepted worker also refuses to start (AHEAD). A new build from an earlier epoch has its writes refused (layer B). | layers A and B | refused with 25006 or GA001, visibly |
+| 10 Failure or unknown outcome | Every failure before COMMIT leaves the previous state (NOT_ACTIVATED or REFUSED: disabled) or ACTIVE at the old epoch. A lost connection at COMMIT is resolved by `preservation-status`: the event row with this `run_id` either exists (published) or not (not published). Never assume either way. | durable rows | fail-closed |
+
+**Activation transaction (SQL sketch; READ COMMITTED; the session options carry the current epoch E):**
+
+```sql
+BEGIN;
+LOCK TABLE gas.preservation_activation IN EXCLUSIVE MODE NOWAIT;          -- barrier B0: never waits
+SELECT state, protocol_version, epoch FROM gas.preservation_activation;   -- must equal E read at command start
+SELECT pid, usename, application_name, backend_type, xact_start            -- 4(b): must return no row
+  FROM pg_stat_activity
+ WHERE datname = current_database() AND pid <> pg_backend_pid()
+   AND (backend_type = 'client backend' OR backend_type IS NULL);
+SELECT worker_id FROM gas.worker_presence WHERE last_seen_at > now() - :twiceHeartbeat;   -- 4(c): must be empty
+LOCK TABLE gas.<t1>, gas.<t2>, … IN EXCLUSIVE MODE NOWAIT;                 -- 4(d): every gated table, fixed order
+SELECT pg_stat_clear_snapshot();  -- then 4(b) again: must return no row
+-- 4(f): pg_db_role_setting holds default_transaction_read_only=on for (current_user, current_database());
+--       pg_trigger holds the gate trigger on every gated table
+-- 5: AU-1 … AU-8 reads (§5.6.5)
+UPDATE gas.preservation_activation
+   SET state = :result, protocol_version = :P, epoch = epoch + 1, run_id = :run,
+       decided_at = now(), decided_by = :who, audit_digest = :digest
+ WHERE epoch = :E;                                                         -- exactly one row
+SET LOCAL gas.activation_epoch = :E1;                                      -- E + 1, for the inserts below
+INSERT INTO gas.preservation_activation_event (…) VALUES (…);
+INSERT INTO gas.preservation_audit_finding (…) …;                          -- REFUSED only
+COMMIT;
+```
+
+The command uses **exactly one connection** (no pool), so it never counts a session of its own in 4(b), and it
+reads E on that connection before `BEGIN`. A superuser or other-role session (for example a DBA's `psql`) is counted
+in 4(b), and its writes are refused by layer B because it lacks the options. Layer A applies only to the configured
+role.
+
+**Lock-order position.** Activation is its own top level, **L-ACT, before L0**.
+- It runs on a dedicated session holding nothing else.
+- Every acquisition is NOWAIT, so activation **never waits** and cannot be part of a wait-for cycle.
+- Bootstrap reads wait on it while holding nothing.
+- The layer B trigger reads without conflicting.
+- A writer that already holds any gated-table lock makes step 4(d) fail; activation is then refused, not delayed.
+  This meets the sixth assessment's requirement that an activation lock precede every resource its barrier could
+  wait on.
+- **Autovacuum** can hold a conflicting table lock. NOWAIT then refuses the run, and the operator retries. This is
+  a visible, bounded inconvenience, not a safety issue.
+
+**Mixed-version prevention (direction §3.1).** The sixth assessment's counterexample, old worker B and new process
+N, is excluded at three independent points:
+1. **B cannot start** against the migrated schema (accepted AHEAD check).
+2. **A running B is detected:** its pooled session fails step 4(b), so N's activation is never published.
+3. **An undetected B** (no session at the check, for example while its pool reconnects) is read-only (layer A).
+   - Its `createOwned` fails at its first statement (`Ct FOR SHARE` is a locking read, 25006), before CREATE_NEW.
+   - Its `commitRepair` fails at its first `transition` UPDATE.
+   - So B neither creates bytes through `createOwned`, nor claims, nor holds an O lock while waiting for Ct.
+   - The Ct/O cycle needs B to hold O(B) and wait on Ct(X), which a 25006 refusal prevents.
+
+Audit success is **not** used as evidence of exclusion; points 1–3 are.
+
+#### 5.6.4 Complete preservation-writer inventory (direction §4)
+
+Every entry point calls one admission check, `PreservationAdmission.require()`, **before its first effect**
+(database write, staging write or volume access). Delegated helpers **never** check again: they run only inside an
+admitted entry and therefore inherit its decision. Process types: **Web**, **Wk** (worker), **CLI**. Window and lock
+references are the §2.4 rows (P, D, Q, U, I, V) and the §4.9 windows. Behaviour **while disabled** means state is not
+ACTIVE or the protocol does not match.
+
+| # | Entry point (caller) | Process | Identities | Transactions and locks (ref.) | Filesystem effects | While disabled | Restart / recovery |
+|---|---|---|---|---|---|---|---|
+| E-1 | `IngestionService.startBatch` (`FileController` POST batches) | Web | batch | batch insert | none | refused: "Preservation is not activated on this archive (state, reason). Nothing was changed." | — |
+| E-2 | `IngestionService.receive` (upload item) | Web | O (new), planned Y | P13 insert; P14 heartbeat and `transition`; enqueue | staging write | refused before the insert; no staging file | RECEIVING rows from a stopped receiver are abandoned by recovery (P15) after activation |
+| E-3 | `IngestionService` instance timer `renewReceivers` | Web | own RECEIVING set | P14 (A2) | none | the set is empty (E-2 refused) | — |
+| E-4 | `RepairService.receive` (repair upload) | Web | O (new), X | P17; P14 | staging write | refused | as E-2 |
+| E-5 | `OperationAdminService.retry` | Web | O | P9 (A1); enqueue | none | refused | — |
+| E-6 | `OperationAdminService.cancel` (request) | Web | O | P10 (A1); enqueue `JOB_CANCEL` | none | refused | queued cancel jobs stay queued |
+| E-7 | `UnresolvedObjects.release` | Web | U, X or contentless, G, O | adv(u.op); filesystem examination; Wd1 (U1) | read (examination) | refused | — |
+| E-8 | `UnresolvedObjects.attest` (fast path and Wd2) | Web | U, X, O | U2 / Wd2; enqueue | read | refused (both paths) | — |
+| E-9 | `IntegrityService.requestScan`, `requestReverify` | Web | scan, X | scan insert; enqueue | none | refused | — |
+| E-10 | `FileService.destroy` | Web | File, replacement, X, repairs, new DESTROY O | D1 (D-LP-6a); enqueue | none | refused | — |
+| E-11 | `FileService.download` | Web | File, X, G | read; We7 (MISSING); E2 (SIZE_MISMATCH) | read | **bytes served only when the observation verifies; otherwise the accepted "cannot be read right now. Nothing was changed; try again later." message, with no finding or state change** (behaviour change, D-LP-8) | — |
+| E-12 | `VolumePreservationService.initializeVolume`, `setIngestionVolume`; CLI `init-volume`, `set-ingestion-volume`, `register-volume` | Web, CLI | volume, archive | V1 | volume layout directories | **permitted** (no content, operation, unresolved, quarantine or owner row; outside L1) | — |
+| E-13 | `OperationsController` job retry (`/operations/jobs/{id}/retry`) | Web | job | job row | none | refused for preservation job kinds; permitted otherwise | — |
+| E-14 | `JobRunner` handler registration (`PreservationJobs`) | Wk | per job | — | — | the preservation kinds (INGEST, REPAIR, DESTROY, INTEGRITY_SCAN, CANCEL, QUARANTINE_ATTESTED, REVERIFY) are **not registered**, so they are never claimed and stay queued. THUMBNAIL (cache files only; no database write) stays registered. | expired leases are reclaimed after activation |
+| E-15 | `OperationProcessor.process` (`JOB_INGEST`, `JOB_REPAIR`, recovery) | Wk | O; X or private Y; G; U; Q; owner rows | plan; Wh1a; tryShare (E2 NOT_PROTECTED; D-LP-6b commitShared); own INTENDED settlement (Q2, Wa2); Wh2 `createOwned`; copy; Wh1b with Wa1/Wa2; Wf1 unverified copy; commitNewContent (P5); commitRepair (P6); finish (P8 plus Wb1 for REPAIR); resume and cleanup; block, toWaiting, ioProblem (P1, P8) | staging read and delete; CREATE_NEW; rename to quarantine | not reachable (E-14, E-21) | resumes from the committed state |
+| E-16 | `DestructionProcessor.process` (`JOB_DESTROY`, recovery of CLEANUP_* and WAITING DESTROY) | Wk | DESTROY O, X, every writer of X, U, G, Q | D2…D7 (Wc1, Wc4, Wc5, Wc6) | deletes of authorised objects | not reachable | as E-15 |
+| E-17 | `IntegrityService.run` (`JOB_INTEGRITY_SCAN`) | Wk | scan, X, G, findings, U | We1–We4; E1 (We6); E2 (I5); `observeUnresolved` | read | not reachable | rescans after activation |
+| E-18 | `IntegrityService.reverify` (`JOB_REVERIFY`) | Wk | X, findings | I4 (We4) | read | not reachable | — |
+| E-19 | `OperationAdminService.performCancel` → `applyCancel` (`JOB_CANCEL`) | Wk | O, X or private, Q, U, owner rows (by location) | adv(O) try; pending INTENDED settlement (Q2/Wa2); OperationCopies; `move` (Wa1, rename, Wa2); Wf2; final transition (P11) | rename; read | not reachable | queued |
+| E-20 | `UnresolvedObjects.quarantineAttested` (`JOB_QUARANTINE_ATTESTED`) | Wk | U, X, O, Q | adv(u.op); U3 (Wa1, rename, Wa2) | rename | not reachable | queued |
+| E-21 | `WorkerProcess.recover` → `RecoveryService.runOnce` | Wk | all | P15 (`abandonStaleReceiving`); **P16, the direct `presentButRecordedMissing → setState` loop** (E1: Ct NKU, then triggers on G and other O); `QuarantineMoves.reconcileAll` (Q2 under a tryLock of each entry's operation); the `needingAttention` loop → E-15 or E-16; `cleanStaging` (P14b) | staging delete; renames (settlement) | **`recover()` is not called at all** (the admission check is at the head of `recover()`, before `runOnce`, so P16 and `reconcileAll` cannot run) | runs on the first heartbeat after an ACTIVE start |
+| E-22 | indirect state changes from E2 findings | Wk | X | an open MISSING finding later converted by P16 | — | no E2 finding is written while disabled (E-11; E-17 unreachable); P16 is unreachable | after activation, P16 runs under the new protocol (E1) |
+| E-23 | CLI `migrate` | CLI | schema | DDL; installs layers A and B | none | runs in the maintenance procedure only (services stopped) | — |
+| E-24 | CLI `init-archive`, `create-admin` | CLI | archive, user | existing | none | permitted (not preservation; new-build options) | — |
+| E-25 | CLI `activate-preservation`, `preservation-status`, `preservation-resolve` | CLI | all | §5.6.3, §5.6.7 | read (resolution may move to quarantine, §5.6.7) | these are the maintenance entries | — |
+| E-26 | `FileService.correct`, `delete`, `restore`; capture sessions, records, catalog, users (Phases 0–3) | Web | File, Phase 3 rows | D-LP-3, D-LP-5, D-LP-7, D-LP-9 windows | none | **permitted**. They write no Ct, O, U, Q, G or owner row, and they follow the new order rules (they are new-build code). | — |
+| E-27 | Helpers: `QuarantineMoves.move`, `settle`, `reconcileAll`; `OperationCopies.check`; `Presence`; repository `setState`, `transition`, `note`, `recordIfAbsent`, `insertFindingIfNew`; `ctx.enqueue` | any | — | the caller's windows | the caller's | never entered except from an admitted entry; an ArchUnit rule restricts their callers to E-1…E-25 (LP-17 AA-7) | — |
+
+"An Administrator invoked it" is never an admission reason (direction §4). The only maintenance-time exception is
+the offline resolution tool (§5.6.7), which runs under the same quiescence as activation.
+
+**An admitted operation cannot continue across a boundary change.** The boundary changes only when activation
+publishes, which requires quiescence. A process that survived it undetected cannot commit (layer B), so an entry
+check made earlier can never authorise a write after the boundary.
+
+#### 5.6.5 Audit AU-1…AU-8, corrected (direction §6)
+
+**Operation-state facts (source: `OperationState`).**
+- **Final** = {COMPLETED, ABANDONED, CANCELLED, REJECTED}. COMMITTED is **not** final, and there is **no FAILED
+  state**.
+- Content states: ACTIVE, DAMAGED, MISSING, DESTROY_PENDING, DESTROYED.
+- Generation states: CURRENT, QUARANTINE_PENDING, QUARANTINED, MISSING, DESTROYED.
+
+**Ownership facts.**
+- An OPERATION owner row exists exactly while `target_created` is true (the claims trigger, in **any** operation
+  state).
+- GENERATION owner rows are inserted with the generation and never deleted (F1).
+
+**Outcome classes.**
+
+| Class | Meaning | Effect |
+|---|---|---|
+| ADMITTED | consistent | — |
+| ADMITTED-STALE | a **final** operation still has `target_created`, with no conflicting identity | terminal writers only (A0, A1); admitted |
+| ADMITTED-CLEANUP | COMMITTED, or a DESTROY in CLEANUP_PENDING / CLEANUP_INCOMPLETE, whose remaining work is cleanup of its own records | admitted; completes after activation |
+| UNSAFE-ACTIVE | a non-final operation can still create, claim or release at a location another identity also uses | refuses activation |
+| UNSAFE-AMBIGUOUS | which identity an object, claim or pending move belongs to cannot be decided from the records | refuses activation |
+| UNSAFE-LEGACY | identity or provenance does not match the constructors and relations below | refuses activation unless a reviewed acceptance record exists (§5.6.7, action A-6) |
+| UNSAFE-UNCLASSIFIED | **any combination not listed in the tables below** | refuses activation (fail-closed default) |
+
+Every check reads the locked snapshot. Paths are compared in Java with `PortableRelativePath` semantics (AU-8); no
+SQL `lower()` is used. **No check repairs or rewrites anything.**
+
+**AU-1 Generation identity.** For each generation G of content X:
+- `storage_path = originalPath(X, G.generation)`;
+- `G.volume_id = X.volume_id` (repairs are planned on the content's volume, `planRepair`);
+- at most one CURRENT per content (unique index); exactly one when X is ACTIVE, DAMAGED, MISSING or DESTROY_PENDING;
+  none when X is DESTROYED;
+- `vacated` is true only on the CURRENT generation of MISSING content (V0016);
+- `quarantine_path` is non-null only for QUARANTINED or DESTROYED (V0014);
+- `G.operation_id` is the creator: generation 1 → `X.created_by_operation` (an INGEST with outcome NEW_CONTENT and
+  `target_generation` 1); generation ≥ 2 → a REPAIR of X with that `target_generation` in COMMITTED or COMPLETED.
+
+A mismatch is UNSAFE-LEGACY. Historical paths are never rewritten.
+
+**AU-2 Operation target meaning** (the shared-content false positive is corrected). Classified by (kind, state,
+outcome, `target_created`, ownership, live or retained). For REPAIR and DESTROY, `content_id` must name a
+**persisted** content in every state. Only INGEST may name an unpersisted, private Y; there is no private fallback
+for REPAIR (sixth assessment §4).
+
+| Kind | State | Outcome | Target meaning | Required | Class |
+|---|---|---|---|---|---|
+| INGEST | RECEIVING, STAGED | — | none yet | `target_path` null, or (STAGED after a COLLISION retry) the earlier private plan with `target_created` false | ADMITTED |
+| INGEST | PROMOTING, PROMOTED, BLOCKED, WAITING_FOR_VOLUME | — | **live private plan** | `content_id` = Y has **no** `file_content` row; `target_path = originalPath(Y, target_generation)`; `target_created` ⇒ an own OPERATION owner row | ADMITTED (AU-7, AU-8 still apply) |
+| INGEST | COMMITTED | NEW_CONTENT | retained history (the claim moved to generation 1) | X persisted with `created_by_operation` = this operation; generation 1 path = `target_path`; `target_created` false | **ADMITTED-CLEANUP** |
+| INGEST | **COMMITTED** | **SHARED_CONTENT** | **retained history of an abandoned private plan** | `content_id` = X persisted and ACTIVE or later; `target_path` parses as `originalPath(Y, target_generation)` with Y ≠ X, Y **not** persisted and referenced by no other row; `target_created` **false** (`tryShare` runs only at `attempts = 0`; `incrementAttempts` commits before `createOwned`, so no exclusive create has happened) | **ADMITTED-CLEANUP** (the sixth assessment's case) |
+| INGEST | COMMITTED | SHARED_CONTENT | as above but `target_created` true | not produced by accepted code | UNSAFE-LEGACY |
+| REPAIR | STAGED | — | none, or an earlier plan to be replaced by Wh1a | X persisted; `target_created` false | ADMITTED |
+| REPAIR | PROMOTING, BLOCKED, WAITING_FOR_VOLUME | — | **live plan** | X persisted; `target_path = originalPath(X, target_generation)`; volume = X's; `target_generation` is **not** a recorded generation of X; `target_created` ⇒ own owner row | ADMITTED unless AU-4, AU-5 or AU-7 find a conflict (then UNSAFE-ACTIVE) |
+| REPAIR | PROMOTED | — | **owned copy** | as above with `target_created` true and an own owner row | as above |
+| REPAIR | COMMITTED | REPAIRED | retained history (the claim moved to the new generation) | the generation `target_generation` of X exists with this operation as creator and `storage_path = target_path`; `target_created` false | **ADMITTED-CLEANUP** (finish runs Wb1, then COMPLETED) |
+| DESTROY | any non-final | — | no target | X persisted; `target_path` null | ADMITTED or ADMITTED-CLEANUP (CLEANUP_PENDING, CLEANUP_INCOMPLETE) |
+| any | final | any | retained history | `target_created` false; or true → **ADMITTED-STALE** if the owner row is its own and no other identity aliases the path (AU-8) | ADMITTED / ADMITTED-STALE |
+| any | any other combination | | | | **UNSAFE-UNCLASSIFIED** |
+
+**AU-3 Physical-owner ledger, both directions.**
+- **(a) Rows to identities.**
+  - Every OPERATION owner row names an operation with `target_created`, the same `volume_id` and
+    `target_path = path`.
+  - Every GENERATION owner row names an existing generation with the same `volume_id` and `storage_path = path`.
+- **(b) Identities to rows.**
+  - Every operation with `target_created` and a non-null `target_path` has exactly one OPERATION owner row for
+    itself at (volume, target_path).
+  - Every generation has its GENERATION owner row.
+  - V0017's backfill used `ON CONFLICT DO NOTHING`, so a legacy `target_created` operation whose path a generation
+    owned can lack its row. That fails (b).
+- **(c)** Kind consistency: an OPERATION row never sits at a path that a generation of any content records (F1).
+
+Every failure is UNSAFE-LEGACY or UNSAFE-AMBIGUOUS. **Nothing is inserted or deleted.**
+
+**AU-4 OPEN unresolved records.** For each U with `status = 'OPEN'`:
+- **(a) Identity, whether or not an owner exists.**
+  - `content_id` null ⇒ `generation` null (V0019 check). If `generation` is set, that generation of `content_id`
+    exists on `U.volume_id`.
+  - For a generation-bound record (kinds DAMAGED_COPY, OBJECT_AT_VACATED_LOCATION, CURRENT_COPY and
+    QUARANTINED_COPY), U.path equals one of that generation's recorded paths (`storage_path` or `quarantine_path`).
+    The exact kind-to-column mapping is taken from each kind's writers when the audit is implemented, and fixed by
+    one LP-17 fixture per kind. It is not asserted here beyond source reading.
+  - For OPERATION_COPY, `operation_id` names an operation whose `target_path = U.path` on that volume, with
+    `content_id` equal to the operation's (or null for a private ingest).
+  - `operation_id` exists. Attestation fields are paired (V0019); an attested record has `observed_sha256`.
+  - Any failure is UNSAFE-LEGACY.
+- **(b) Claims at (U.volume, U.path).**
+  - A GENERATION owner row of U's own (content, generation): the same object (ADMITTED).
+  - A GENERATION owner row of another generation or content: **UNSAFE-AMBIGUOUS**.
+  - An OPERATION owner row of an operation in a **final** state: **ADMITTED-STALE**. Only terminal writers touch
+    it; settlement releasing it is PO-B case (b).
+  - An OPERATION owner row of a **non-final** operation, including COMMITTED, CLEANUP_*, BLOCKED and
+    WAITING_FOR_VOLUME, whether U's own operation or a foreign one: **UNSAFE-ACTIVE**. Accepted code releases the
+    claim in the transaction that records the copy unresolved (`claimBecomesUnresolved`), so this state means an
+    interleaving the protocol cannot order.
+- **(c)** A non-final REPAIR of U's content whose **live plan** (AU-2) targets U.path without a claim:
+  **UNSAFE-ACTIVE** (Wh2 would refuse it, but the operation could still be resumed by an old build).
+
+**AU-5 INTENDED quarantine entries.** For each Q with `state = 'INTENDED'`, determine its **source role** from
+`reason` and relations. Exactly one role must hold:
+
+| Role | Reason | Source relation | Evidence binding | Destination suffix |
+|---|---|---|---|---|
+| own copy | PARTIAL_COPY, UNVERIFIED_COPY, CANCELLED_COPY | `source_path = O.target_path`, O = Q.operation_id, same volume | OPERATION_COPY_VERIFIED with `source_size`/`source_sha256` equal to O's `expected_*` (the receiver's hash), or UNTRUSTED for PARTIAL_COPY (a prefix) | `partial-<n>`, `unverified-copy-<n>`, `cancelled` |
+| attested object | ATTESTED_OBJECT | an attested U (OPEN) with `U.path = source_path`, `U.operation_id = Q.operation_id` | ADMINISTRATOR_ATTESTED with `source_sha256 = U.observed_sha256` and equal size | `att-<U id without hyphens>` |
+| superseded generation (legacy) | DAMAGED_GENERATION | a QUARANTINE_PENDING generation of `Q.content_id` with `storage_path = source_path` | as recorded (UNTRUSTED allowed: settlement does not trust it) | any `[a-z0-9-]{1,40}` (legacy) |
+
+- Q.content_id (no foreign key) equals O's `content_id` for own copies. It may be the planned private Y of an ingest.
+- **Claimants at the source:**
+  - the entry's own operation (own copy): ADMITTED;
+  - a final operation: ADMITTED-STALE;
+  - **any other non-final operation:** UNSAFE-ACTIVE (the GAS-P4-004 shape);
+  - a GENERATION owner other than the bound generation: UNSAFE-AMBIGUOUS.
+- Two INTENDED entries with the same (volume, source alias key) and different operations are **UNSAFE-AMBIGUOUS**.
+- A missing or mismatched evidence binding is UNSAFE-LEGACY.
+
+**AU-6 Quarantine destinations.** For each Q in INTENDED or QUARANTINED:
+- `quarantine_path = quarantinePath(Q.operation_id, suffix)`, with the suffix derived from the role above (the
+  `<n>` bounded by O's attempts);
+- the destination is used by no other role: it is no owner row's path, no generation's `storage_path`, no
+  operation's `target_path` and no OPEN U's path, under AU-8 keys;
+- for QUARANTINED, every generation whose `quarantine_path` equals it is the bound generation, and every operation
+  whose `quarantine_path` equals it is Q's operation;
+- the ATTESTED_OBJECT linkage: an INTENDED entry's U is OPEN and attested; a QUARANTINED entry's U is RESOLVED with
+  resolution QUARANTINED (settlement resolves it in the same transaction, Wa2).
+
+A matching name alone is never sufficient. Failures are UNSAFE-LEGACY or UNSAFE-AMBIGUOUS.
+
+**AU-7 Planned reservations.** For each persisted X, consider every REPAIR of X that **can still create or holds**
+its target:
+- **can create:** PROMOTING; WAITING_FOR_VOLUME with a target; BLOCKED with a target and a reason other than
+  COLLISION or STAGING_INVALID (`retry` returns such an operation to PROMOTING; COLLISION returns to STAGED and
+  re-plans);
+- **holds:** `target_created`, in any state.
+
+STAGED re-plans through Wh1a and cannot create its old target. COMMITTED, CLEANUP and final states without
+`target_created` are history.
+
+Two such operations with equal `target_generation`, or one whose `target_generation` is a recorded generation of X
+it did not create, are **UNSAFE-ACTIVE**. Terminal duplicates are history; Wh1a's high water already dominates
+them. Wh1a and Wh1b are unchanged.
+
+**AU-8 Path aliases.**
+- **Path columns:** `file_content_generation.storage_path` and `quarantine_path`; `file_operation.target_path` and
+  `quarantine_path`; `quarantine_object.source_path` and `quarantine_path`; `unresolved_object.path`;
+  `physical_location_owner.path`.
+- **Key:** (volume_id, `PortableRelativePath.caseFoldKey()`), which is Java `toLowerCase(Locale.ROOT)` of the stored
+  string.
+  - Values must parse with `PortableRelativePath.of` (NFC is required and rejected, never rewritten).
+  - A value that does not parse is UNSAFE-LEGACY.
+  - Constructor paths are ASCII. A non-ASCII value in any of these columns is **UNSAFE-LEGACY**, because NTFS's
+    per-volume upcase table is not reproduced.
+- Two references with one key are **the same object** only by one of these relations:
+  - generation ↔ its own owner row, its own U (AU-4 (a)), its own superseded Q, and its creating operation's
+    retained target;
+  - operation ↔ its own owner row, its own OPERATION_COPY U and its own-copy Q source;
+  - attested U ↔ its ATTESTED_OBJECT Q source;
+  - Q destination ↔ the bound generation's or operation's `quarantine_path`.
+- Any other pair with one key, including two raw-equal strings and **case-only variants**, is **UNSAFE-AMBIGUOUS**.
+- Retained-history targets (AU-2) take part, so an alias between a live identity and history is also refused.
+
+**Conflicting-identity closure (direction §7).**
+- Each unsafe finding seeds a **component**: the connected component of a graph over contents, operations,
+  generations, U, Q and owner rows. The edges are the row references (`content_id`, `operation_id`, generation) and
+  equal AU-8 keys.
+- The component crosses contents (an operation of Y and a generation of X at one key), contentless U and Q
+  destinations.
+- Under global fail-closed activation, **any** unsafe component refuses enablement **as a whole**. Components are
+  computed only to report and resolve them (§5.6.7); they never authorise partial operation.
+
+**Legitimate states that must pass (each a fixture in LP-17):**
+- a SHARED_CONTENT COMMITTED ingest stopped at AFTER_COMMIT_BEFORE_CLEANUP;
+- NEW_CONTENT and REPAIRED COMMITTED operations;
+- a final operation's stale claim;
+- a PROMOTED repair owning its own fresh target;
+- an INTENDED own-copy move interrupted after the rename;
+- an attested OPEN record with an INTENDED attested move;
+- a private ingest plan;
+- a DESTROY in CLEANUP_INCOMPLETE;
+- RECEIVING uploads of a stopped receiver.
+
+**SHARED_CONTENT cleanup after activation (direction §6, AU-2).** The operation is ADMITTED-CLEANUP. After ACTIVE,
+the first worker recovery pass (E-21) reaches it in `needingAttention` and runs `OperationProcessor.finish`:
+1. the fault point;
+2. `deleteStaging` (staging delete; then the P14b staging flag);
+3. the `transition` COMMITTED → COMPLETED (P8, owner advisory; no Ct; `target_created` false, so no claim
+   trigger);
+4. the thumbnail job.
+
+The obsolete Y target stays in the row as history. No cancellation is offered or needed (`requireCancellable`
+rejects COMMITTED, which is correct). It is never isolated.
+
+#### 5.6.6 Restart and failure cases (direction §3.2)
+
+| Case | Outcome |
+|---|---|
+| Web-only restart | It bootstraps and reads the unchanged (state, epoch). ACTIVE: enabled. Workers continue. The epoch is unchanged because activation did not run. |
+| One worker restarts while another runs | The same. Job leases and `SKIP LOCKED` are unchanged. |
+| Process startup during active preservation work | normal: same epoch, same protocol |
+| Activation attempted while any process runs | refused at step 4(b) or 4(d); nothing published; the report lists the sessions and tables |
+| Process startup during an activation | its bootstrap `FOR SHARE` waits on the barrier, then reads the published state, or the old one if activation rolled back |
+| Interrupted audit (crash, exception, lost connection before COMMIT) | rolled back; previous state; the operator re-runs |
+| Crash before publication | as above |
+| Crash after publication (before services start) | the state is the published one; services read it at start |
+| Unknown completion | `preservation-status` finds or does not find the event with the `run_id`; until then, services stay stopped |
+| Database restart during activation | rolled back; as interrupted |
+| Restored backup | The backup carries its own singleton. Its audit property holds by construction: after its activation, only new-protocol, current-epoch writers could commit (layers A and B). A backup taken before activation restores NOT_ACTIVATED or REFUSED (disabled). A pre-migration backup restores an old schema: the new build reports BEHIND, `migrate` installs the gate, and activation is required. Byte-to-row divergence after a restore is the existing integrity and recovery concern (scans, unresolved records), unchanged here. The restore procedure must restore with read-only off; layer A is re-verified at activation and at every startup (4(f)). |
+| Version-mixed rollout | Accepted builds: read-only (A); the worker cannot start. Builds of another protocol: disabled at startup (protocol mismatch), writes refused (B). Builds of the same protocol: the same order rules; allowed. |
+| New process with a stale epoch (missed restart) | every write refused (GA001); it must be restarted |
+| Re-admission after reviewed correction | After §5.6.7 actions, a new activation run: steps 1–10 again. ACTIVE only if the **whole** database passes. |
+| Re-audit while ACTIVE (operator choice) | the same procedure; the epoch increments; services must restart |
+
+#### 5.6.7 Offline resolution of unsafe state (direction §5)
+
+**Policy.**
+- Generic cancellation is **not** an isolation exception. While the state is not ACTIVE, `performCancel` and every
+  other preservation entry is disabled (E-6, E-19).
+- With ACTIVE, the audit has shown that no unsafe component exists. Cancellation is then ordinary Phase 2 behaviour
+  under the new protocol (Wf1, Wf2, Wa2).
+
+**Procedure** (`preservation-resolve`; maintenance only; no service running):
+1. **Exclusion.**
+   - The command performs step 4's checks (a), (b), (c) and (f) at start.
+   - It holds the session advisory `pg_try_advisory_lock(7340, 2)` for its whole run (a busy key refuses a second
+     resolver).
+   - A process started meanwhile reads REFUSED and is disabled, so no preservation writer can compete.
+2. **Component report.** It prints the full component (§5.6.5 closure): every row with state and identity, the
+   audit findings, and a **read-only** filesystem observation of every component path (present or absent; size;
+   SHA-256; file key; timestamps). Nothing is changed.
+3. **Decision.**
+   - The Administrator named on the command chooses one action per component row from the list below, with a reason.
+   - Each action re-checks its precondition **inside its own transaction** (the state may have been changed by an
+     earlier action).
+   - Actions are **existing** Phase 2 authorities, executed by the new-protocol code in this single process.
+4. **Record.** Every action inserts a `preservation_resolution` row (component, action, rows, before and after
+   values, filesystem observation, attribution, reason). Where it does so today, the existing action also writes
+   its operation events and history.
+5. **Re-audit.** `activate-preservation`. Resolution never publishes ACTIVE itself.
+
+**Permitted actions (no new cancellation authority):**
+
+| # | Action | Existing authority | Precondition re-checked in the action's transaction |
+|---|---|---|---|
+| A-1 | Attest an OPEN unresolved record | `UnresolvedObjects.attest` | the accepted attestation rules; the observed hash equals the recorded one |
+| A-2 | Release an OPEN unresolved record | `UnresolvedObjects.release` | accepted rules; **no non-final foreign claimant at U.path** (AU-4 (b)) |
+| A-3 | Cancel a BLOCKED or WAITING_FOR_VOLUME ingest or repair | `performCancel` / `applyCancel` (accepted state rule) | every source its settlement or move would release (`releaseTargetsAt`) has no claimant other than the operation itself and final stale claims (AU-5); otherwise refused, and nothing changes |
+| A-4 | Move an attested object to quarantine | `quarantineAttested` | as A-3 for the attested source |
+| A-5 | **Administrative hold:** PROMOTING, PROMOTED or WAITING_FOR_VOLUME → BLOCKED (STATE_UNKNOWN), recorded with attribution, which makes A-3 or retry applicable | the worker's existing `block` semantics, **not** an existing Administrator action | **New authority; requires explicit owner approval** (D-LP-8 admission (c)). Without approval, a component whose resolution needs it stays refused, and preservation stays disabled. |
+| A-6 | Reviewed legacy acceptance: record that a specific UNSAFE-LEGACY row is accepted as is | none (a decision record only; no data change) | allowed only for a path **outside** the constructor namespaces (`originals/…`, `quarantine/<operation id>-…`), so it can never alias a future constructor path, and only if AU-8 finds no alias for it. The next audit treats the row as ADMITTED-REVIEWED. **Owner approval required** (D-LP-8 admission (d)). |
+
+The procedure meets the direction's seven requirements:
+- **Bytes and evidence are preserved:** no action deletes or overwrites; moves follow intent-before-move with
+  attested or verified evidence; the observation is recorded.
+- **Competing writers are excluded:** by step 1.
+- **No ambiguous foreign release:** the A-2, A-3 and A-4 preconditions.
+- **Decisions and attribution are recorded:** step 4.
+- **No new cancellation authority:** A-5 and A-6 are presented as decisions, not assumed.
+- **Re-audit before resuming:** step 5.
+- **Operations that cannot be cancelled** under accepted rules (COMMITTED, CLEANUP_*, PROMOTING, PROMOTED) are never
+  forced. They are either admitted classes (COMMITTED, CLEANUP) or need A-5.
+
+#### 5.6.8 Admission control-unit inventory (direction §8)
+
+Separate from the business windows: **19** P2-8 and **22** Phase 2 changed business windows are unchanged and do
+not include these units.
+
+| Unit | Entry | Transaction and SQL effects | Lock order | Failure |
+|---|---|---|---|---|
+| CU-0 Gate installation | `migrate` (services stopped) | DDL: the four tables; the gate function and statement triggers on every table; the singleton (NOT_ACTIVATED, 1, 1); `ALTER ROLE CURRENT_USER IN DATABASE … SET default_transaction_read_only = on` | Flyway's own DDL locks; maintenance only | the migration rolls back; the schema is unchanged |
+| CU-1 Quiescence initiation | operator | none (service stop) | — | — |
+| CU-2 Drain verification | `activate-preservation` / `preservation-resolve` | reads `pg_stat_activity`, `worker_presence`, `pg_db_role_setting`, `pg_trigger`; `pg_stat_clear_snapshot()` | after B0 | rollback; report |
+| CU-3 Barrier | `activate-preservation` | `LOCK … preservation_activation IN EXCLUSIVE MODE NOWAIT` (B0); then every gated table `EXCLUSIVE NOWAIT`, in fixed name order | **L-ACT**, before L0; never waits | 55P03 → rollback; report the busy table |
+| CU-4 Audit | the same transaction | reads only (AU-1…AU-8) | under CU-3 | rollback |
+| CU-5 Publication | the same transaction | `UPDATE` singleton (state, epoch + 1, run, attribution); `SET LOCAL` epoch; `INSERT` event; `INSERT` findings (REFUSED) | the singleton is held EXCLUSIVE (B0) | rollback = nothing published; unknown → CU-8 |
+| CU-6 Startup eligibility | every process start | bootstrap `SELECT … FOR SHARE` on the singleton; pool options | the first statement, nothing held; waits only on B0 | wait bounded by the activation run; a timeout keeps preservation disabled, visibly |
+| CU-7 Write gate | every write statement | the trigger: a plain read of the singleton; raise GA001 on a mismatch | never waits | the statement fails; its transaction rolls back |
+| CU-8 Unknown-outcome resolution | `preservation-status` | reads the singleton and events by `run_id` | — | — |
+| CU-9 Re-admission | `activate-preservation` from REFUSED (or ACTIVE) | CU-2…CU-5 | as CU-3 | as CU-3…CU-5 |
+| CU-10 Offline resolution | `preservation-resolve` | session advisory (7340, 2) try; per action, the **existing** business window of that action (Wd1, Wd2, P11 with Wa1/Wa2/Wf2, U3) plus a private `INSERT preservation_resolution` before COMMIT | the advisory is taken first with nothing held; each action keeps its own window order; the inserted row has a fresh UUID primary key (private, G4) | the action's transaction rolls back; earlier recorded actions stand; the run reports and stops |
+| CU-11 Protocol change | a future `migrate` | `UPDATE` singleton → (NOT_ACTIVATED, new protocol, epoch + 1) | maintenance | rollback |
+
+#### 5.6.9 What this does to PO-B and the theorem
+
+- PO-B attested-source case (d), an active or resumable claimant that existed at enablement, can no longer
+  coexist with an enabled protocol: the audit refuses activation for it (AU-4 (b), AU-5).
+- Cases (a)–(c) are unchanged.
+- The §5 theorem is stated **only for databases with state ACTIVE** at the build's protocol. Every row in such a
+  database either passed the audit or was written later by an admitted new-protocol writer (layers A and B).
+- No theorem is claimed for NOT_ACTIVATED or REFUSED databases: preservation does not run there.
+
+#### 5.6.10 Assumptions specific to admission
+
+| ID | Assumption | Why it holds or how it is tested |
+|---|---|---|
+| R35-1 | Every running process of the instance has at least one database session | Hikari `minimumIdle = 1` (`DataSources`). Where false (pool reconnecting), layers A and B still exclude it. LP-17 AA-3. |
+| R35-2 | The instance uses one database role | `DatabaseSettings` holds one user; layer A is per (role, database). Another role would need its own setting; 4(f) checks the configured role. |
+| R35-3 | Application transactions are READ COMMITTED | stated in §4.6 and the guard; layer B evaluates per statement. A REPEATABLE READ transaction that took its snapshot before an activation could pass B with a stale read; the implementation asserts the isolation level (LP-17 AA-16). |
+| R35-4 | A future protocol change provides its own old-build exclusion | layer A excludes accepted builds only. Layer B refuses writes, not locking reads, of another protocol's build. |
+| R35-5 | Restores are performed with services stopped | the restore procedure; startup and activation re-verify layer A |
+| R35-6 | Filesystem effects of a process killed mid-step are crash-equivalent | Phase 2 recovery design: intent-before-move, CREATE_NEW collision, unresolved records |
+
 ## 6. `LockSequence` contract (revision 3.2, implementable)
 
 **Evidence class:** proposed design. The guard enforces the **instrumented** acquisition order only. It does **not**
@@ -997,11 +1571,12 @@ KeyPosition  = (level, index, keyTuple);   comparator: level, then index name, t
 | G11 **[3.3]** | D-LP-9 key | **at entry:** no active outer transaction (asserted before `tx.execute`); **inside** the new transaction the advisory SQL is the first statement and the tracker is empty | registered as transaction-scoped; released at commit or rollback |
 | G12 | completion | `afterCompletion` (commit **and** rollback), including rollback after an exception before a ticket closed: clears rowLocks, keyPositions, missing, privateRows, openTicket, failed, context. **Never** touches the session-ownership registry; transaction-scoped advisory registrations end here. **[3.3]** Unknown completion (connection lost during commit) resets the tracker and marks any session ownership on that thread for revalidation (G8). | — |
 
-### 6.3 Key classes and the order projection [3.3, F4-2]
+### 6.3 Key classes and the order projection [3.3, F4-2; aligned with G1/G10 in 3.5]
 
 | Class | Keys | Rule |
 |---|---|---|
-| **Ordered** | row locks of §4.1; worksheet `file_capture_context(file_id)` (insert and delete) | π(resource) = (level, sub-level, uuid). The worksheet key projects to **(L1d, file_id)**, the same point as the worksheet row lock on that File, so a row lock and a key on one File compare consistently. G1 checks them against all held or passed ordered resources at every level. |
+| **Ordered** **[3.5, aligned]** | exactly G1's ordered list: S, F, Ct, worksheet K rows, R, catalog Source then Repository; worksheet `file_capture_context(file_id)` (insert and delete). **Not** the L1p preservation rows (O, U, G, Q, owner rows; 3.3's "row locks of §4.1" wording included them and is withdrawn) | π(resource) = (level, sub-level, uuid). The worksheet key projects to **(L1d, file_id)**, the same point as the worksheet row lock on that File, so a row lock and a key on one File compare consistently. G1 checks them against all held or passed ordered resources at every level. |
+| **L1p admitted (G10)** **[3.5]** | content-coordinated U (Ct(X) U held); owned O (live advisory, not LOST); terminal single-resource O or U (A1, A4-fast); contentless U (adv(u.operation)); content-scoped G and Q rows of X under Ct(X) U | No π and no cross-table UUID comparison; G10's precondition; the late-global prohibition of G1 after a coordinated U or terminal lock |
 | **Coordinated** | worksheet `(capture_session_id, sequence_number)` (coordinator S U; sequence values follow **request order** and are not ordered); generation PK, CURRENT and location (Ct(X) U, or the content private); unresolved OPEN location (Ct(X) U, or adv(operation) if contentless); quarantine destination (adv(operation)); `file_operation` batch/item (empty tracker: first wait) | Precondition asserted; no order check |
 | **Delegated** | `physical_location_owner` PK and its operation-owner index (inside `claim_physical_location` and the release trigger) | G7 with a named proof (PO-C S1, S2, S3) |
 | **Private** | fresh-UUID primary keys; job rows; history rows | G4: per insert, only when the statement touches no ordered, coordinated or delegated key |
@@ -1064,28 +1639,38 @@ Phase 0, 1, 2 and 3 contracts to preserve in every change below:
 | P2-8f | Phase 2 repair cancellation and unverified copies | Wf1, Wf2 (persisted content only); ingest under CR-3; publication E4 | 2 | as above |
 | D-LP-5 | Phase 3 `linkFile` | F Sh before R | 1 | A link waits for a concurrent restriction of the File |
 | D-LP-7 | Phase 3 grouping, `add`, `saveMarks`, `removeFile` | §4.2–§4.4 | 4 | `add` waits for a concurrent restriction or destruction of a candidate File; counts unchanged |
-| Admission (§5.5) **[3.4]** | Activation of the corrected protocol | startup audit AU-1…AU-8; fail-closed isolation of unsafe contents; Administrator cancel and re-audit workflow | 0 (a gate) | Isolated contents' preservation work pauses visibly until reviewed |
-| D-LP-9 | Option (a) as specified in §4.10 | 4th: architecturally acceptable as a separately bounded item | Retain the recommendation. **No production implementation is authorised by the 3.4 direction.** |
+| ~~Admission (§5.5) [3.4]~~ | *historical: process-local isolation, withdrawn in 3.5* | | | |
+| **D-LP-8 (v) admission [3.5]** | Activation of the corrected protocol | Maintenance command `activate-preservation` under database-verified quiescence; durable activation record; write gate (layers A and B); global refusal while any unsafe component exists; offline `preservation-resolve` (§5.6) | 0 business windows; control units CU-0…CU-11 (§5.6.8) | Until activation succeeds, **all** preservation work (uploads, repairs, cancellation, unresolved decisions, scans, destruction, recovery) is refused visibly; reads and Phases 0–3 work continue. A download whose original cannot be verified returns the accepted "cannot be read right now" message and records nothing. |
+| D-LP-9 | Phase 1 `UserService.update` | `pg_advisory_xact_lock(7340, 1)` as the first statement (§4.10) | 1 | Concurrent role changes serialise; outcomes unchanged |
 
 **Totals:**
 - Phase 2 **[3.4]**: 22 windows: 19 under the seven P2-8 subdecisions, plus 3 under D-LP-3, 6a and 6b. *(Historical 3.3: 21; 3.2: 18.)*
 - Phase 3: 5 windows under D-LP-5 and D-LP-7.
 - User administration: 1 window.
 
-## 8. Decisions requested (revision 3.2)
+## 8. Decisions requested (revision 3.5)
 
-| ID | Decision | Third assessment | Builder recommendation |
+**None of these is approved by this document. Nothing is implemented in revision 3.5.**
+
+| ID | Decision | Sixth assessment | Builder recommendation (3.5) |
 |---|---|---|---|
-| D-LP-1 | Order and rules of §3 (L1p, CR-1…CR-4 with E1–E5, TR with D-LP-9) | acceptable only with amendments | Approve the 3.2 text (CR-1…CR-3 rescoped; PO-A split) |
-| D-LP-2 | Ordered insertion and compaction, F FOR SHARE | architecturally acceptable | Approve |
-| D-LP-3 | Closure; **explicit owner approval required for the new visible Conflict after exactly three abandoned restriction attempts** | architecturally acceptable | Approve |
-| D-LP-4 | Guard contract §6 (G1–G12, key classes §6.3), **[3.4] with preservation-row classes in G1 and G10** | 5th: blocker F5-2 | Approve the 3.4 contract. Does **not** close GAS-P4-002 by specification. |
-| D-LP-5 | File before Record | architecturally acceptable | Approve |
-| D-LP-6a | Destruction ordering | acceptable only with amendments | Approve with the same-id rule and the PO-B narrowing |
-| D-LP-6b | Shared publication ordering | architecturally acceptable | Approve |
-| D-LP-7 | Phase 3 sequences | architecturally acceptable | Approve |
-| D-LP-8 | Modified Option C, P2-8a…g (**19 windows**), including **[3.4]**: serialised generation reservation (Wh1a, Wh1b); **durable cross-operation generation skipping**; Wh2 COLLISION and retry behaviour; the We7 generation-bound download correction; **fail-closed admission (§5.5)** | 5th: blockers F5-1, F5-3, F5-4 | Approve the 3.4 design. Each listed behaviour change needs explicit owner approval. |
-| D-LP-9 | Option (a) as specified in §4.10 | **4th: architecturally acceptable as a separately bounded implementation item**; NOWAIT not equivalent | Approve (a). Option (b) NOWAIT is **withdrawn** as an equivalent (counterexample §11.7). (c) keep = explicit risk acceptance only. |
+| D-LP-1 | Order and rules of §3 (L1p, CR-1…CR-4 with E1–E5, TR with D-LP-9), **plus L-ACT** before L0 (§5.6.3) | acceptable only after the admission amendment | Approve together with D-LP-8 admission |
+| D-LP-2 | Ordered insertion and compaction, F FOR SHARE | acceptable; retained | Approve |
+| D-LP-3 | Derivative closure; **explicit owner approval of the new visible Conflict after exactly three abandoned restriction attempts** | acceptable; ready for explicit approval | Approve, including that visible Conflict |
+| D-LP-4 | Guard contract §6 (G1–G12), with §6.3 now aligned to G1/G10 | acceptable as a bounded design once §6.3 is aligned (done in 3.5) | Approve. Does **not** close GAS-P4-002. |
+| D-LP-5 | File before Record | acceptable; retained | Approve |
+| D-LP-6a | Destruction File and replacement before Ct | acceptable; retained (no proof of inherited-data safety) | Approve |
+| D-LP-6b | Shared-publication ordering | acceptable; retained | Approve |
+| D-LP-7 | Phase 3 sequences | acceptable; retained | Approve |
+| D-LP-8 | Modified Option C, P2-8a…g (**19 windows**); each behaviour change below needs its own approval: | PARTIAL: reservation, guard and download ready; admission needed correction | |
+| D-LP-8 (i) | **Durable cross-operation generation skipping** (Wh1a, Wh1b) | ready | Approve |
+| D-LP-8 (ii) | **Overflow outcome:** BLOCKED STATE_UNKNOWN at high water 2147483647, nothing created | ready | Approve |
+| D-LP-8 (iii) | **Wh2 COLLISION and retry** (the refusal is committed; retry re-plans) | ready | Approve |
+| D-LP-8 (iv) | **We7 download correction** (generation-bound evidence; changed identity → nothing changed, retry later) | ready | Approve |
+| D-LP-8 (v) admission **[3.5]** | **Globally quiesced, fail-closed preservation activation with reviewed offline resolution** (§5.6): (a) the **schema requirement**: activation tables, the layer A role default and the layer B statement triggers on every application table (a future migration); (b) the maintenance commands `activate-preservation`, `preservation-status`, `preservation-resolve`; (c) while not ACTIVE, every preservation entry refused (E-1…E-21), including the download behaviour of E-11; (d) refusal of activation as a whole for any unsafe component | — (this is the correction requested) | **Recommend approval** (a recommendation, not an approval) |
+| D-LP-8 (vi) **[3.5]** | Resolution action **A-5 (administrative hold)**: a new Administrator authority to move PROMOTING, PROMOTED or WAITING_FOR_VOLUME to BLOCKED (STATE_UNKNOWN) offline | — | Owner choice. Without it, components that need it keep preservation disabled until a code-level remedy. |
+| D-LP-8 (vii) **[3.5]** | Resolution action **A-6 (reviewed legacy acceptance)**, for paths outside the constructor namespaces only | — | Owner choice. Without it, legacy rows keep preservation disabled. |
+| D-LP-9 | Option (a), §4.10 | acceptable as a separately bounded implementation item | Approve (a) as a **separate** bounded authorization. Option (b) NOWAIT is not equivalent (§11.7). (c) keep = explicit risk acceptance only. |
 
 ## 9. Phase 4 writers and LO-1…LO-7
 
@@ -1292,9 +1877,9 @@ Their references to Source, vocabularies and users are terminal (TR, with D-LP-9
   - **(i) Ct serialisation:** a repair of X in `commitRepair` (generation g_old CURRENT; X MISSING or DAMAGED) races
     a We1 MISSING recording of X. The second is observed waiting **on Ct(X)** (blocker = first). Final states are
     consistent, with exactly one CURRENT generation.
-  - **(ii) OPEN-key contention:** two legitimate recorders of one OPEN path for X, both under Ct(X): Wc4 (a stopped
-    repair's copy) and Wf2 (that repair's cancellation path). The fixture states initial generations, ownership and
-    states explicitly. The second returns the existing record after the first commits.
+  - ~~**(ii) OPEN-key contention:** Wc4 and Wf2 of one stopped repair as simultaneous recorders.~~ **Withdrawn in
+    3.5:** both need the same operation advisory (sixth assessment §11 item 4). Replaced by (ii-a) and (ii-b) in the
+    [3.5] amendments below.
   - **(iii)** A DB-class characterisation of the raw OPEN-key wait.
 
 - **LP-10e:** (ii) uses the own-target case only. **(iv) is replaced** by runtime assertions at destruction refusal
@@ -1355,14 +1940,229 @@ Their references to Source, vocabularies and users are terminal (TR, with D-LP-9
   - **(ix)** Authorization snapshot: a File restricted after the request-start check behaves as accepted (no new
     File lock).
 
+
+**[3.5] Amendments from the sixth assessment §11** (future acceptance gates; none needs to pass for revision 3.5):
+- **LP-10h and LP-15 reservation, no symmetric barrier.**
+  1. A obtains Ct(X) UPDATE, and a seam holds A **after** its grant.
+  2. B is observed waiting on Ct(X), with blocker A.
+  3. A is released.
+  - If A commits, B reserves strictly above A's committed number.
+  - If A rolls back, B may take A's uncommitted number and must never take a committed one.
+- **LP-15 Wh2 claimant-first:**
+  - The creator must be a legitimate Content-coordinated writer (Wc4 or Wd2 under Ct(X) U, with the operation
+    advisory held as the real entry holds it). The fixture must not seed OPEN presence beside a foreign active owner.
+  - The real conversion and stop protocol (`stopUnfinishedRepairs`, then `claimBecomesUnresolved`) produces the OPEN
+    record.
+- **LP-15 inherited overlap through real activation.**
+  - Seed a valid active OPEN and claim overlap.
+  - Run `activate-preservation`: it publishes REFUSED.
+  - Neither the web nor the worker process can run the settlement-and-repair pair (both disabled).
+  - A local flag assertion is not accepted as evidence.
+- **Probe meaning (all DB-class probes):**
+  - NOWAIT success means no conflict with the requested mode at that instant, not "no lock of any mode".
+  - A 55P03 probe is rolled back before its connection is reused.
+  - Row existence and blocker PIDs are asserted.
+  - Granted tuple locks have limited visibility in `pg_locks`.
+- **Reservation restart boundary:**
+  - a crash after a partial copy's Wa2 committed but before Wh1b's reservation;
+  - unknown commit of the reservation;
+  - a cancellation requested while the worker holds the advisory (the job reports busy and retries);
+  - exhaustion followed by an Administrator retry.
+
+  Assert that no bytes are ever created from an uncommitted computed number. An old committed plan is resumed
+  (BLOCKED or WAITING_FOR_VOLUME with a target) or re-planned (STAGED) exactly as AU-7 classifies it.
+- **LP-16 (x) same-generation restoration:**
+  - D observes ACTIVE(g1, p1) and absence.
+  - Another transaction records MISSING(g1), then reverification restores ACTIVE(g1, p1) before D's Ct grant.
+  - The identity matches, so D commits its finding and state.
+
+  The assertion is that this is **point-in-time evidence** (the observation was true when made, and the restored
+  state is MISSING again with a finding), not a claim that bytes were absent at COMMIT. The residual is documented
+  (§12).
+- **Operation-state fixtures:** only real enum states. No FAILED fixture, and COMMITTED is never treated as final.
+- **Full outcomes:**
+  - Real constraints and triggers stay enabled.
+  - Collect every statement, COMMIT and rollback result for every participant and controller cleanup.
+  - Assert the exact ownership, evidence, bytes and history.
+  - Assert zero unexpected 40P01 or 55P03.
+  - Automatic deadlock retry is disabled, and every controller has an independent deadline.
+
+- **LP-10d (ii) [3.5, replaced].** The 3.4 fixture is withdrawn: Wc4 (DestructionProcessor, under the stopped
+  repair's advisory through `tryLockAll`) and Wf2 (cancellation of the same repair, under the same advisory) cannot
+  both pass advisory ownership. Two tests replace it:
+  - **(ii-a) Service level, reachable (ACC).**
+    1. A repair R of X is stopped with an unverified copy.
+    2. A DESTROY of X runs `DestructionProcessor.process`, which holds R's advisory through `tryLockAll`. A seam holds
+       it inside Wc4, after its advisory grant and before its Ct(X) request.
+    3. A `JOB_CANCEL` for R runs `performCancel`. Its `tryLock("file-operation", R)` **fails**, and it throws the
+       accepted "busy; the cancellation will be retried" exception. The job is retried per `JobRunner`, and **no**
+       Ct request was made by the cancel.
+    4. After the destruction releases the advisory, the retried cancel observes the state the destruction left
+       (R stopped or CANCELLED, as the accepted rules give) and applies or records "not applied" accordingly.
+    5. Assert the exact rows, events, OPEN records (one per path) and bytes.
+
+    The reverse order (cancel first, holding R's advisory) makes the destruction's `tryLockAll` fail and retry
+    (accepted DP behaviour); assert likewise.
+  - **(ii-b) Helper or database level (DB).** Two transactions both hold Ct(X) in turn (as the real windows do).
+    Each runs the real `UnresolvedObjectRepository.recordIfAbsent` SQL for one (volume, path). The second **waits on
+    the OPEN unique key** while the first is uncommitted (server-side seam), then returns the **existing** record
+    after the first commits. This tests the OPEN-key and returned-existing semantics without a manufactured service
+    state, and it is labelled DB.
+  - (i) and (iii) of 3.4 are retained.
+
+- **LP-17 [3.5] Admission and activation acceptance group** (AA-1…AA-16; ACC unless marked).
+  - **Participants:** real separate processes (`serve`, `worker`, CLI), each launched through `ProcessLauncher` in
+    its own JVM with its own pool.
+  - **Database:** PostgreSQL 16 and 18, with real migrations, triggers and the layer A role setting.
+  - **Platforms:** Linux and Windows CI jobs.
+  - **Every case asserts:**
+    - the exact singleton, event and finding rows;
+    - process identity (`application_name`, worker id);
+    - ownership rows, OPEN records and quarantine rows;
+    - bytes on the volume (hash per path) and history;
+    - every transaction outcome, including SQLSTATE 25006, GA001 or 55P03 where expected.
+
+| # | Case | Expected outcome |
+|---|---|---|
+| AA-1 | Separate web and worker processes started after ACTIVE | both bootstrap the same (state, epoch); an upload, its ingest job and a download complete; the web performs no worker step |
+| AA-2 | Two competing workers | both enabled; `SKIP LOCKED` claims are disjoint; a lease reclaimed after one worker is killed is processed once; preservation outcomes identical to one worker |
+| AA-3 | Old writer alive during attempted activation: (a) an accepted-build worker or web holding a pooled session; (b) an accepted-build process with **no** session at the check, connecting afterwards; (c) a new build with the previous epoch | (a) activation refused at 4(b), nothing published; (b) its locking reads and writes fail with 25006 **before** any row lock (`pg_locks` shows no tuple lock), and the sixth assessment's B/N schedule cannot form; (c) its writes fail with GA001 |
+| AA-4 | Failed and interrupted audit: an exception in AU-n; the activation process killed during AU-n; a NOWAIT conflict at 4(d) | rollback; singleton unchanged; no event row; services that start read the old state |
+| AA-5 | Crash before and after publication: the activation process killed before COMMIT; the database restarted after COMMIT returns | before: unchanged; after: ACTIVE at epoch + 1 with the event row; services start enabled |
+| AA-6 | Startup while writers are active: (a) a web process starts during an activation's audit; (b) activation attempted while a worker runs a job | (a) its bootstrap waits (blocker = activation pid) and then reads the published state; (b) refused at 4(b) or 4(d) |
+| AA-7 | Direct RecoveryService updates | an open MISSING finding on ACTIVE content (P16's input) while the state is NOT_ACTIVATED: no `setState`, no `reconcileAll`, no `needingAttention` step runs (row versions unchanged after several recovery intervals); after ACTIVE, P16 runs under E1. Plus the ArchUnit rule that E-27 helpers are reached only from E-1…E-25. |
+| AA-8 | Cancellation traversing pending settlement | a BLOCKED repair with an INTENDED own-copy entry: while not ACTIVE, the `cancel` request is refused and a queued `JOB_CANCEL` is not claimed; after ACTIVE, `performCancel` settles the entry (Wa2) and cancels; no foreign claim is released |
+| AA-9 | Cross-content and contentless shared path: an operation of Y and a generation of X at one AU-8 key (including a case-only variant); a contentless OPEN U whose path equals a Q destination | REFUSED; the finding names the whole component (rows of X, Y, U and Q); no row changed |
+| AA-10 | Legitimate final stale claims: a CANCELLED operation with `target_created` and its owner row; an OPEN U at that path | ACTIVE (ADMITTED-STALE); a later settlement releases the stale claim as PO-B (b) |
+| AA-11 | Valid SHARED_CONTENT COMMITTED cleanup after crash: an ingest stopped by the AFTER_COMMIT_BEFORE_CLEANUP fault point | ACTIVE (ADMITTED-CLEANUP); the first recovery pass completes it (COMPLETED, staging deleted, the Y target retained as history); no cancellation offered |
+| AA-12 | Restart of only one process: restart the web while a worker processes a repair; restart one of two workers mid-job | no epoch change; the restarted process is enabled; the job lease is reclaimed and processed once |
+| AA-13 | Restored backup and version mismatch: restore a dump taken at ACTIVE (with services stopped; read-only off for the restore); restore a pre-activation dump; start a build of another protocol | the first: ACTIVE, consistent; the second: disabled until activation; the third: disabled at startup, writes GA001 |
+| AA-14 | Unsafe admission refusal: each UNSAFE class (AU-1…AU-8 one by one) | REFUSED with exactly that finding; every preservation entry (E-1…E-21) refused or unreachable with its message; E-12, E-24 and E-26 work |
+| AA-15 | Reviewed resolution and re-admission: `preservation-resolve` with A-2 (release) and A-3 (cancel) on a resolvable component; a second component that needs A-5 without owner approval | the first is resolved, with resolution rows and events; re-audit stays REFUSED while the second remains; after the second is resolved, ACTIVE |
+| AA-16 | Unknown completion and fail-closed behaviour: the connection is cut at COMMIT (proxy); also a REPEATABLE READ transaction attempted by application code | `preservation-status` decides from `run_id`; services are not started until then; the isolation assertion rejects the RR transaction |
+
+  **DB-class companions:**
+  - (a) Layer A refuses `SELECT … FOR UPDATE` without a tuple lock.
+  - (b) The bootstrap `FOR SHARE` waits on B0.
+  - (c) The layer B trigger never waits on B0.
+  - (d) `pg_stat_activity` is cached until `pg_stat_clear_snapshot()`.
+
+## 11. Bounded verification executed (non-production) [restored in 3.5]
+
+**[3.5]** Revision 3.4 (`fe197ed`) dropped this section and the §12 heading by an editing error, which left the
+§11.1–§11.7 references dangling (sixth assessment, F4-12). §11.1–§11.7 are restored **verbatim** from revision 3.3
+(`e5bf8c0`, file `docs/PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`, lines 1185–1244). They are **historical builder-local
+or CI evidence**, re-executed by nobody for this revision; they are not new independent execution. Only §11.8 is new
+in 3.5.
+
+### 11.1 LP-6
+
+Unchanged from revision 2. Harness `Lp6LockBehaviourIT`, CI run `43831470275` at `9eb66ea`: a compatible KEY SHARE
+(foreign-key or explicit) is not queued behind a waiting FOR UPDATE, on PostgreSQL 16.16 and 18.7, Linux and Windows.
+It does not dismiss SA-R1.
+
+### 11.2 SA-R1 cycle reproduction
+
+Unchanged from revision 2: G → L → C → G gives 40P01, with blockers confirmed by pid, on all four CI jobs (run
+`43831470275`).
+
+### 11.3 Predicate waits (new; basis of PO-B)
+
+| | |
+|---|---|
+| Where | Builder's local PostgreSQL 16, scratch database and throwaway table, plain psql. Not part of CI; no project code. |
+| Schedule | A holds an uncommitted UPDATE of row 1 (`owned` false → true). B runs `UPDATE … WHERE path = 'p' AND owned` (the committed version does not match). C runs `UPDATE … WHERE path = 'p'` (the committed version matches). |
+| Result | B: no wait (54 ms). C: waits, ended by `lock_timeout` (55P03, "while updating tuple (0,1)"). |
+| Use | A location-keyed trigger UPDATE waits only on rows whose committed version matches its predicate. PO-B still needs LP-10e on all four CI jobs. |
+
+### 11.4 Schema facts used
+
+Taken from a scratch database migrated with V0001…V0025 (local PostgreSQL 16):
+- every unique and partial-unique index (§2.5);
+- every foreign key, including the deferred `file_operation.file_id`;
+- every non-internal trigger and the bodies of the cross-row trigger functions (§2.2).
+
+### 11.5 Administrator-check cycle (new [3.1]; refutes revision 3's TR (c), (d) and PO-E)
+
+| | |
+|---|---|
+| Where | Builder's local PostgreSQL 16, scratch database migrated with V0001…V0025, real `app_user`, `change_history` and the exact `lockEnabledAdministrators` SQL. One throwaway table `res` stands in for any capture-session, worksheet or File row. Not part of CI; no project code. |
+| Seed | two enabled administrators a1 < a2 |
+| Schedule | T1 (txid 5982, pid 316): inserts history with actor a2 (fk KEY SHARE on a2). T2 (5983, pid 317): `res` FOR UPDATE. A (5984, pid 315): the administrator check; locks a1, then waits for a2 (blockers = {316}). T1: `res` FOR UPDATE, waits (blockers = {317}). T2: inserts history with actor a1, waits (blockers = {315}). |
+| Result | T1: `ERROR 40P01 deadlock detected`, "Process 316 waits … blocked by process 317. Process 317 waits … blocked by process 315. Process 315 waits … blocked by process 316." T2 and A then proceeded. |
+| Meaning | Any transaction that writes history and later takes a blocking lock can play T1 or T2. One example is accepted `add`, which writes history after each insert and then waits on the next insert. This is a defect of the accepted code, reachable with three concurrent actors, one of them changing a role. It is addressed by D-LP-9. |
+
+### 11.6 Advisory key spaces (new [3.2]; basis of D-LP-9's key)
+
+| | |
+|---|---|
+| Class | builder-executed; local PostgreSQL 16; scratch database; no project code |
+| Schedule | session 1 holds `pg_advisory_lock((7340::bigint << 32) \| 1)` (a bigint with the same bits as the pair (7340, 1)); session 2 calls `pg_try_advisory_lock(7340, 1)` |
+| Result | session 2: `true`; `pg_locks` shows the two-int4 lock with `objsubid = 2`, separate from the bigint lock |
+| Use | the two-int4 key (7340, 1) cannot collide with any existing single-bigint `hashtextextended` key. Not yet in CI. |
+
+### 11.7 D-LP-9 schedules (new [3.2])
+
+| | Run 1: NOWAIT variant | Run 2: D-LP-9(a) variant |
+|---|---|---|
+| Class | builder-executed; local PostgreSQL 16; real `app_user`, `change_history`; no project code | same |
+| Seed | administrators a1 < a2; non-administrator target n (EDITOR) | same |
+| P (password reset of n) | `UPDATE app_user … WHERE user_id = n` (holds n NKU), txid 5990 | same, txid 5992 |
+| A (role change) | `SELECT … WHERE role = 'ADMINISTRATOR' AND enabled ORDER BY user_id FOR UPDATE NOWAIT` (**granted**, 2 rows) | `SELECT pg_advisory_xact_lock(7340, 1)` (granted), then a plain administrator read (2) |
+| A updates n | waits on P | waits on P (blocker = 411, P's pid) |
+| P writes history as a1 | waits on A | **no wait** (a1 is not row-locked) |
+| Outcome | **`40P01 deadlock detected`**: "Process 381 waits … blocked by process 380. Process 380 waits … blocked by process 381." | P commits; A's update proceeds; **no deadlock** |
+| Use | refutes NOWAIT as an equivalent fix (third assessment §7) | consistent with §4.10; service-level LP-14b still required on all four jobs |
+
+### 11.8 Activation-gate primitives (new [3.5])
+
+**Where and how.**
+- **Class:** builder-executed.
+- **Environment:** local PostgreSQL 16.15; scratch database `r3inv`.
+- **Objects:** throwaway schemas, tables and roles only (`r35*`, `gas_other`), dropped afterwards. No project code
+  and no CI.
+- **Limits:** these are **primitive** checks of PostgreSQL behaviour that §5.6 relies on. They are not tests of the
+  design, which LP-17 specifies.
+
+| # | Schedule | Result | Used by |
+|---|---|---|---|
+| (a) | Session 1 holds a row `FOR UPDATE`; session 2 runs `LOCK TABLE … IN EXCLUSIVE MODE NOWAIT` | `ERROR: could not obtain lock on relation` (55P03), immediately | 4(d): a live writer refuses activation without waiting |
+| (b) | Session 1 holds `EXCLUSIVE` on a table; session 2 (with `statement_timeout` 1 s) runs a plain `SELECT`, a `SELECT … FOR UPDATE` and an `UPDATE` | the plain read returns at once; the locking read and the update both time out (they wait) | barrier semantics: reads pass, locks and writes wait |
+| (c) | The role-in-database default `default_transaction_read_only = on` (set by the non-superuser role itself) | Without options: a plain read and `pg_try_advisory_lock` succeed; `SELECT … FOR UPDATE` and `UPDATE` fail with "cannot execute … in a read-only transaction". With `PGOPTIONS=-c default_transaction_read_only=off`, the update succeeds. | layer A |
+| (d) | In one transaction: count other sessions; another session connects; count again; `pg_stat_clear_snapshot()`; count again | 0, 0 (cached), 1 | 4(e) |
+| (e) | A statement trigger comparing the session settings `gas.preservation_protocol` and `gas.activation_epoch` with a singleton row | No settings: refused. Matching settings: allowed. Wrong protocol: refused. An earlier `SELECT … FOR UPDATE` without settings **succeeds** (the trigger alone does not stop locking reads, hence layer A). | layer B, and the reason both layers are needed |
+| (f) | Full sequence: activation transaction (singleton `EXCLUSIVE NOWAIT`, session check, table `EXCLUSIVE`, audit read, `UPDATE` epoch 1 → 2, `SET LOCAL`, COMMIT), with a concurrent bootstrap `SELECT … FOR SHARE` started 1 s in | The bootstrap waited 2.04 s and returned `ACTIVE`, epoch 2. Afterwards a writer with epoch 1 was refused, and a writer with epoch 2 succeeded. The application schema has 40 base tables at V0025. | CU-3, CU-5, CU-6, CU-7 |
+| (g) | Session 1 holds `EXCLUSIVE` on the singleton; session 2, with matching settings, updates another gated table through the trigger (`lock_timeout` 2 s) | the write succeeded in 0.04 s: the trigger's plain read does not wait on the barrier | CU-7 never waits |
+| (h) | `pg_stat_activity` as the application role, for a session of another role | the row is visible with `application_name`; `backend_type` and `query` are hidden (`<insufficient privilege>`). Background processes show `datname` null. | 4(b) counts a hidden `backend_type` as a client |
+
+**Not established here:**
+- the absence of tuple locks while an **aborted** old-build transaction stays open (LP-17 DB companion (a));
+- autovacuum interaction with 4(d);
+- PostgreSQL 18;
+- Windows.
+
+## 12. Residual risks and open items
+
 - **[3.3] Changes to the assumptions:**
   - **INV-U is withdrawn (contradicted, §5.4)** and is not restated under another name. P2-8g is a mechanism with
     its own window inventory, not an assumption.
   - **INV-P is scoped:** the theorem covers the **admitted data set**: rows produced by the audited constructors
     (`ManagedVolume.originalPath` and `quarantinePath`, ingest UUIDs from `GlobalIds`, repair generation planning,
     partial-copy replanning) and preserved known provenance. It is **not** a database constraint.
-- **[3.4] Data audit:** superseded by the fail-closed admission and activation design of §5.5 (AU-1…AU-8). A read-only
-  report alone is not sufficient.
+- **[3.4] Data audit:** superseded by the fail-closed admission design of §5.5 (AU-1…AU-8). A read-only report
+  alone is not sufficient. **[3.5]** §5.5 is itself historical. The operative design is §5.6: global fail-closed
+  activation, the corrected AU-1…AU-8 (§5.6.5) and assumptions R35-1…R35-6 (§5.6.10).
+- **[3.5] Residuals carried forward from the sixth assessment:**
+  - **We7 point-in-time evidence:** the identity check does not prove the bytes are still absent at COMMIT; a
+    same-generation restoration can recreate the observed identity (LP-16 (x)). Ct does not control external
+    filesystem writers, and this is not claimed.
+  - **Wh1b restart boundary:** recovery distinguishes an already committed reservation (resumed) from an uncommitted
+    computed number (never used) (LP-15 restart cases).
+  - **REPAIR missing content** is never private (§4.9, INGEST only).
+  - **GAS-P4-004** remains MAJOR, OPEN, source-derived and unimplemented; its protection for inherited active
+    owners now rests on §5.6's global refusal.
+  - **Old-build locking reads** are excluded only by layer A, and same-protocol builds are not distinguished
+    (R35-4). Neither layer is a security boundary.
 
 - **[3.3] Receiver scope:** lemma A2 holds per `IngestionService` instance, with no direct callers and no duplicate
   staging (§5).
@@ -1378,9 +2178,10 @@ Their references to Source, vocabularies and users are terminal (TR, with D-LP-9
   3. the guard (G1–G12) runs enabled in the whole suite;
   4. LP-14b passes at service level;
   5. the Phase 0–3 regression suite is unchanged and green;
-  6. an independent implementation audit.
+  6. an independent implementation audit;
+  7. **[3.5]** LP-17 (AA-1…AA-16) with real separate processes on all four configurations.
 
-  WP1-R1, GAS-P4-002 and GAS-P4-003 stay open until then.
+  WP1-R1, GAS-P4-002, GAS-P4-003 and GAS-P4-004 stay open until then.
 - **R3-OPEN-1 (closed by reconciliation [3.1]).** Every finding of the second review is accounted for individually
   in the correction record's reconciliation matrix. Closure means accounted for, not resolved. The findings that
   remain open or partial are listed there and below.
@@ -1410,4 +2211,4 @@ Their references to Source, vocabularies and users are terminal (TR, with D-LP-9
 
 ### 13.2 GAS-P4-002: proposed status text
 
-> **Status:** OPEN. **[3.3]** The original deadlock-freedom premise is superseded (it holds within one session only; Scenarios A–D are cross-session or cross-subsystem cycles, and GAS-P4-003 adds a user-administration cycle). The replacement protocol (L1a…L1f with L1p, CR-1…CR-4 with exceptions E1–E5, TR with D-LP-9) and the guard contract are proposed in PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL revision 3.3, decisions D-LP-1…D-LP-9 (D-LP-8 including P2-8g). Not implemented; not closed by specification.
+> **Status:** OPEN. **[3.3]** The original deadlock-freedom premise is superseded (it holds within one session only; Scenarios A–D are cross-session or cross-subsystem cycles, and GAS-P4-003 adds a user-administration cycle). The replacement protocol (L1a…L1f with L1p, CR-1…CR-4 with exceptions E1–E5, TR with D-LP-9) and the guard contract are proposed in PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL revision 3.5, decisions D-LP-1…D-LP-9 (D-LP-8 including P2-8g and global fail-closed activation, §5.6). Not implemented; not closed by specification.

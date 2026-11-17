@@ -506,11 +506,91 @@ assessment itself remains open (R34-OPEN-1).
 | §8 | LP-10d, LP-10h, LP-10b, LP-15, LP-16 | LP-10d replaced with valid fixtures; LP-10h distinct reservations; the `pg_locks` claim marked historical; LP-15 three classes; LP-16 stale-generation and the authorization contract | RESPONDED (future tests) |
 | §9 | Window counts | P2-8: 19 windows (adds Wh1a, Wh1b, We7, Wh2 to 3.2's 15); Phase 2: 22. Superseded counts marked historical. | RESPONDED |
 | §10 | Decision register | Proposal §8 updated (D-LP-3 explicit Conflict approval; D-LP-4 classes; D-LP-8 scope; D-LP-9 no implementation authorised) | DECISION (owner) |
-| R34-OPEN-1 | Assessment text not received | Reconcile when supplied | OPEN |
+| R34-OPEN-1 | Assessment text not received | Reconcile when supplied | OPEN at revision 3.4; **[3.5] reconciled by the sixth assessment for reviewer access only** (see the next section) |
 
 **Status:** revision 3.4 submitted (responds to the Revision 3.4 direction). Earlier: revision 3.3 submitted (responds to the fourth assessment). Earlier: revision 3.2 submitted (responds to the third assessment). WP1-R1, GAS-P4-002 and GAS-P4-003 are not
 closed. Awaiting owner decisions D-LP-1…D-LP-9 and an independent assessment. WP1 is not accepted; WP2 remains on
 HOLD.
+
+---
+
+### Sixth independent architectural assessment (revision 3.4 → revision 3.5)
+
+| | |
+|---|---|
+| Assessment | `Phase-4-WP1-Sixth-Architectural-Assessment.md` (reviewed head `fe197ed`), received complete |
+| Direction | Phase 4 WP1 — Locking-Protocol Revision 3.5 Direction (starting commit `fe197ed8b0db232a30e8656f247741df07b5efd6`), received complete |
+| Result | proposal revision 3.5 (same file), documentation only |
+| Disposition received | PROPOSAL REQUIRES REVISION. F5-1, F5-2 and F5-3 CLOSED at architectural level; F5-4 OPEN; R34-OPEN-1 CLOSED for access and reconciliation only; WP1 unaccepted; WP2 HOLD |
+
+The assessment's findings are cited by its section numbers and are not restated or altered here.
+
+**F5 matrix reconciled against the fifth and sixth assessments.**
+- The builder never received the fifth report. The sixth assessment states that it reconciled the fifth report
+  directly, and that the fifth report's labels F5-G and F5-W correspond to the relayed F5-2 and F5-3.
+- It also states that the admission and Wh2 findings span the fifth report's §§4–5 and §8.
+- The rows below therefore take the sixth assessment's dispositions as the reconciliation. They do **not** claim
+  any reading of the fifth report by the builder.
+
+| Item | Sixth-assessment disposition | Revision 3.5 response | Status |
+|---|---|---|---|
+| F5-1 (fifth §2) | CLOSED (architectural), subject to the stated assumptions and future tests | Retained unchanged. Restart boundary, exhaustion retry and the defensive CAS fixture added to LP-15 (§10 [3.5]). | RESPONDED (future tests) |
+| F5-2 (fifth F5-G) | CLOSED (architectural); update stale §6.3 | §6.3 Ordered row restated as G1's list; new "L1p admitted (G10)" class row | RESPONDED |
+| F5-3 (fifth F5-W) | CLOSED for the stale-generation defect; point-in-time residual to be documented | Residual documented (§12 [3.5]); LP-16 (x) same-generation restoration | RESPONDED |
+| F5-4 (fifth §§4–5, §8) | OPEN / PARTIAL | Replaced by global fail-closed activation (§5.6). See the §7–§8 rows below. | RESPONDED (design); DECISION D-LP-8 (v) |
+| R34-OPEN-1 | CLOSED as a documentation and access reconciliation item only | Recorded as reconciled **for reviewer access**. The builder did not receive the fifth report, and no claim to the contrary is made. | RECONCILED (reviewer) |
+
+**Sixth-assessment response matrix.**
+
+| Ref | Finding (sixth assessment) | Response (revision 3.5) | Status |
+|---|---|---|---|
+| §3 F4 rows | F4-1 PARTIAL, F4-6 PARTIAL, F4-11 (multi-process fixtures; LP-10d(ii)), F4-12 (stale tables; dangling §11), F4-13 (control units separate), F4-14 (no closure) | F4-1 and F4-6: via §5.6. F4-11: LP-17 and LP-10d(ii-a/ii-b). F4-12: §11 restored, counts marked historical. F4-13: §5.6.8. F4-14: no closure claimed. | RESPONDED |
+| §4 allocation | the inventory must keep forbidding unclassified allocators | unchanged; LP-10b inventory retained | RETAINED |
+| §4 restart | distinguish a committed old reservation from an uncommitted computed number | §12 residual; LP-15 restart cases | RESPONDED (future tests) |
+| §4 CAS | defensive CAS failure through a labelled fault or DB fixture, not a canceller | LP-15 reservation list: CAS case uses a labelled fault fixture; LP-10d(ii-a) shows the canceller is excluded by the advisory | RESPONDED |
+| §4 INGEST-only fallback | a REPAIR without persisted content must not be treated as private | §4.9 content-lock rule and reservation step 1: INGEST only; a REPAIR is refused (BLOCKED STATE_UNKNOWN); AU-2 refuses activation | RESPONDED |
+| §5 §6.3 | align §6.3 with G1/G10 | done | RESPONDED |
+| §6 We7 | point-in-time residual; same-generation restoration test | §12; LP-16 (x) | RESPONDED |
+| §7 A | the activation model does not match deployment (separate processes; local barrier) | §5.6.1 feasibility from source. The **old web process is not excluded by accepted code** (no readiness gate on its handlers). Durable activation record plus write gate layers A (old builds read-only at the database) and B (protocol and epoch); controlled maintenance command; database-verified quiescence. | RESPONDED (design); schema requirement for owner decision |
+| §7 counterexample | old worker B and new N recreate the Ct/O graph | §5.6.3: excluded at three points (AHEAD startup refusal; session check; layer A refuses B's locking reads and writes before any row lock) | RESPONDED |
+| §7 B | unclassified mutating entry points (RecoveryService P16 loop, receivers, intake, retry, E2 indirect, delegated helpers) | §5.6.4 E-1…E-27, one admission check per entry; `recover()` not called while disabled; helpers only from admitted entries (ArchUnit, AA-7) | RESPONDED |
+| §7 C | allowed cancellation is not harmless | cancellation disabled while not ACTIVE; no isolation exception exists; offline resolution with preconditions (§5.6.7) | RESPONDED |
+| §7 D | isolation must follow all conflicting identities | component closure over all identities and AU-8 keys; any unsafe component refuses activation as a whole | RESPONDED |
+| §8 SHARED_CONTENT | valid COMMITTED SHARED_CONTENT ingest falsely isolated, with a recovery dead end | AU-2 classifies it ADMITTED-CLEANUP and verifies the abandoned Y plan; it completes through `finish` after activation (§5.6.5); AA-11 | RESPONDED |
+| §8 AU-1 | volume, Content and current-generation relations as well as the constructor | AU-1 rewritten (creator, CURRENT count by content state, vacated, quarantine_path) | RESPONDED |
+| §8 AU-2 | the meaning of the target by kind, state, outcome, `target_created` and ownership; persisted Content for REPAIR and DESTROY | AU-2 table | RESPONDED |
+| §8 AU-3 | both directions; no silent repair | AU-3 (a), (b), (c) | RESPONDED |
+| §8 AU-4 | real states; COMMITTED not final; no FAILED; U identity even without an owner | AU-4 (a)–(c) | RESPONDED |
+| §8 AU-5 | own, stale, foreign active, ambiguous; evidence and pending-move binding | AU-5 role table | RESPONDED |
+| §8 AU-6 | operation, suffix, roles, basis, unresolved linkage | AU-6 | RESPONDED |
+| §8 AU-7 | states capable of claiming versus terminal and cleanup | AU-7 (can create or holds) | RESPONDED |
+| §8 AU-8 | cross-column comparison, normalisation and case semantics | AU-8 (`PortableRelativePath.caseFoldKey`, NFC parse, non-ASCII refused, same-object relations) | RESPONDED |
+| §8 restart list | second process, single restarts, interrupted activation, re-audit against resolution, backup, mixed rollout, in-flight jobs, stale claims, non-cancellable operations | §5.6.6 (15 cases); §5.6.7 for non-cancellable operations | RESPONDED |
+| §8 alternatives | Option 1 or Option 2 | Option 1 selected; Option 2 not proposed | DECISION D-LP-8 (v) |
+| §8 activation lock | must precede the resources its barrier can wait on | L-ACT before L0; every activation acquisition NOWAIT; never waits (§5.6.3) | RESPONDED |
+| §9 Wh2 | retained; existing owners depend on admission | unchanged; existing owners handled by §5.6 | RETAINED |
+| §9 GAS-P4-004 | MAJOR, OPEN, source-derived; no closure | unchanged in severity and status; `issues.md` status text points to §5.6 | RETAINED |
+| §9 PO-B | conditional at full-system level | §5.6.9: case (d) cannot coexist with ACTIVE | RESPONDED (conditional) |
+| §10 control units | admission units need their own inventory | §5.6.8 CU-0…CU-11 | RESPONDED |
+| §11 item 1 | no symmetric barrier after competing Ct locks | LP-10h and LP-15 amendment | RESPONDED (future tests) |
+| §11 item 2 | Wh2 claimant-first creator must be legitimate | LP-15 amendment | RESPONDED (future tests) |
+| §11 item 3 | inherited overlap tested through real activation | LP-15 amendment plus AA-14 | RESPONDED (future tests) |
+| §11 item 4 | LP-10d(ii) advisory trap | replaced by (ii-a) service-level skip and retry, and (ii-b) helper/DB OPEN-key fixture | RESPONDED (future tests) |
+| §11 item 5 | NOWAIT probe meaning | §10 [3.5] probe rules | RESPONDED |
+| §11 item 6 | reservation restart boundary | LP-15 restart cases | RESPONDED (future tests) |
+| §11 item 7 | We7 same-generation restoration | LP-16 (x) | RESPONDED (future tests) |
+| §11 item 8 | real admission and activation group | LP-17 AA-1…AA-16 | RESPONDED (future tests) |
+| §11 items 9–10 | real enum states; full outcomes | §10 [3.5] | RESPONDED |
+| §12 D-LP-1…9 | recommendations | proposal §8 rewritten (D-LP-8 split into (i)–(vii)) | DECISION (owner) |
+| §12 smallest correction 1–7 | participants, boundary, enforcement, audit, resolution, failure, tests and docs | §5.6.1–§5.6.8, §10, §11 | RESPONDED |
+
+**Builder finding during this revision.** The accepted web process keeps serving preservation writes against a
+schema migrated by a newer build. Only the home page checks readiness, and ingestion readiness ignores schema state.
+This is recorded as GAS-P4-005 (MINOR) in `issues.md`; layer A of §5.6.2 is its proposed remedy.
+
+**Status:** revision 3.5 submitted (responds to the sixth assessment and the Revision 3.5 direction). Nothing is
+implemented. WP1-R1 and GAS-P4-002…GAS-P4-005 are not closed. Awaiting owner decisions D-LP-1…D-LP-9 (D-LP-8 (i)–(vii)
+listed separately) and an independent assessment. WP1 is not accepted; WP2 remains on HOLD.
 
 ---
 
