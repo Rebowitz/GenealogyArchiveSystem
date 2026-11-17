@@ -770,6 +770,59 @@ the tenth independent assessment. WP1 is not accepted; WP2 remains on HOLD.
 
 ---
 
+### Tenth independent architectural assessment (revision 3.8 → revision 3.9)
+
+| | |
+|---|---|
+| Assessment | `Phase-4-WP1-Tenth-Architectural-Assessment.md` (reviewed head `48eeb8b`), received complete |
+| Direction | Phase 4 WP1 — Locking Protocol Revision 3.9 Direction (baseline `48eeb8bd574572bf63bfb3c2be260faaf210abd3`), received complete |
+| Result | proposal revision 3.9 (same file, §5.10), documentation only; no new local execution |
+| Disposition received | PROPOSAL REQUIRES REVISION; A: NO; B: NO; D: NO; E: YES for separately bounded D-LP-9(a); F5-4 OPEN; F5-1…F5-3 retained; all five named issues OPEN |
+
+The findings are cited by section and are not altered here. "Proposal" means revision 3.9. A response is not
+closure.
+
+| Item | Contradiction (assessment) | Accepted source evidence | Revised rule | Exact transaction / recovery sequence | Fixture | Remaining assumption | Builder disposition |
+|---|---|---|---|---|---|---|---|
+| **R10-1** upgrade entry | A P2 build cannot pass R-2/R-4 to reach `maintenance_begin_upgrade` (§4) | `SchemaMigrator` (BEHIND before validation); Flyway one transaction per migration | Compiled immutable manifest; predicate C (MIGRATE) in R-2M, R-3, R-4, `maintenance_begin`; per-checkpoint operations; unrecognised checkpoint GA003; old build refuses newer DB; newer build no general write on older DB | §5.10.1 trace steps 1–12 (V0026/P1 → V0030/P2, crash after V0028, resume through R-3, unknown V0029 COMMIT, publication, close) | AA-1d, AA-1e, AA-1f | R39-M (manifest generated from the migration directory; first statement check) | RESPONDED (design) |
+| **R38-2** chain atomicity | Per migration, not chain; BEHIND is not validation (§8) | `SchemaMigrator.status`/`migrate` | `validateWithResult` before any control write; per-migration history interpretation | §5.10.1 step 1; §5.10.4 U-3 (history row) | AA-1e, AA-19b | R38-2 amended | RESPONDED |
+| **R10-2** repair with OPEN run | R-2 requires no OPEN run (§7) | — | R-3L: rebind passing only the recorded old → new lease pair, generation g + 1 | §5.10.2 steps 1–7, step 6 "OPEN" row | AA-17b (ii) | — | RESPONDED (design) |
+| **R10-2** DRAIN_PENDING | R-2 requires COMPLETE (§7) | — | R-3L without COMPLETE; transition continues at B6 | §5.10.2 step 6 "DRAIN_PENDING" row | AA-17b (iii) | — | RESPONDED (design) |
+| **R10-2** present replacement | CREATE_NEW fails at an occupied path (§7) | — | Rename aside within the protected root without following links, recorded, never deleted or reused; only after process verification | §5.10.2 step 3 | AA-17b (iv) | — | RESPONDED (design) |
+| **R10-2** binding transaction | Binding updated in a later transaction fails BC item 4 (§7) | — | Binding changes only in the opening (R-2L) or rebind (R-3L) transaction, with an `installation_binding_event` row (9th control table) | §5.10.2 step 6 | AA-17b (i)–(iii) | — | RESPONDED (design) |
+| **R10-2** replacement as evidence | A replacement-file lock is not old-holder exclusion (§7, §13) | — | Exclusion only from process verification under the freeze (steps 2 and 5) | §5.10.2 steps 2, 5 | AA-17b (vii) | D-LP-8 (xi) | RESPONDED |
+| **R10-2** unknown binding COMMIT | Undefined | — | U-1…U-4 with the attempted old/new identities; rerun of `repair-lease` adopts nothing on trust | §5.10.2 "Unknown binding COMMIT" | AA-17b (vi) | — | RESPONDED (design) |
+| §7 new-host / cross-platform restore | BC 3/4 fail on new host; FK ordering for `superseded_by` (§7) | — | R-5H: exact old → new binding, caller's own values, Archive ID preserved, surviving-backend rule, deferred FK, mandatory `verify-restore`, re-audit | §5.10.3 steps 1–7 | AA-19e (extended) | operator statements (coherence, former-host exclusion) are responsibilities, not verifiable | RESPONDED (design) |
+| §7 classification | Another configuration ID pointing at this database is not automatically unrelated (§7) | — | Unregistered application-role backends on this database refuse | §5.10.3 step 3 (a) | AA-17c (extended) | — | RESPONDED |
+| §5 unknown outcomes | "Connection error ⇒ session gone" is false (§5, §12) | PostgreSQL administrative functions (signal is not termination) | U-1…U-5: attempted identity; confirmed backend absence; exact row read; reuse or refuse; old versus new controller identity; no obsolete generation | §5.10.4 | AA-1f, AA-17b (vi), AA-19b/d, AA-20b, AA-4c | — | RESPONDED (design) |
+| §8 Archive ID seed | No seed for an existing archive (§8) | V0002 `archive_instance`; `init-archive` | V0026 copies the existing value with an ARCHIVE_ID_SEED event; CU-31 only for null | §5.10.5 table | AA-19b, AA-19d (extended) | — | RESPONDED (design) |
+| **R10-3** H overstated | Absence of references and g ≤ current are not proof (§10) | V0014 Q immutability; `move` callers; `claimBecomesUnresolved`; V0009 event fields | RA, proven assignment (none claimed) and PC distinguished; W_Q, W_U; independent checks 1–7; UNPROVED refuses | §5.10.6 admission; sufficiency argument (P1)–(P4) | AA-11p…AA-11t; AA-11l, AA-11o | **R39-T** trust boundary; alternative D-LP-8 (xii) | RESPONDED (design); DECISION (owner) for R39-T |
+| §9 per-Q dedup | Pending and cancellation roles produce two inserts (§9) | `applyCancel` pending loop | One window per Q key with roles; deterministic cancellation Q; PLAN_EXPANDED event | §5.10.7 | AA-8b | — | RESPONDED |
+| §9 publication allocation | Allocation not durable (§9) | — | PUBLISH action allocates `(run, seq)` in its J0 before the effect; resolution by U-2/U-3; never inferred from digest or state | §5.10.7 | AA-4c, AA-5c | — | RESPONDED |
+| R38-1 native identity | FFM is preview on Java 21; pom has no setup (§11) | `pom.xml` (Java 21, no preview, no JNA) | JNA 5.14.0, same descriptor/handle (OFD + `fstat`; `CreateFileW` + `LockFileEx` + `GetFileInformationByHandle`); fail closed | §5.10.8 | AA-17, AA-17d | R39-N1, R39-N2; dependency approval | RESPONDED (design); DECISION (owner) |
+| R38-3 stalled I/O | Liveness versus safety; seam is not kernel I/O (§11, §13) | — | Lease held until real exit; refusal, not bounded availability | §5.10.8 | AA-20c split | R39-N2 | RESPONDED |
+| R38-4, R38-5 scope | Reused destination not restamped; inventory is not lineage (§11) | `QuarantineMoves.move` | Scope corrected | §5.10.10 | — | — | RESPONDED |
+| §15-1 | Upgrade entry | as R10-1 | | 5.10.1 | | | RESPONDED |
+| §15-2 | Recovery transitions | as R10-2, restore | | 5.10.2, 5.10.3 | | | RESPONDED |
+| §15-3 | Authoritative unknown outcomes | as §5 | | 5.10.4 | | | RESPONDED |
+| §15-4 | Initialization / seed | as §8 | | 5.10.5 | | | RESPONDED |
+| §15-5 | Historical proof | as R10-3 | | 5.10.6 | | | RESPONDED; DECISION (owner) |
+| §15-6 | Journal alignment | as §9 | | 5.10.7 | | | RESPONDED |
+| §15-7 | Runtime integration | as R38-1, R38-3 | | 5.10.8 | | | RESPONDED; DECISION (owner) |
+| §15-8 | Tests | LP-17 3.9 amendments | | §10 | | | FUTURE |
+| §15-9 | Approvals | §8 (II); none granted | | §8 | | | DECISION (owner) |
+
+**Counts:** 40 application tables + **9** control tables (adds `installation_binding_event`) = **49** gated.
+Control units 34 → **36** (CU-34 manifest and MIGRATE admission; CU-35 binding-event recording). Business windows
+unchanged at 19 / 22.
+
+**Status:** revision 3.9 submitted. Nothing implemented; no new execution. F5-4 is not claimed closed; the design
+remains conditional on the unapproved Q-36-1 and D-LP-8 (xi), and now on D-LP-8 (xii) and the native-lease
+dependency. WP1-R1 and GAS-P4-002…GAS-P4-005 remain OPEN. Awaiting the eleventh independent assessment. WP1 is not
+accepted; WP2 remains on HOLD.
+
+---
+
 ## WP1-R2: Historical Date database constraints (BLOCKING; corrected)
 
 **Finding (direction sheet, unaltered):**

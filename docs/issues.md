@@ -221,3 +221,8 @@ Status unchanged: OPEN.
 older build reading the shared configuration exits at load because of the new required key, and a fresh older-build
 session is read-only. Neither stops an older process already running filesystem work. Status unchanged: OPEN.
 
+**[3.9]** The compiled migration manifest (proposal §5.10.1) adds a schema-and-protocol rule: an older build has no
+upgrade path that leaves its own contract, so it refuses a newer database at every maintenance entry (GA003), and a
+newer build gets no ordinary write on an older database outside the recorded MIGRATE transition. This is design
+only; it does not change an older process that is already running. Status unchanged: OPEN.
+
