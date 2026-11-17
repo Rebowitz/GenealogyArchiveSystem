@@ -97,7 +97,7 @@ Builder and reviewer recommend dispositions; only the owner approves changes to 
 
 ### 11. Immediate Phase 4 WP1 application
 
-The Phase 4 WP1 locking-protocol sequence has exceeded convergence triggers. Its gate is **RECONSIDER**.
+The Phase 4 WP1 locking-protocol sequence has exceeded convergence triggers. It therefore reached gate **RECONSIDER**, which required the following:
 
 - Suspend routine incremental revision of the comprehensive locking proposal.
 - Preserve the proposal, source-derived counterexamples, and independent assessments as evidence.
@@ -106,6 +106,13 @@ The Phase 4 WP1 locking-protocol sequence has exceeded convergence triggers. Its
 - Do not implement, merge, or tag WP1 without the owner's subsequent approval of the selected architecture.
 - **WP1 remains unaccepted; WP2 remains HOLD.**
 - Eleventh-assessment findings remain inputs to the comparison; reconsideration does not erase them.
+
+**Outcome of the reconsideration (2026-11-17).** The required comparison (`PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md`) led to the owner's decision D4-31 in `PHASE-4-DECISIONS.md`. The decision is the result of this governance process and does not cancel it; §3's triggers and §4's assessment continue to apply to the replacement design.
+- **Architecture C: SIMPLIFY — OWNER APPROVED.** This is the current WP1 gate.
+- Replacement WP1 design (architectural contract) and feasibility proofs: **pending**.
+- Existing WP1 work: unchanged and **unaccepted**.
+- Implementation of the Architecture C design: **not authorized**. Architecture approval is not implementation authorization.
+- **WP2 remains HOLD.**
 
 ### 12. Governance
 
