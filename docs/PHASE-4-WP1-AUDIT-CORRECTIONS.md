@@ -718,6 +718,58 @@ the ninth independent assessment and owner decisions. WP1 is not accepted; WP2 r
 
 ---
 
+### Ninth independent architectural assessment (revision 3.7 → revision 3.8)
+
+| | |
+|---|---|
+| Assessment | `Phase-4-WP1-Ninth-Architectural-Assessment.md` (reviewed head `dcd44f1`), received complete |
+| Direction | Phase 4 WP1 — Locking Protocol Revision 3.8 Direction (baseline `dcd44f1aa98ac6d81efd757e7f1f8eea3387e88f`), received complete |
+| Result | proposal revision 3.8 (same file), documentation only; no new local execution |
+| Disposition received | PROPOSAL REQUIRES REVISION; A: NO; B: NO; D: YES for separately bounded D-LP-9(a); F5-4 OPEN; F5-1…F5-3 retained; all five named issues OPEN |
+
+The findings are cited by section and are not altered here. "Proposal" means revision 3.8. A response is not
+closure.
+
+| Item | Source contradiction (assessment) | 3.8 correction | Proposal § | Accepted source / migration | Future fixture | Remaining uncertainty | Builder disposition |
+|---|---|---|---|---|---|---|---|
+| **R9-M1** compatibility | `maintenance_begin` copied P from the database; an old jar could adopt P2 (§6) | Compiled `(schema_top, protocol)` checked against the history and the singleton, never copied; bounded `maintenance_begin_upgrade` for P → P+1 inside the new build's migration only | 5.9.1 | `SchemaMigrator.status` (AHEAD/FAILED/INVALID refusal retained) | AA-1b, AA-16b | the pinned Flyway behaviour for placeholders and validation | RESPONDED (design) |
+| **R9-M1** binding | The maintenance predicate omitted installation, lease, cluster/database and Archive ID; the I2 copy | BC items 1–10 in Java and in every entry function before any effect; I2 schedule | 5.9.1 | `InstallationConfigLoader`; `archive_instance` (V0002) | AA-1c | opened-identity API (R38-1) | RESPONDED (design) |
+| **R9-M1** generation | Old registrations joining a later controller | Registration carries the controller generation; `maintenance_begin` requires the current one; R-3 requires every old-generation backend gone | 5.9.2, 5.9.8 | — | AA-20b | — | RESPONDED |
+| **R9-B1** registration cycle | B5 called `maintenance_begin` before registration; `admit_maintenance` registered undeclared | R-1: V0026 inserts the controller and Flyway connection rows; R-4 `maintenance_register` sets its declaration after its own checks | 5.9.2 | — | AA-19b | — | RESPONDED |
+| **R9-B2** new run | No gate-compatible run creation after CLOSED; a possible generic advisory-holder exception | R-2 `maintenance_open` with self-advisory, COMPLETE, BC and allowed kinds; R-3 rebind; R-5 restore; the 3.7 exceptions inoperative | 5.9.2 | — | AA-19c | — | RESPONDED |
+| **R9-B3** pre-gate states | Partial fresh chains classified as S0 or S1; registrations lost before V0026 | PRE_GATE_BEHIND; SchemaMigrator recognition; drain of every application-role backend before determining COMMIT; history-row determination; freeze maintained | 5.9.3 | `SchemaStatus` (NOT_INITIALIZED, BEHIND, AHEAD, FAILED, INVALID); `SchemaMigrator.migrate` | AA-19b | R38-2 (Flyway transaction per migration for the whole chain) | RESPONDED |
+| **R9-B4** archive binding | `init-archive` was no lawful binding writer | `bind_archive_id`, atomic with the accepted insert; the trigger allows NULL → value only; unknown-COMMIT consistency (CU-31) | 5.9.4 | `init-archive`; V0002 | AA-19d | — | RESPONDED |
+| **R9-B4** restore | Restored OPEN run; S8 wording; physical restore | R-5 supersedes the old run with its journal preserved; no second OPEN; `verify-restore` mandatory for physical restore (CU-33) | 5.9.4 | — | AA-19e | physical restore is undetectable: an operational obligation | RESPONDED |
+| **R9-L1** lease | Detection presented as prevention; missing or replaced object recovery; opened identity | Prevention (protected namespace, mount and namespace rules, installer contract) is primary; detection only; handle identity; `repair-lease` with verified stop and kept exclusive lock (CU-32) | 5.9.5 | `deploy/linux/*`, `deploy/windows/*` | AA-17, AA-17b | R38-1; a privileged administrator outside the supported paths is out of scope | RESPONDED |
+| **R9-L1** scans | L5/L10 refused self and other installations | Classification: self exempt by PID + start; other installation allowed; unrelated allowed; same or unverifiable refused; copies stay inside the freeze | 5.9.5 | — | AA-17c | copied or renamed jars cannot always be found (freeze) | RESPONDED |
+| **R9-L1** AA-3a | psql "orphaned backend" mislabelled | Relabelled as a non-Java pre-default connection | 5.9.5 | — | AA-3a (ii) | — | RESPONDED |
+| **R9-J1** | A-2 used a non-existent RELEASED | NOT_ARCHIVAL predicate with decision evidence; eligibility consistent with AU-4 (final stale claims pass) | 5.9.6 | `UnresolvedObjectRepository.release`; V0019 `Resolution` | AA-21b | — | RESPONDED |
+| **R9-J2** | One window number for several pending settlements; post-state before J0 | `window_key` per subject (Q id), the plan fixed at J0 with SATISFIED_AT_J0 and NOT_PLANNED; separate transactions kept; `publication_seq` per run | 5.9.6 | `applyCancel` pending loop; `QuarantineMoves.settle` | AA-8b, AA-4b | — | RESPONDED |
+| **R9-J3** | Destination-only UNTRUSTED arrival omitted | Matrix row: non-attested reason with evidence, destination matching → QUARANTINED, basis kept UNTRUSTED; never authorises a new source move | 5.9.6 | `QuarantineMoves.arrived`, `isRecordedObject`, `settle` | AA-14f | — | RESPONDED |
+| §9 A-4 / byte classes | QUARANTINE_PENDING mislabelled as authoritative | Eligibility as `quarantineAttested`; `retireGenerationAt` (QUARANTINE_PENDING or UNRESOLVED → QUARANTINED); authoritative = CURRENT only | 5.9.6 | `UnresolvedObjects.quarantineAttested`; `FileContentRepository.retireGenerationAt` | AA-15 | — | RESPONDED |
+| §11 action states and publication identity | INTENDED → NOT_APPLIED; publications per run | Forward state machine with direct INTENDED → NOT_APPLIED or ABANDONED; `(run_id, publication_seq)` keys | 5.9.6 | — | AA-21b, AA-4b | — | RESPONDED |
+| §8 liveness | "bounded by its own completion" is not a time bound | Hold F1 while waiting; kill-and-resume; never release while a thread survives | 5.9.8 | — | AA-20c | R38-3 | RESPONDED |
+| **R9-A1** historical plans | Path inequality taken as proof of a replan; COLLISION retry gives a fresh UUID | Inventory of every target-assignment transition; relation H(O, uuid, g) from machine-readable provenance; AU-2 pointer, AU-4 W1, AU-5 own-copy and AU-8 corrected; refusal where H cannot be established; no waiver | 5.9.7 | `OperationProcessor` `plan` / `planRepair` / `quarantinePartialAndReplan`; `OperationAdminService.retry` / `applyCancel` | AA-11h…AA-11o | R38-4, R38-5 | RESPONDED |
+| §14-1 | Maintenance identity | as R9-M1 | 5.9.1 | | | | RESPONDED |
+| §14-2 | Run bootstrap and adoption | as R9-B1/B2 | 5.9.2 | | | | RESPONDED |
+| §14-3 | Pre-gate and restore states | as R9-B3/B4 | 5.9.3, 5.9.4 | | | | RESPONDED |
+| §14-4 | Archive initialisation | as R9-B4 | 5.9.4 | | | | RESPONDED |
+| §14-5 | Lease repair and scan scope | as R9-L1 | 5.9.5 | | | | RESPONDED |
+| §14-6 | Journal and source semantics | as R9-J1…J3 | 5.9.6 | | | | RESPONDED |
+| §14-7 | Historical audit | as R9-A1 | 5.9.7 | | | | RESPONDED |
+| §14-8 | Specification alignment | A-4, stale claims, publication identity, forward states, stall liveness | 5.9.6, 5.9.8 | | | | RESPONDED |
+| §14-9 | Owner choices | §8 (II): Q-36-1, (xi), elevated maintenance, GA002 and the rest; none granted | 8 | | | | DECISION (owner) |
+| §14-10 | Future acceptance | §8 (III); LP-17 3.8 | 8, 10 | | | | FUTURE |
+
+**Counts:** 40 application tables + 8 control tables = 48 gated (unchanged). Control units 31 → **34** (CU-31
+Archive ID binding, CU-32 lease repair, CU-33 run supersession). Business windows unchanged at 19 / 22.
+
+**Status:** revision 3.8 submitted. Nothing implemented; no new execution. F5-4 is not claimed closed; the design
+remains conditional on the unapproved Q-36-1 and D-LP-8 (xi). WP1-R1 and GAS-P4-002…GAS-P4-005 remain OPEN. Awaiting
+the tenth independent assessment. WP1 is not accepted; WP2 remains on HOLD.
+
+---
+
 ## WP1-R2: Historical Date database constraints (BLOCKING; corrected)
 
 **Finding (direction sheet, unaltered):**
