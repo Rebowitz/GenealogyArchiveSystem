@@ -84,6 +84,10 @@ TO.
 | Found | 2026-11-16, registering the Phase 3 row locks (LO-1 to LO-3) |
 | Status | **OPEN, escalated.** **SUPERSEDED ASSERTION:** the deadlock-freedom premise stated below (L1 is safe because session-first locking serialises it) is **wrong across sessions and subsystems** and must not be relied on; see WP1-R1 (BLOCKING), Scenarios A–D and GAS-P4-003. The replacement protocol is proposed in [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md), now revision 3.5 (D-LP-1…D-LP-9; modified Option C with P2-8g; global fail-closed activation, §5.6), and is not implemented. Not closed by specification. Response record: [`PHASE-4-WP1-AUDIT-CORRECTIONS.md`](PHASE-4-WP1-AUDIT-CORRECTIONS.md). |
 
+**[D4-31, 2026-11-17]** The replacement direction is now Architecture C (owner decision D4-31 in
+[`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md)). Proposal revision 3.9 is superseded as the intended architectural
+direction and retained as historical design and review evidence. Status unchanged: OPEN.
+
 > **Superseded assertion (kept for the record, do not rely on it):** the text below describes the original premise.
 
 **Cause.**
@@ -225,4 +229,7 @@ session is read-only. Neither stops an older process already running filesystem 
 upgrade path that leaves its own contract, so it refuses a newer database at every maintenance entry (GA003), and a
 newer build gets no ordinary write on an older database outside the recorded MIGRATE transition. This is design
 only; it does not change an older process that is already running. Status unchanged: OPEN.
+
+**[D4-31, 2026-11-17]** The 3.9 note above describes a superseded direction. Old-executable exclusion is now governed
+by Rule C-08 and remains open proof obligation 1 (`PHASE-4-DECISIONS.md`, D4-31). Status unchanged: OPEN.
 

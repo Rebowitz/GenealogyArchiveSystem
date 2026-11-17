@@ -3,6 +3,8 @@
 **Status: APPROVED by the owner on 2026-11-15**, for all 30 decisions and open items U-1…U-3, with the choices below. Architecture: [ADR-0012](architecture/ADR-0012-people-dates-places.md), accepted (architectural planning) on 2026-11-15. The approval includes
 the applicable architectural refinements in [`PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md`](PHASE-4-ARCHITECTURAL-CLARIFICATIONS.md).
 **D4-28 was approved as modified** and **D4-30 as B (deferral)**.
+**D4-31** (Phase 4 WP1 architectural direction: Architecture C, Rules C-01…C-12) was approved by the owner on
+2026-11-17; see its section below. It is not WP1 implementation authorization or acceptance.
 
 Approval of the decisions does **not** authorize implementation. Phase 4 coding still requires a separate owner
 instruction. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
@@ -68,6 +70,100 @@ decisions.
 The architecture is recorded in [ADR-0012](architecture/ADR-0012-people-dates-places.md), **accepted — architectural
 planning, 2026-11-15** ([review record](PHASE-4-PLAN-REVIEW-CORRECTIONS.md)). This is not implementation
 authorization.
+
+## Approved decision (owner, 2026-11-17): D4-31 ⚠ Phase 4 WP1 architectural direction
+
+| ID | Chosen | Approved content | Superseded or not chosen |
+|---|---|---|---|
+| D4-31 ⚠ | **C — Hybrid, with explicit offline maintenance and recovery** (owner, 2026-11-17) | The governing architectural direction for the replacement Phase 4 WP1 design is Architecture C, constrained by Rules C-01…C-12 below. It retains the demonstrated ordinary-operation concurrency, preservation and recovery protections, and replaces the generic maintenance, controller, action and publication framework with a controlled, exclusive offline maintenance and recovery boundary. | **A** — the corrected comprehensive protocol (`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md` revision 3.9); **B** alone, as a minimal alternative without the retained ordinary corrections |
+
+**Technical basis.** [`PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md`](PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md)
+(assessed commit `0b8f32b`). The assessment is the basis for this decision. It is **not** an approved implementation
+specification, and its proposed mechanisms (for example an operational singleton table, an effect-owner token or a
+native fence) are not approved by this entry.
+
+**Rationale.**
+- The approved specifications require safe, fail-closed recovery, not unattended continuation or continuous
+  availability during maintenance (BUILD-SPEC §56 permits restoring a pre-upgrade checkpoint).
+- The comprehensive protocol's ordinary safety corrections are necessary.
+- Its generic resumable maintenance controller, protocol epochs, per-connection registrations and generic
+  action/window/publication sequences exceeded the approved requirements.
+- They also failed to converge across the ninth, tenth and eleventh independent assessments
+  ([`ENGINEERING-DESIGN-INSTRUCTIONS.md`](ENGINEERING-DESIGN-INSTRUCTIONS.md) §3, §11).
+- Architecture C keeps the demonstrated protections and removes the unnecessary generic coordination.
+
+**Adopted rules (governing architectural requirements for the replacement WP1 design):**
+
+| Rule | Requirement |
+|---|---|
+| **C-01** Preserve accepted functionality | Preserve all accepted Phase 0–3 functionality, archival identities, security controls, provenance, integrity guarantees and regression protections. |
+| **C-02** Retain necessary WP1 corrections | Retain demonstrated corrections for concurrency ordering, physical-content ownership, generation and claim handling, durable evidence and safe operation recovery. The simplification must not reintroduce previously identified deadlocks, unsafe ownership transitions, unauthorized release or overlapping filesystem effects. |
+| **C-03** Remove unnecessary generic machinery | Do not carry forward the comprehensive generic maintenance controller, the action/window/publication framework, protocol epochs and per-connection registrations merely because they exist in revision 3.9. Retain an individual mechanism only when an approved requirement or a demonstrated failure case justifies it. |
+| **C-04** Exclusive offline maintenance | Use planned, exclusive offline maintenance for incompatible migrations, exceptional restoration and installation rebinding. Allow deliberate administrative recovery after ambiguous failures. Unattended continuation and continuous availability during such maintenance are not required. |
+| **C-05** Designated producer host | For version 1, each installation has one designated producer host. Multiple supported web, worker and CLI processes may operate on that host. Remote PostgreSQL and NAS storage remain permissible, subject to verified exclusion, identity, permissions and storage-safety requirements. A local operating-system lock must not be represented as a distributed fence. |
+| **C-06** Separate administrative authority | Separate ordinary runtime authority from maintenance and database administrative authority. Apply least privilege. Ordinary runtime credentials must not automatically acquire schema-administration or unrestricted maintenance privileges. |
+| **C-07** Verified former-writer exclusion | A replacement worker, administrator or restored installation must not take over a conflicting operation until the former writer is verified unable to continue conflicting database or filesystem effects. A lost PostgreSQL connection, an expired heartbeat, an expired lease or an issued stop request is not sufficient proof. Use verified process termination, proven fencing, verified host or access exclusion, or another demonstrated equivalent. |
+| **C-08** Legacy executable exclusion | Prevent incompatible old executables and supported legacy launch paths from restarting or writing during migration and recovery. Maintain exclusion continuously across the offline interval, including interrupted maintenance and unknown database outcomes. |
+| **C-09** Fail-closed uncertainty | When ownership, former-writer exclusion, installation identity or required recovery evidence cannot be established, refuse the unsafe conflicting operation. Do not automatically steal ownership after a timeout. Allow unrelated safe operations to continue where the accepted concurrency and authorization rules permit them. |
+| **C-10** Bounded historical trust | Adopt the bounded historical-writer trust policy identified as R39-T, with independently verified ownership and conflict checks and refusal of `UNPROVED`, conflicting or otherwise unsafe inherited states. Do not invent missing provenance, retrospectively manufacture target assignments, or treat historical absence as proof of a prior action. Preserve valid repeated repairs and legitimate cross-operation associations. |
+| **C-11** Permanent archival identity | Preserve Archive ID, permanent archival identities, original evidence and accepted operation and history records across migration, recovery and restoration. Operational host or installation bindings may change only through authorized, durable, validated procedures. |
+| **C-12** Maintain phase boundaries | Keep WP1 focused on the approved concurrency, preservation, maintenance and safe recovery boundaries. Do not prematurely implement the complete Phase 8 backup/restore product or a general-purpose disaster-recovery controller. |
+
+**Approved operational assumptions and administrative recovery model** (as stated by Rules C-04…C-09 and C-11):
+- **Producer hosts:** one designated producer host per installation in v1, running any number of supported web,
+  worker and CLI processes. Remote PostgreSQL and NAS storage are allowed under verified exclusion, identity,
+  permission and storage-safety requirements.
+- **Maintenance:** planned, exclusive and offline for incompatible migrations, exceptional restoration and
+  installation rebinding. Planned downtime is accepted.
+- **Ambiguous failures** (interrupted maintenance, unknown database outcomes, an unverifiable former writer) are
+  resolved by deliberate administrative recovery. There is no automatic takeover after a timeout, and legacy
+  exclusion stays in force throughout.
+- **Least privilege:** ordinary runtime authority is separate from maintenance and database administrative authority.
+- **Archival identity:** Archive ID and archival identities are permanent. Host and installation bindings change
+  only through authorized, durable, validated procedures.
+
+**Unresolved technical proof obligations** (open engineering obligations, **not** settled design facts; the
+specific mechanisms remain subject to the replacement architectural contract and focused feasibility proofs):
+1. Verify complete exclusion of incompatible old executable paths.
+2. Establish a minimal, provable filesystem effect-owner or fencing mechanism.
+3. Verify process-lifetime native locking where selected, including Windows and Linux behaviour.
+4. Demonstrate safe handling of blocked NAS or storage I/O and lost PostgreSQL sessions.
+5. Define least-privilege runtime and offline administrative role separation.
+6. Establish durable, atomic operational binding and transition evidence.
+7. Verify historical admission and claim equivalence using realistic inherited-state fixtures.
+8. Demonstrate safe intermediate-migration recovery and unknown-COMMIT handling.
+9. Preserve PostgreSQL 16/18 and Windows/Linux support.
+10. Maintain all previously accepted regression and archival-integrity obligations.
+
+Approval of Architecture C does not prove that any of these is solved.
+
+**What this decision does not do:**
+- It selects an architecture. It is **not** WP1 implementation authorization and **not** WP1 acceptance.
+- It does not authorize drafting the replacement WP1 architectural contract, the feasibility proofs or any
+  implementation. Each requires a separate owner instruction.
+- It closes no finding. F5-4, WP1-R1 and GAS-P4-002…GAS-P4-005 remain OPEN. F5-1…F5-3 remain architecturally
+  resolved and must survive the replacement design (Rule C-02).
+- Revision 3.9 of [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md) is
+  **superseded as the intended architectural direction by the owner's Architecture C decision; retained as
+  historical design and review evidence.** It is neither accepted nor implemented, and it is not modified.
+- The decisions requested in that proposal (D-LP-1…D-LP-9, Q-36-1 and the rest) are **not** approved by this entry.
+  Where a rule above covers the same subject, the rule governs. The examples are C-05 (hosting, compare Q-36-1),
+  C-08 (legacy exclusion, compare D-LP-8 (xi)) and C-10 (R39-T, compare D-LP-8 (xii)). A proposal mechanism is
+  approved only if the replacement contract carries it forward and the owner approves that contract. D-LP-9 (a)
+  remains eligible for separate bounded authorization and is not authorized here.
+
+**Status:**
+
+| Item | Status |
+|---|---|
+| Architecture C | OWNER APPROVED (2026-11-17) |
+| Operating and recovery rules C-01…C-12 | OWNER APPROVED (2026-11-17) |
+| WP1 revision 3.9 | Superseded architectural direction; historical evidence retained |
+| Replacement WP1 contract | NOT YET AUTHORIZED OR COMPLETED |
+| Fencing and exclusion feasibility proofs | PENDING |
+| WP1 implementation | NOT AUTHORIZED |
+| WP1 acceptance | PENDING |
+| WP2 | HOLD |
 
 ---
 

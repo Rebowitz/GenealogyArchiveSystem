@@ -823,6 +823,30 @@ accepted; WP2 remains on HOLD.
 
 ---
 
+### Owner decision D4-31: Architecture C (2026-11-17)
+
+This is a status record only; no finding above is altered. The "awaiting the eleventh independent assessment"
+statement in the tenth-assessment section is historical.
+
+After the eleventh independent assessment and
+[`PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md`](PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md),
+the owner approved Architecture C (hybrid, with explicit offline maintenance and recovery) and Rules C-01…C-12 as
+decision **D4-31** in [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md).
+
+Proposal revision 3.9 is **superseded as the intended architectural direction by the owner's Architecture C
+decision; retained as historical design and review evidence.** It is neither accepted nor implemented. The
+responses recorded above describe revision 3.9 and are not responses under Architecture C.
+
+The findings of every assessment remain inputs to the replacement contract.
+
+**Still open:**
+- WP1-R1, F5-4 and GAS-P4-002…GAS-P4-005 remain OPEN; the architecture change closes none of them.
+- The replacement WP1 contract, the feasibility proofs and implementation are not authorized.
+
+WP1 is not accepted. WP2 remains on HOLD.
+
+---
+
 ## WP1-R2: Historical Date database constraints (BLOCKING; corrected)
 
 **Finding (direction sheet, unaltered):**

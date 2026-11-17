@@ -578,6 +578,30 @@ Names, Persons, Places, resolutions) and that no Change History entry of a forbi
 The phase gate (§62) is all of §9.1 marked Full, plus §9.2, passing on every job. **No merge, acceptance or tag
 without a separate owner instruction.**
 
+### 10.1 WP1 architectural status (owner decision D4-31, 2026-11-17)
+
+The WP1 locking and maintenance protocol (WP1-R1, GAS-P4-002) is governed by owner decision **D4-31**:
+Architecture C (hybrid, with explicit offline maintenance and recovery) and Rules C-01…C-12 in
+[`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md). The WP1 gate in the table above is unchanged.
+
+| Item | Status |
+|---|---|
+| WP1 architectural direction | **SIMPLIFY — OWNER APPROVED** (Architecture C) |
+| Replacement WP1 architectural contract | Pending (not yet authorized or completed) |
+| Feasibility verification (fencing and exclusion proofs) | Pending |
+| WP1 implementation (of the Architecture C replacement design) | Not authorized |
+| WP1 acceptance | Pending |
+| WP2 | HOLD |
+
+[`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md) revision 3.9 is superseded as the
+intended architectural direction by the owner's Architecture C decision and retained as historical design and review
+evidence. It is neither accepted nor implemented.
+
+The technical basis is
+[`PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md`](PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md).
+The WP1 work already committed on `phase-4` (the Historical Date work and the WP1-R2 and WP1-R3 corrections) is
+unchanged and remains unaccepted.
+
 ---
 
 ## 11. Assumptions, unresolved questions and acceptance risks
