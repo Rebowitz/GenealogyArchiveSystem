@@ -210,3 +210,9 @@ filter other than `TransportSecurityFilter`. The database primitive of the remed
 `default_transaction_read_only = on`. New builds override it at connection start, so any older build becomes
 read-only at the database, for writes and locking reads alike. This is part of D-LP-8 (v), not a separate change.
 
+**[3.6] Remedy narrowed** (seventh assessment §3, §13). The role default affects only **new** sessions whose client
+does not override it. Existing older-build sessions keep their read-write setting and are ended by same-role
+termination during the one-time transition (proposal §5.7.3). Compatible builds are fenced by the instance lease
+and the per-connection identity check (§5.7.1–§5.7.5). The remedy does **not** make "all older sessions" read-only.
+Status unchanged: OPEN.
+

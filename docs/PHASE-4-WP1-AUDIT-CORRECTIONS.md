@@ -594,6 +594,76 @@ listed separately) and an independent assessment. WP1 is not accepted; WP2 remai
 
 ---
 
+### Seventh independent architectural assessment (revision 3.5 → revision 3.6)
+
+| | |
+|---|---|
+| Assessment | `Phase-4-WP1-Seventh-Architectural-Assessment.md` (reviewed head `9993220`), received complete |
+| Direction | Phase 4 WP1 — Locking Protocol Revision 3.6 Direction (baseline `99932207b1fe4f4f8d1a4ec8b2a9c7c7f7ee42b0`), received complete |
+| Result | proposal revision 3.6 (same file), documentation only |
+| Disposition received | PROPOSAL REQUIRES REVISION. F5-4 OPEN; F5-1…F5-3 retained as resolved; all five named issues OPEN; WP1 unaccepted; WP2 HOLD |
+
+The assessment's findings are cited by section and are not restated or altered here. "Proposal" means
+`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md` revision 3.6.
+
+| Ref | Finding | Response (revision 3.6) | Status |
+|---|---|---|---|
+| §3 Layer A scope | A role default does not change existing sessions; it is overridable; it is a client premise | Narrowed (§5.7.4). Existing sessions are terminated after the default is installed (T4→T5, §5.7.3; builder check §11.9 (a)/(b)). The client premise is R36-3, tested by AA-3. P/E are never placed in role or database defaults. | RESPONDED |
+| §3 identity and reset | Fail-closed settings; `SET LOCAL` reversion; reconnect must revalidate; prepared statements; RR; configured role, not `CURRENT_USER` | §5.7.4 installation contract; F3 validates every physical connection (§5.7.5); maintenance connections are never pooled; the role default is for the configured role | RESPONDED |
+| §4 R7-1 connected-old cycle | The old administrator's locking `SELECT` precedes any DML gate; pre-ACTIVE metadata writers | F2: OS verification → role default → same-role termination before any compatible writer is admitted, including pre-ACTIVE; schedule in §5.7.6; AA-3a | RESPONDED (design); future test |
+| §5 Case A | Fresh legacy reconnect is read-only | retained as layer A's proved scope | RETAINED |
+| §5 Case B | Disconnected old process continues filesystem work | Legacy: OS verification at T2 (a backend count is not evidence). Compatible: F1 is proof of termination. AA-3b. | RESPONDED |
+| §5 Case C | Stale new worker resumes an INTENDED move after the epoch changes | The epoch changes only under MA, which needs F1 exclusive, so it cannot happen while the worker lives; schedule in §5.7.6; AA-3c, AA-3d | RESPONDED |
+| §5 checks | Sessions, presence, EXCLUSIVE locks and bootstrap establish observation, not termination | Demoted to refusal evidence; the authority is F1 and F2 | RESPONDED |
+| §6 CU-0 | Migration DDL can wait; the role default must roll back with the DDL | CU-0 is one Flyway transaction with `lock_timeout` (§5.7.11) | RESPONDED |
+| §6 CU-1/CU-2 | Real process exclusion, not sessions | F1, F2 (CU-2, CU-9, CU-13) | RESPONDED |
+| §6 CU-3/CU-4 | NOWAIT barrier scope; audit coverage | CU-4 retained, with narrowed claims; AU rebuilt | RESPONDED |
+| §6 CU-5 | Singleton invariant; event and finding constraints; fail-closed trigger | CU-5: exactly one row (trigger); fail-closed gate (§5.7.4) | RESPONDED |
+| §6 CU-6 | Startup result not a lifetime capability through reconnects | It is valid for the life because of F1; it is revalidated per connection by F3 (CU-14, CU-8) | RESPONDED |
+| §6 CU-7 | Gate limits; "never waits" | Narrowed (§5.7.11): compatible with B0; can wait behind ACCESS EXCLUSIVE migration DDL | RESPONDED |
+| §6 CU-8 | Unknown COMMIT while the backend may still commit | CU-21: undecided until the recorded backend is confirmed gone | RESPONDED |
+| §6 CU-9…CU-11 | Re-admission fencing; resolution lifetime; protocol-change identity | CU-6, CU-10…CU-20; §5.7.12 protocol change under MA (declares the current identity, then `SET LOCAL` the new one) | RESPONDED |
+| §6 attribution | `--administrator` is not authentication | `operator_principal` = the OS identity; the named Administrator is recorded as named only (§5.7.8) | RESPONDED |
+| §6 restore | Role defaults are not restored automatically; dump ACTIVE is not a certificate | Database identity (`system_identifier`, OID) recorded; `verify-restore`; CU-14 checks layer A (§5.7.12); AA-13 | RESPONDED |
+| §7 DML coverage | Statement triggers only; partitions, sequences, DDL, privileges, replica mode | §5.7.4: `ENABLE ALWAYS`, `VOLATILE`, `search_path`; catalog coverage check; sequence policy (gaps accepted); DDL only under MA | RESPONDED |
+| §7 E-1…E-27 | Coverage policy | §5.7.5 corrections (E-2/3/4, E-12, E-14, E-15…E-21, E-23/25, E-24, E-26, E-27); E-11 (§5.7.10) | RESPONDED |
+| §8 R7-A1 | First generation need not be 1 | AU-1 g₀ by creator; AU-2 NEW_CONTENT; AA-11b | RESPONDED |
+| §8 R7-A2 | Historical vacated evidence | `vacated` is evidence only; constraint check only; UNRESOLVED state included; AA-11c | RESPONDED |
+| §8 R7-A3 | Trusted partial-prefix evidence | AU-5 per-reason binding; no downgrade; AA-14b | RESPONDED |
+| §8 R7-A4 | Destruction U names DESTROY; generation-null QUARANTINED_COPY at a Q destination | AU-4 writer roles W1–W3; AU-6 bound references; AA-10b, AA-10c | RESPONDED |
+| §8 AU-1…AU-8 table | Per-check revisions, including AU-7 PROMOTED and AU-8 closure | §5.7.9 (invariant, constructors, pass, fail, joins, legacy, fixtures) | RESPONDED |
+| §8 non-ASCII | A blanket refusal is a new boundary | Withdrawn; constructor-output checks instead; no Unicode rule proposed (D-LP-8 (viii) not proposed) | RESPONDED |
+| §9 run-long exclusion | B0 does not survive commits; the resolver key excludes nothing else | One MA for every maintenance command (§5.7.7) | RESPONDED |
+| §9 atomicity and journal | Multi-window actions; a final row is not atomic; staging deletion | Journal tables and per-window rows in the window's transaction; resume from business state; byte classes (§5.7.8) | RESPONDED |
+| §9 A-1 | Conditional; full identity rules | A-1 under MA, with V0020 identity | RESPONDED |
+| §9 A-2 | "Foreign only" inconsistent with AU-4 | A-2 refuses any non-final claimant | RESPONDED |
+| §9 A-3 | Eligibility; revalidation before keyed release; multi-window | Accepted `requireCancellable`; revalidation in J1 and immediately before `releaseTargetsAt`; windows kept | RESPONDED |
+| §9 A-4 | Bound evidence; the same protocol | A-4 journalled; full identity | RESPONDED |
+| §9 A-5 | INGEST/REPAIR only; CAS; not DESTROY | §5.7.8: PROMOTING and PROMOTED only; CAS; attribution; target, high water and ownership unchanged; D-LP-8 (vi) | DECISION (owner) |
+| §9 A-6 | Not acceptable as bounded | Deferred (D-LP-8 (vii)) | DEFERRED |
+| §10 download | Precedence; no false "recorded"; no new rehash | §5.7.10; AA-22 | RESPONDED |
+| §11 AA-1…AA-16 | Per-case amendments | LP-17 rebuilt as AA-1…AA-24 (§10) | RESPONDED (future tests) |
+| §11 DB companions | Do not infer the absence of row locks from `pg_locks` | Probe rules in the LP-17 preamble | RESPONDED |
+| §11 LP-10d(ii) | (ii-b) contradictory | (ii-b1) coordinator test waiting at Ct; (ii-b2) raw unique-key characterisation, labelled; (ii-a) retained | RESPONDED (future tests) |
+| §12 counts | 19 / 22 business windows; control scope separate; 40 tables not a theorem | Unchanged 19 / 22; CU-0…CU-21 separate; 47 tables with a catalog coverage check | RESPONDED |
+| §13 decisions | D-LP recommendations | Proposal §8 grouped (A) supported, (B) behaviour, (C) schema and control, (D) D-LP-9(a), (E) deferred or optional | DECISION (owner) |
+| §13 GAS-P4-005 | The remedy cannot claim all older sessions become read-only | `issues.md` remedy text narrowed | RESPONDED |
+| §14 1–8 | Minimum revision | §5.7.1–§5.7.13, §10, §11.9 | RESPONDED (design) |
+
+**Builder observations (no new issue entry).** Source checks for this revision confirmed:
+- the existing-session behaviour of role defaults (§11.9 (a));
+- that `DestructionProcessor.newRecord` names the DESTROY operation;
+- that `quarantinePartialAndReplan` records trusted partial evidence;
+- that `commitNewContent` stores `op.targetGeneration`.
+
+These are corrections to the 3.5 proposal, recorded above against the assessment's findings, not new accepted-code
+defects.
+
+**Status:** revision 3.6 submitted. Nothing implemented. WP1-R1 and GAS-P4-002…GAS-P4-005 are OPEN. Awaiting the
+eighth independent assessment and owner decisions (proposal §8). WP1 is not accepted; WP2 remains on HOLD.
+
+---
+
 ## WP1-R2: Historical Date database constraints (BLOCKING; corrected)
 
 **Finding (direction sheet, unaltered):**
