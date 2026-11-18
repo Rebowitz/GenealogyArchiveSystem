@@ -5,6 +5,8 @@ the applicable architectural refinements in [`PHASE-4-ARCHITECTURAL-CLARIFICATIO
 **D4-28 was approved as modified** and **D4-30 as B (deferral)**.
 **D4-31** (Phase 4 WP1 architectural direction: Architecture C, Rules C-01…C-12) was approved by the owner on
 2026-11-17; see its section below. It is not WP1 implementation authorization or acceptance.
+**D4-32** (WP1 Architecture C historical admission: global-first refusal, OD-7) was approved by the owner on
+2026-11-18; see its section below. It is not WP1 implementation authorization or acceptance.
 
 Approval of the decisions does **not** authorize implementation. Phase 4 coding still requires a separate owner
 instruction. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
@@ -164,6 +166,27 @@ Approval of Architecture C does not prove that any of these is solved.
 | WP1 implementation | NOT AUTHORIZED |
 | WP1 acceptance | PENDING |
 | WP2 | HOLD |
+
+## Approved decision (owner, 2026-11-18): D4-32 Phase 4 WP1 Architecture C historical admission refusal (OD-7)
+
+| ID | Chosen | Approved content | Not chosen |
+|---|---|---|---|
+| D4-32 | **Global-first historical admission refusal** (owner, 2026-11-18; Gate 2 correction assignment) | The initial historical admission of the WP1 Architecture C boundary contract MUST refuse READY while unresolved UNPROVED evidence, or a genuine ownership or alias conflict, prevents safe admission. Scoped or class-specific admission is **deferred** until separate owner approval and a proof covering every relevant writer and recovery path. Historical evidence, legitimate repeated repairs, cross-operation associations and the approved R39-T trust premise (D4-31 C-10) are preserved. | Scoped admission now (for example, placing affected operations in BLOCKED and proceeding to READY): deferred, because one blocked operation does not disable every competing writer or recovery path |
+
+**Origin:** contract open decision OD-7 in
+[`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md) (§8, §13). The
+independent Gate 2 review
+([`PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md`](PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md) §10, §13)
+recommended global initial refusal.
+
+**What this decision does not do:**
+- It decides only the refusal scope.
+- It does not accept the boundary contract, which remains DRAFT — NOT ACCEPTED.
+- It does not authorize implementation or the feasibility proofs.
+- It closes no finding: F5-4, WP1-R1 and GAS-P4-002…GAS-P4-005 remain OPEN.
+- It does not resolve OD-1 (D-LP-9 (a)), OD-2 (D-LP-3), OD-3, OD-4, OD-5, OD-6 or OD-8.
+
+WP1 remains unaccepted. WP2 remains on HOLD.
 
 ---
 
