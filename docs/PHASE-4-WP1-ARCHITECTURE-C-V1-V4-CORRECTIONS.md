@@ -7,6 +7,19 @@
 | Revised contract | [`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md), **Draft 3**. Changes are tagged **[G3-V1]**…**[G3-V4]**. |
 | Status | Documentation only. DRAFT — NOT ACCEPTED. No implementation, no experiments, no finding closed. The verification text is not altered. No new owner policy decision was needed. |
 
+> **Draft 4 note (2026-11-18).** The Draft 3 verification
+> ([`PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md)) found
+> V1 and V4 partial. Draft 4 **supersedes** these statements below:
+> - the label census as proof that no former backend remains;
+> - the label-based "exact attribution" for administrative termination;
+> - "a spoofed or foreign label can only cause refusal";
+> - the connection label as "the one new mechanism";
+> - "every row matches exactly one listed class".
+>
+> In Draft 4, labels are diagnostic only. Reclaim requires E-1 and E-2. Termination requires an independently recorded
+> tuple, or the offline drain. Exactly-one is scoped to producer classes. See
+> [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md).
+
 ## 1. Correction map
 
 | Finding | Contract sections | Response |
