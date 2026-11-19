@@ -2,11 +2,12 @@
 
 | | |
 |---|---|
-| Status | **DRAFT — NOT APPROVED.** Planning document only. It authorizes no experiment, prototype, environment, account or review. |
+| Status | **DRAFT — NOT APPROVED. Revision 2 (2026-11-19).** Planning document only. It authorizes no experiment, prototype, environment, account or review. Prepared for **one consolidated independent Codex review** under §10A.4; that review is not initiated by this document. |
+| Revision 2 | Incorporates the owner's final scope clarification of 2026-11-19: local storage as the primary baseline; NFS as the initial NAS evaluation target, without making it an exclusive dependency; SMB and other network filesystems supportable once independently verified; no exhaustive NAS protocol testing; conservative recovery for unproven configurations; bounded Gate B checks for transaction ordering, outermost-transaction ownership and renewal performance; planning questions consolidated (§11). |
 | Governing rule | [`ENGINEERING-DESIGN-INSTRUCTIONS.md`](ENGINEERING-DESIGN-INSTRUCTIONS.md) §10A (owner-approved, adopted 2026-11-18), in particular §10A.1 (review plan) and §10A.2 (Gate B) |
 | Artifact under Gate B | [`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md), Draft 7, unchanged since `5cfb0b4df6cf244950d6dca52715ffd5c30504b5` and accepted at Gate A by **D4-33** |
 | Owner selections incorporated | **D4-34** (2026-11-18): OD-3, OD-6 and OD-8, each Option A, each conditional on feasibility (§3) |
-| Repository baseline for this plan | `phase-4` at `90de3abc68bcc21035eb12b11c776297ec2853ea` |
+| Repository baseline for this plan | `phase-4` at `90de3abc68bcc21035eb12b11c776297ec2853ea` (Revision 1: `d93e74a`) |
 | Gates | **A:** ACCEPTED 2026-11-18 (D4-33). **B:** NOT ACCEPTED; proof execution NOT AUTHORIZED. **C:** NOT AUTHORIZED. **WP2:** HOLD. |
 
 ---
@@ -42,9 +43,17 @@ plan.
 
 ## 3. Gate B scope
 
-**Assumption (requires owner confirmation, §10 AU-2).** No separate owner scope statement exists in the repository.
-This plan adopts the following split, which follows the contract's own division in §12 ("Left to implementation
-acceptance") and D4-33's obligation list.
+**Owner scope clarification (2026-11-19).** The split below follows the owner's clarification and the contract's own
+division in §12 ("Left to implementation acceptance"):
+- **Storage.** Local storage is the primary baseline in every cell. **NFS is the initial NAS evaluation target**, not
+  an exclusive architectural dependency. SMB and other network filesystems remain supportable once their safety
+  properties are independently verified (§6.2). Exhaustive NAS protocol testing is **not** required for Gate B.
+- **Conservative recovery.** Any storage configuration whose safety properties are unproven keeps the contract's
+  fail-closed route: conflicting takeover is refused until an administrator verifies storage or access resolution
+  (contract §5.5, §5.7).
+- **Bounded checks.** Transaction ordering, outermost-transaction ownership and renewal performance get **bounded
+  feasibility checks only** (§5.9). Full implementation verification of each remains Gate C.
+- The accepted contract is unchanged.
 
 ### 3.1 In Gate B: feasibility evidence
 
@@ -52,12 +61,15 @@ acceptance") and D4-33's obligation list.
 |---|---|---|---|
 | **P1** | Process identity: absent, same, or PID-reused process, under the real service accounts | §5.3 | E-1 automatic reclaim |
 | **P2** | `FileChannel` process-lifetime installation fence | §6.3 | **OD-3 condition** |
-| **P3** | NAS data and namespace completion after former-process death | §5.5 | Conflicting takeover on each tested NAS topology |
+| **P3** | NAS data and namespace completion after former-process death, on **NFS** (initial NAS target) | §5.5 | Whether conflicting takeover may be automatic on the tested NFS configuration; otherwise the conservative route |
 | **V-R** | Administrative principal capability verification | §10.1, §10.4 | **OD-6 condition** |
 | **V-H** | OS machine identifier platform validation | §10.2 | **OD-8 condition** |
 | **Proof 1** | Exclusive maintenance boundary, cases (a)–(o) | §6, §7, §12 | Offline maintenance feasibility |
 | **Proof 2** | Former-writer fencing, cases (a)–(q) | §5, §12 | Token and reclaim feasibility |
 | **§12.1** | Surviving-renewal regression, variants A–C | §12.1 | Single-row renewal under client death |
+| **F-O** | Bounded check: token-owned O prefix in UUID order as the first lock, on the prototype paths | §5.4.1, §5.4.2, T-3 | Whether the O-first ordering is achievable on representative paths |
+| **F-T** | Bounded check: outermost-transaction ownership of T-1, T-4 and T-6 under Spring `TransactionTemplate` | T-1, T-4, T-6 | Whether outermost ownership can be enforced, and fails closed when nested |
+| **F-R** | Bounded check: per-operation receiver renewal throughput | §5.4.1 renewal row; T-m | Whether one-operation-per-transaction renewal keeps up at the planning load |
 
 V-R and V-H are not separately named in the contract. They are the verifications D4-34 attaches to OD-6 and OD-8.
 They test only the **capabilities** of the selected options. They are not the deployment privilege inventory.
@@ -65,15 +77,17 @@ They test only the **capabilities** of the selected options. They are not the de
 ### 3.2 Retained for Gate C (not Gate B evidence)
 
 These stay open and are **not** satisfied by any Gate B result:
-- the complete EDT, operation-row-writer and implicit-lock inventory, and the retained-window reorderings (§5.4.2);
-- enforcement of outermost T-1, T-4 and T-6 despite the ordinary Spring `TransactionTemplate`;
+- the **complete** EDT, operation-row-writer and implicit-lock inventory, and **all** retained-window reorderings
+  (§5.4.2); F-O covers representative paths only;
+- **codebase-wide** enforcement of outermost T-1, T-4 and T-6; F-T covers the mechanism on the prototype paths only;
 - §5.8 effect-inventory completeness and complete EDT coverage;
 - the full privilege inventory and deployment changes (contract §12 "obligation 5");
 - realistic inherited-state fixtures (obligation 7);
 - B-9 grouping current-run revalidation and the late-runner test;
 - §5.8 integrity and recovery compatibility;
 - the full Phase 0–3 and Phase 4 regression matrix on Windows and Linux × PostgreSQL 16 and 18 (obligations 9, 10);
-- receiver renewal performance under the supported workload (see Q-3).
+- receiver renewal performance under production deployment and workload; F-R is a bounded characterisation only;
+- verification of any further storage topology for automatic takeover (§6.2).
 
 A Gate B prototype that happens to exercise one of these is not evidence for it.
 
@@ -83,6 +97,9 @@ A Gate B prototype that happens to exercise one of these is not evidence for it.
   approved and not decided by any Gate B outcome. Where a proof needs a stand-in, §4.3 applies.
 - Multi-host producers, Phase 8 backup and restore, reverse migrations (contract §2.2).
 - JNA or any other new dependency. If P2 fails, the owner decides separately (D4-34).
+- Exhaustive NAS protocol testing. SMB, NFS versions or server products other than the authorized NFS configuration,
+  and other network filesystems are **not** Gate B items. They are neither withdrawn nor approved for automatic
+  takeover; until verified (§6.2) they use the conservative route.
 - Any production deployment or production data.
 
 ---
@@ -102,8 +119,17 @@ A Gate B prototype that happens to exercise one of these is not evidence for it.
   version, and the relevant server settings (§4.4).
 - **P1, P2 and V-H** do not depend on PostgreSQL; one run per OS suffices, unless the proof involves the database.
 - **V-R** is a PostgreSQL question; it runs on both versions on each OS, because Windows and Linux packaging differ.
-- **Remote PostgreSQL** (contract A-3) is a supported deployment but not in the base matrix. See Q-4.
+- **Remote PostgreSQL** (contract A-3) is a supported deployment but not in the base matrix (§11.2).
 - A cell that cannot be run is reported as **NOT RUN**, never as PASS by analogy from another cell.
+
+**Storage dimension.**
+
+| Storage | Where | Status in Gate B |
+|---|---|---|
+| Local filesystem (Linux ext4 or xfs; Windows NTFS) | Every cell | **Primary baseline.** Required for every storage-touching item. |
+| NFS, one authorized configuration (§6.1) | Linux cells (L16 or L18; one suffices for storage semantics) | **Initial NAS evaluation target.** P3, Proof 2 (b) and (g), and NAS-labelled Proof 1 cases. |
+| NFS from a Windows client | — | Not required. Optional only if the owner authorizes it. |
+| SMB and other network filesystems | — | Not tested in Gate B. Conservative route applies until verified (§6.2). |
 
 ### 4.2 Test-only prototype boundary
 
@@ -116,7 +142,7 @@ hooks and a client-death harness. Subject to owner authorization (AU-3):
   branch.
 - **Marking.** Every prototype class, migration and SQL object is named and documented as test-only.
 - **Reuse.** Prototype code is evidence, not an implementation. Gate C implementation is separately authorized and
-  separately reviewed, whether or not it reuses prototype code (Q-6).
+  separately reviewed, whether or not it reuses prototype code (§11.2).
 - **Dependencies.** No new runtime dependency. A test-only library needs owner approval and must not appear in a
   production artifact.
 - **Seams.** Test hooks and server-side barrier functions exist only in scratch databases and test builds.
@@ -227,13 +253,13 @@ contract.
 |---|---|
 | **Hypothesis** | After the former process has terminated, and the storage outcome was reached or the interval was left open, an old client cannot later change the bytes or the namespace state relied on by the new owner, on the tested topology. |
 | **Prerequisites** | NAS configuration information (§6), authorized; a stall injector able to pause the server or export; Proof 2 prototype paths for copy and rename. |
-| **Environment** | Per authorized topology only: for example Linux NFS client, Windows SMB client. Local volumes as a control. |
-| **Test points** | (1) Stalled copy, then client kill, server resumed, reconnection; (2) stalled rename and stalled delete, same sequence; (3) unforced write left in the client cache, then client process death (client kernel write-back can outlive the process); (4) observation of bytes and namespace **at the server**, not only from the client, after the new owner verified size and hash; (5) for SMB, lease or handle state after the session is restored. |
+| **Environment** | The one authorized NFS configuration (§6.1), from a Linux client. Local volumes as the control. No other protocol. |
+| **Test points** | (1) Stalled copy, then client kill, server resumed, reconnection; (2) stalled rename and stalled delete, same sequence; (3) unforced write left in the client cache, then client process death (client kernel write-back can outlive the process); (4) observation of bytes and namespace **at the server**, not only from the client, after the new owner verified size and hash; (5) after reconnection, whether the client replays or retransmits any request from the dead process (for NFSv4, state and lease recovery). |
 | **Evidence** | Server-side and client-side timelines; hashes before and after; server logs where available. |
 | **Pass** | A **mechanism-level** demonstration for the topology that no accepted late change is possible after the defined end state, plus no late change observed. An observation window with no late change is **not** sufficient alone. |
 | **Fail** | Any late write or namespace change altering what the new owner relied on. |
 | **Inconclusive** | No late change observed, but no mechanism-level demonstration. Expected to be common. |
-| **Safety implications** | FAIL or INCONCLUSIVE: conflicting takeover on that topology stays refused until the administrator verifies storage or access resolution (§5.5, §5.7). NAS support is not withdrawn. A result certifies only that share type and configuration. |
+| **Safety implications** | FAIL or INCONCLUSIVE: conflicting takeover on that NFS configuration stays refused until the administrator verifies storage or access resolution (§5.5, §5.7). NFS and NAS support are not withdrawn. A PASS certifies only that NFS version, server and mount configuration; every other configuration stays on the conservative route. |
 
 ### 5.4 V-R: administrative principal capabilities (§10.1; OD-6 condition)
 
@@ -270,7 +296,7 @@ and recovers from the actual state.
 prototype; prototype `installation_state` and the OD-5 stand-in receipt store; installed systemd and WinSW services;
 the `phase-3-accepted` and current Phase 4 builds as legacy artifacts.
 
-**Environment.** All four cells. Local volumes; NAS only where authorized, labelled by type.
+**Environment.** All four cells on local volumes. NAS-labelled runs only on the authorized NFS configuration.
 
 | Case | Specific setup (contract §12) | Required observation | Fail |
 |---|---|---|---|
@@ -303,8 +329,8 @@ interval may be open, and reclaims safely after confirmed exit.
 quarantine move with settlement, one U release, receiving and `cleanStaging` (feasibility branch only); a seam that
 blocks inside a filesystem call; a stalled storage target for (b) and (g) (P3 environment).
 
-**Environment.** All four cells; local volumes; NAS cases only where authorized. Java-seam blocking is labelled
-separately from kernel or NAS stalls.
+**Environment.** All four cells on local volumes. Cases (b) and (g) also on the authorized NFS configuration. Java-seam
+blocking is labelled separately from kernel or NFS stalls.
 
 **Common failure criteria (contract §12).** Any W2 effect while W1 exists; reclaim by elapsed time; a committed stale
 EDT; reclaim of another host's token; duplicate File or content; adopted unverified byte; a late write or namespace
@@ -356,33 +382,82 @@ corroborate.
 Preserved regressions: the accepted slow-upload and failed-STAGED-CAS tests are run unchanged on the feasibility
 branch with per-operation renewal. A regression there is a FAIL of §12.1.
 
+### 5.9 Bounded feasibility checks (F-O, F-T, F-R)
+
+These answer "can it be done" on representative paths. They do **not** verify the implementation; that remains
+Gate C (§3.2). A PASS here is not evidence of complete coverage.
+
+#### F-O: O-first transaction ordering
+
+| | |
+|---|---|
+| **Hypothesis** | On representative paths, the token-owned O prefix can be the first lock of every EDT, in UUID order, followed by the retained F → Ct ordering, with late discovery causing rollback and rediscovery, without deadlock. |
+| **Paths (bounded set)** | The Proof 2 prototype paths: INGEST promotion; quarantine move with settlement; U release; `cleanStaging`; per-operation renewal; one destruction-shaped multi-operation prefix (as in §12.1 A-6). |
+| **Evidence** | Per-transaction acquisition timelines from the §12.1 instrumentation; captured statements; concurrent contention schedules (at least: two EDTs on overlapping operation sets in opposite discovery order; EDT versus renewal; EDT versus stale CAS); a forced late-discovery case. |
+| **Pass** | On every path, the first acquired lock is the O prefix in UUID order; late discovery rolls back before any later business lock or mutation and rediscovers; zero 40P01 across the schedules. |
+| **Fail** | A path that cannot take O first without breaking a retained Phase 2 window, authorization, provenance, restriction or atomicity rule; any 40P01 on a corrected path. |
+| **Invalid** | Acquisition order not established by instrumentation (the §12.1 evidence rule applies). |
+| **Safety implications** | A FAIL means the theorem-A premise ("O first") is not achievable on that path. It returns to the owner (§8.6); no lock is strengthened or reordered ad hoc. |
+
+#### F-T: outermost-transaction ownership
+
+| | |
+|---|---|
+| **Hypothesis** | T-1, T-4 and T-6 can be made to run only as outermost transactions under the ordinary Spring `TransactionTemplate`, and refuse before any lock or effect when called inside an existing transaction. |
+| **Evidence** | The prototype enforcement mechanism (for example a guard checking for an active transaction, or a non-joining propagation), exercised on the prototype paths; negative cases invoking each of T-1, T-4 and T-6 inside an outer transaction and inside an outer EDT holding Ct; confirmation that no lock was taken and nothing written. |
+| **Pass** | Each nested invocation refuses before any SQL that locks or writes; each outermost invocation commits or rolls back independently. |
+| **Fail** | Any nested invocation that acquires a lock, writes, or joins the outer transaction. |
+| **Invalid** | Nesting not actually established (for example a separate connection used by mistake). |
+| **Safety implications** | Without outermost ownership, token commit or release could be rolled back or held by an outer transaction, breaking T-1 and T-4. A FAIL returns to the owner. |
+
+#### F-R: per-operation renewal throughput
+
+| | |
+|---|---|
+| **Hypothesis** | One-operation-per-transaction receiver renewal completes a full renewal cycle for the planning load within one renewal interval, without batching operations into one lock-holding transaction. |
+| **Parameters** | The accepted renewal interval is a quarter of `files.receivingTimeout`, clamped to 200 ms…5 s (`IngestionService.leaseIntervalMillis`); the configured timeout is PT1M…PT24H. The check uses the **minimum** timeout (PT1M, interval 5 s) and, as a stress point, a 200 ms interval. **Planning load:** concurrent RECEIVING operations in one process at 10, 100 and 1,000, reflecting personal and small-institution scale (BUILD-SPEC §66). The pass threshold uses 100 (Q-A). |
+| **Evidence** | Per-cycle duration; per-statement latency distribution; any renewal that misses its interval; database connection usage; on local storage only (renewal touches no file). |
+| **Pass** | At the threshold load, on every cell, the 99th-percentile cycle completes within the renewal interval and no operation misses two consecutive intervals. The other loads are reported as characterisation. |
+| **Fail** | At the threshold load, cycles routinely exceed the interval, so a live receiver could be judged stale. |
+| **Safety implications** | Late renewal cannot cause an unsafe takeover (abandonment is logical only; physical cleanup is gated by the token, §5.8, T-7), but it can abandon live uploads. A FAIL is an availability finding returned to the owner; renewal is **not** re-batched (that would reopen D4-V1). |
+
 ---
 
-## 6. NAS configuration information needed before P3, Proof 2 (b)/(g) or any NAS case
+## 6. Network storage
 
-None of these can be planned or executed until the owner supplies or approves:
+### 6.1 NFS information needed before P3, Proof 2 (b)/(g) or any NAS-labelled case
 
 | Information | Why |
 |---|---|
-| Which topologies are in scope (for example NFS v3, NFS v4.x, SMB 3.x), and which deployment each represents | Results certify only the tested type and configuration |
-| Server product, OS and version | Late-write and handle semantics differ by server |
-| Client mount or map options: NFS `hard`/`soft`, `sync`/`async`, attribute caching; SMB caching, leases or oplocks, continuous availability, persistent handles | These decide whether late write-back or replay is possible |
-| How a stall is induced and released (pause service, block port, pause VM) and who controls it | Proof 2 (b) and (g) need a real stall |
+| NFS version (v3 or v4.x; minor version) and the deployment it represents | A result certifies only the tested configuration |
+| Server product, OS and version | Late-write, lease and recovery semantics differ by server |
+| Client mount options: `hard`/`soft`, `sync`/`async`, attribute and data caching, `timeo`/`retrans`, and for v4 the lease time | These decide whether late write-back or replay is possible |
+| How a stall is induced and released (stop the service, block the port, pause the VM) and who controls it | Proof 2 (b) and (g) need a real stall |
 | Access to server-side observation (shell, logs, snapshots) | P3 needs server-side evidence (§5.3 test point 4) |
-| Whether the NAS may be paused and its test share destroyed | Safety of the test environment (§4.7) |
+| Whether the server may be paused and its test export destroyed | Safety of the test environment (§4.7) |
 
-If no topology is authorized, NAS cases are **NOT RUN**. P3 remains unproven, and the contract's fail-closed route
-(administrator verification before conflicting takeover on NAS) applies at Gate C. That is a safe but reduced outcome.
+This is execution information, needed before NAS runs (AU-7). It does not block review of this plan. If no NFS
+configuration is authorized, NAS cases are **NOT RUN**, P3 is unproven, and the conservative route applies at Gate C.
+
+### 6.2 SMB and other network filesystems (protocol flexibility)
+
+- Not tested in Gate B, and not excluded from the product.
+- Each further configuration (protocol, version, server and client options) may later be verified by repeating P3 and
+  Proof 2 (b) and (g) on it, with the same criteria (§5.3, §5.7) and the same review rule (§8.5). That is a separately
+  authorized activity.
+- Until a configuration is verified, it keeps the conservative route: no automatic conflicting takeover; administrator
+  verification of storage or access resolution first (contract §5.5, §5.7). Ordinary operation on it is unaffected.
+- No architecture change is needed to add a verified configuration; the contract already scopes P3 per topology.
 
 ---
 
 ## 7. Execution order and dependencies
 
-1. **V-H, V-R, P1, P2** (independent, cheap, foundational).
+1. **V-H, V-R, P1, P2, F-T** (independent, cheap, foundational).
 2. **Proof 1**, after P2 and V-R (and V-H for binding cases).
-3. **Proof 2**, after P1 (E-1 cases) and V-R.
-4. **§12.1**, after P1 on the cell.
-5. **P3** and NAS cases, after the §6 information and authorization.
+3. **Proof 2** and **F-O**, after P1 (E-1 cases), V-R and F-T.
+4. **§12.1** and **F-R**, after P1 on the cell.
+5. **P3** and NFS cases, after the §6.1 information and authorization.
 
 **Dependency stops.** A FAIL in a prerequisite stops every dependent case on that platform. The dependent cases are
 reported NOT RUN with the reason. Independent items continue. No replacement mechanism is built to unblock them.
@@ -396,7 +471,8 @@ reported NOT RUN with the reason. Independent items continue. No replacement mec
 - **One consolidated independent review** of this plan (§10A.4), by the independent reviewer (Codex, unless the owner
   names another), at a recorded baseline.
 - **Scope:** completeness against the contract's proof obligations and D4-34; correctness of hypotheses and criteria;
-  coverage; invalid-run rules; safety of the environment; the Gate B / Gate C split.
+  coverage; invalid-run rules; safety of the environment; the Gate B / Gate C split, including the bounded
+  checks (§5.9) and the storage scope (§4.1, §6).
 - **Exclusions:** the accepted contract's architecture (Gate A is closed); harness implementation details that do not
   change what a proof establishes (§10A.4).
 - **Disposition** concerns readiness of the plan for owner approval only. It does not accept Gate B.
@@ -459,7 +535,7 @@ solely to perfect a later-gate detail.
 
 ## 9. Evidence record
 
-Proposed (Q-5):
+Default (§11.2):
 - results: `docs/PHASE-4-WP1-GATE-B-RESULTS.md`, one section per item and cell, with outcome and log references;
 - raw logs: on the feasibility branch under a test-evidence directory, never in production paths;
 - findings: in the results-review response, per CLAUDE.md (auditor finding text unaltered; builder issues in
@@ -474,12 +550,12 @@ Approval of the assignment that produced this plan authorizes **none** of the fo
 | ID | Required decision or authorization |
 |---|---|
 | **AU-1** | Authorize the consolidated independent plan review (§8.1), name the reviewer, and approve the round budget and stopping rule (§8.3, §8.4) |
-| **AU-2** | Confirm the Gate B / Gate C scope split (§3), including Q-3 |
+| **AU-2** | Scope split (§3): **given by the owner's clarification of 2026-11-19**; confirmed by approving this plan (AU-8) |
 | **AU-3** | Authorize test-only prototype code on a separate feasibility branch (§4.2), including prototype edits to production classes there only, and any test-only library |
 | **AU-4** | Authorize test hosts (Windows and Linux builds), scratch PostgreSQL 16 and 18 clusters, installation of the systemd and WinSW services with their service accounts on those hosts, and the destructive actions of §4.7 |
 | **AU-5** | Authorize the OD-5 receipt stand-in and the OD-4 exclusion (§4.3), without deciding OD-4 or OD-5 |
 | **AU-6** | Authorize use of `phase-3-accepted` and a named current Phase 4 commit as legacy artifacts in Proof 1 |
-| **AU-7** | Select NAS topologies and supply §6 information, or defer NAS (P3 NOT RUN, fail-closed) |
+| **AU-7** | Supply and authorize the NFS configuration (§6.1), or defer it (P3 NOT RUN; conservative route) |
 | **AU-8** | Approve the final plan after review (§8.4) |
 | **AU-9** | Authorize execution, with its cells, after AU-1…AU-8 |
 | **AU-10** | Approve the evidence-record locations (§9) and any commits of evidence |
@@ -488,18 +564,30 @@ OD-1, OD-2, OD-4 and OD-5 remain open; none is needed to execute Gate B under §
 
 ---
 
-## 11. Unresolved planning questions
+## 11. Planning questions (consolidated)
 
-| ID | Question |
-|---|---|
-| Q-1 | Is the §3 scope split the owner's intended scope? (No separate owner scope statement was found in the repository.) |
-| Q-2 | Windows file identity for P2 test point (7): is a dependency-free method acceptable if it relies on an OS tool, or must it be in-process? |
-| Q-3 | Should a bounded characterisation of per-operation renewal **performance** be in Gate B, since a poor result could make the accepted renewal design impractical late? This plan keeps it in Gate C. |
-| Q-4 | Should a remote-PostgreSQL cell (contract A-3) be added for client-death cases? |
-| Q-5 | Evidence locations (§9). |
-| Q-6 | May Gate C implementation reuse reviewed prototype code, or must it start fresh? |
-| Q-7 | V-H Windows read path: is a `reg query` subprocess acceptable as the "dependency-free" route, or does it need its own owner decision? |
-| Q-8 | V-R termination reach: if bounded termination of one installation's backends is impossible on a shared cluster without `pg_signal_backend`, is a dedicated cluster per installation an acceptable deployment constraint, or does it return to the owner as an OD-6 failure? |
+### 11.1 Acceptance-critical (an answer is needed before this plan can be approved)
+
+| ID | Question | Plan default if the owner accepts it |
+|---|---|---|
+| **Q-A** | F-R pass threshold: what concurrent-upload load per process must per-operation renewal sustain? | 100 concurrent RECEIVING operations at a 5 s interval (§5.9); 10 and 1,000 reported as characterisation |
+
+### 11.2 Settled in this plan as nonblocking defaults (no further design round)
+
+| Item | Default | Why it is nonblocking |
+|---|---|---|
+| Gate B scope | Owner clarification of 2026-11-19 (§3) | Given |
+| NAS target | NFS first, from a Linux client; SMB and others later (§6.2) | Unverified configurations stay fail-closed |
+| Windows file identity for the fence (P2 point 7) | A test point, not a pre-decision. If no dependency-free method works, P2 fails and returns to the owner (D4-34) | The outcome is decided by evidence |
+| Windows MachineGuid read path (V-H point 2) | A built-in OS tool (for example `reg query`) is not a new dependency; its failure modes are tested and refuse | Failure returns to the owner (D4-34) |
+| Administrative termination reach (V-R point 5) | Measured and reported. A reach wider than one installation returns to the owner | The outcome is decided by evidence |
+| Remote PostgreSQL | Not in the base matrix; reported as not covered | Supported deployment unchanged; no Gate B claim made for it |
+| Evidence locations | As §9 | Administrative |
+| Reuse of prototype code at Gate C | Decided with Gate C authorization | Gate C is separately authorized and reviewed |
+
+### 11.3 Execution inputs (needed before running, not before review)
+
+The NFS configuration (§6.1, AU-7), test hosts and accounts (AU-4), and the legacy-artifact commits (AU-6).
 
 ---
 
