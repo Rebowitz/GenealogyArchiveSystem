@@ -2,12 +2,13 @@
 
 | | |
 |---|---|
-| Status | **DRAFT — NOT APPROVED. Revision 2 (2026-11-19).** Planning document only. It authorizes no experiment, prototype, environment, account or review. Prepared for **one consolidated independent Codex review** under §10A.4; that review is not initiated by this document. |
+| Status | **DRAFT — NOT APPROVED. Revision 3 (2026-11-19).** Planning document only. It authorizes no experiment, prototype, environment, account or review. Prepared for **one consolidated independent Codex review** under §10A.4; that review is not initiated by this document. |
 | Revision 2 | Incorporates the owner's final scope clarification of 2026-11-19: local storage as the primary baseline; NFS as the initial NAS evaluation target, without making it an exclusive dependency; SMB and other network filesystems supportable once independently verified; no exhaustive NAS protocol testing; conservative recovery for unproven configurations; bounded Gate B checks for transaction ordering, outermost-transaction ownership and renewal performance; planning questions consolidated (§11). |
+| Revision 3 | Narrow correction for the consolidated Codex plan review (CORRECTIONS REQUIRED): **GB-P1** (MAJOR) one acceptance rule for F-R and Q-A (§5.9 F-R, §11.1); **GB-N1** (MINOR) P2 second-channel experiment as a labelled negative control (§5.2); **GB-N2** (MINOR) observer authority and placement (§4.4, §4.5). No scope, decision or contract change. |
 | Governing rule | [`ENGINEERING-DESIGN-INSTRUCTIONS.md`](ENGINEERING-DESIGN-INSTRUCTIONS.md) §10A (owner-approved, adopted 2026-11-18), in particular §10A.1 (review plan) and §10A.2 (Gate B) |
 | Artifact under Gate B | [`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md), Draft 7, unchanged since `5cfb0b4df6cf244950d6dca52715ffd5c30504b5` and accepted at Gate A by **D4-33** |
 | Owner selections incorporated | **D4-34** (2026-11-18): OD-3, OD-6 and OD-8, each Option A, each conditional on feasibility (§3) |
-| Repository baseline for this plan | `phase-4` at `90de3abc68bcc21035eb12b11c776297ec2853ea` (Revision 1: `d93e74a`) |
+| Repository baseline for this plan | `phase-4` at `90de3abc68bcc21035eb12b11c776297ec2853ea` (Revision 1: `d93e74a`; Revision 2: `224ce73`, Q-A recorded `3410b7f`) |
 | Gates | **A:** ACCEPTED 2026-11-18 (D4-33). **B:** NOT ACCEPTED; proof execution NOT AUTHORIZED. **C:** NOT AUTHORIZED. **WP2:** HOLD. |
 
 ---
@@ -163,6 +164,16 @@ hooks and a client-death harness. Subject to owner authorization (AU-3):
   role under test.
 - Roles under test: the runtime role (per installation), the dedicated administrative role (V-R), and, where a case
   needs it, a second installation's runtime role on the same cluster (to measure termination reach).
+- **Independent observer** **[GB-N2]**: a separate, dedicated harness role, **not** under test. Its authority is
+  read-only observation:
+  - non-superuser, with `pg_monitor` (for full `pg_stat_activity` visibility) and SELECT on the named test tables it
+    must read;
+  - no write, DDL, role administration, backend signalling, `pg_signal_backend`, or membership in the runtime or
+    administrative role.
+  It never performs, and is never credited with, an operation of the administrative role. Every V-R capability and
+  every maintenance-tool step is proved only through sessions of the administrative role itself (non-superuser,
+  §5.4). The harness superuser stays limited to setup, teardown and installing test-only functions.
+- `track_commit_timestamp = on` in every cluster that runs F-R (§5.9), and recorded.
 - Settings recorded per run: `lock_timeout`, `deadlock_timeout`, `statement_timeout`, `idle_in_transaction_session_timeout`,
   `client_connection_check_interval`, TCP keepalive settings, `max_prepared_transactions` (non-zero for Proof 1 (d)),
   `log_lock_waits`.
@@ -182,7 +193,20 @@ The harness is the oracle for process facts; **it must not rely on the mechanism
 - **Exit confirmation.** By the parent's wait on the child and its exit code, plus a fresh OS enumeration. Never by
   `ProcessHandle` alone where P1 is the subject.
 - **Backend identity.** Every connection records `pg_backend_pid()` and `backend_start` at connect time (T-2). The
-  harness separately records backend liveness from a superuser observer connection.
+  harness separately records backend liveness from the independent observer (§4.4).
+- **Observer placement** **[GB-N2]:**
+  - The observer connects to a **different database** of the same cluster (for example `postgres`). Backend and lock
+    views (`pg_stat_activity`, `pg_locks`, `pg_blocking_pids`) are cluster-wide, so liveness observation needs no
+    connection to the target database.
+  - A connection to the target database (only to read named test tables) is closed **before M-5 begins** and is not
+    reopened until the case's M-5 observations are complete. This keeps the contract's maintenance connection
+    boundary: during M-5 the target database has only the maintenance tool's own connections (§6.4).
+  - An observer connection present in the target database during M-5 makes the run **INVALID**: it would either be
+    drained, perturbing the case, or be a surviving non-tool backend.
+- **Effective identities** **[GB-N2]:** for every connection used in a run, the evidence records the actor (tool,
+  runtime process, observer or harness setup), `session_user`, `current_user`, `rolsuper` of each, database,
+  `pid` and `backend_start`. An action whose recorded effective identity is not the role it is credited to does
+  not count as evidence for that role.
 - **Client death with live backend.** The server statement is held at a server-side barrier (§12.1 common rules) so
   it survives client death. If the backend has ended, the run is **INVALID**.
 - **Clocks.** Wall-clock and monotonic timestamps on every event; NTP state recorded; P1 includes a clock-step case.
@@ -240,10 +264,11 @@ contract.
 | **Hypothesis** | A dependency-free `FileChannel` lock gives protected-object, JVM-lifetime exclusion on the supported local Windows and Linux filesystems, under the seven §6.3 conditions. |
 | **Prerequisites** | Prototype fence acquisition in a producer JVM (shared) and in the maintenance-tool prototype (exclusive, non-blocking); a protected directory owned by root or Administrators and not writable by the service accounts; the canonical local path. |
 | **Environment** | Linux ext4 or xfs (recorded) local; Windows NTFS local. All service accounts of §4.1. |
-| **Test points** | (1) Shared lock from a channel the service account can open (read-only access to the object), concurrently from several JVMs and both Windows virtual accounts; (2) exclusive non-blocking acquisition refused while any shared holder lives; (3) release on JVM exit after `SIGKILL` / `TerminateProcess` and after normal exit; (4) **no release** while the JVM lives: GC pressure with the strong reference held, shutdown hooks, partial startup failure; (5) negative control: a second channel to the lock path opened and closed in the same JVM, to establish whether POSIX release occurs (proving the "no other code opens the path" rule is load-bearing); (6) detection of a platform that silently upgrades shared to exclusive, or serialises JVMs; (7) a missing, replaced or re-created object makes producer startup and maintenance refuse: this needs a **file-identity check**. Java's `fileKey()` is available on Linux but may be `null` on Windows, so a dependency-free Windows identity method must be found or the test point fails; (8) child processes spawned by a producer do not hold or release the fence; (9) a symlink or junction substituted in the path is refused. |
+| **Test points** | (1) Shared lock from a channel the service account can open (read-only access to the object), concurrently from several JVMs and both Windows virtual accounts; (2) exclusive non-blocking acquisition refused while any shared holder lives; (3) release on JVM exit after `SIGKILL` / `TerminateProcess` and after normal exit; (4) **no release** while the JVM lives: GC pressure with the strong reference held, shutdown hooks, partial startup failure; (5) **labelled negative control, outside supported operating conditions [GB-N1]:** a second channel to the lock path deliberately opened and closed in the same JVM, which §6.3 forbids. It shows whether the platform releases the lock (for example POSIX record-lock release), and so whether the "no other code opens the path" restriction is load-bearing. It is recorded separately as a control observation (release observed / not observed), never as a supported-path PASS or FAIL; (6) detection of a platform that silently upgrades shared to exclusive, or serialises JVMs; (7) a missing, replaced or re-created object makes producer startup and maintenance refuse: this needs a **file-identity check**. Java's `fileKey()` is available on Linux but may be `null` on Windows, so a dependency-free Windows identity method must be found or the test point fails; (8) child processes spawned by a producer do not hold or release the fence; (9) a symlink or junction substituted in the path is refused. |
 | **Evidence** | Lock acquisition results and exceptions per process; OS lock views (`/proc/locks`; Windows handle tools); identity values; exit confirmations from §4.5. |
-| **Pass** | All nine test points hold on both platforms. |
-| **Fail** | Any acquisition of the exclusive lock while a compatible producer lives; any release before JVM exit not caused by the producer's own exit; inability to detect a replaced object on either platform. |
+| **Pass** | Supported-path test points (1)–(4) and (6)–(9) hold on both platforms, and the control (5) was run and recorded. |
+| **Fail** | On the supported paths: any acquisition of the exclusive lock while a compatible producer lives; any release before JVM exit not caused by the producer's own exit; inability to detect a replaced object on either platform. |
+| **Negative control (5)** | Release observed **only** in the control demonstrates why the no-second-channel restriction matters; it does not falsify supported-path feasibility. No release observed does not relax the restriction. The control's result never changes a supported-path criterion above. |
 | **Invalid** | Producer liveness not independently confirmed; directory permissions not as specified. |
 | **Safety implications** | A FAIL means maintenance cannot prove the absence of compatible producers. Under D4-34, **no JNA is adopted automatically**: the result goes to the owner for a separate dependency and alternative-mechanism decision. Proof 1 cases that depend on the fence stop (§7). |
 
@@ -414,11 +439,14 @@ Gate C (§3.2). A PASS here is not evidence of complete coverage.
 
 | | |
 |---|---|
-| **Hypothesis** | One-operation-per-transaction receiver renewal completes a full renewal cycle for the planning load within one renewal interval, without batching operations into one lock-holding transaction. |
-| **Parameters** | The accepted renewal interval is a quarter of `files.receivingTimeout`, clamped to 200 ms…5 s (`IngestionService.leaseIntervalMillis`); the configured timeout is PT1M…PT24H. The check uses the **minimum** timeout (PT1M, interval 5 s) and, as a stress point, a 200 ms interval. **Planning load:** concurrent RECEIVING operations in one process at 10, 100 and 1,000, reflecting personal and small-institution scale (BUILD-SPEC §66). **Pass threshold (Q-A, resolved by owner approval 2026-11-19): 100 concurrent receiving uploads per process at a 5-second renewal interval.** The 10- and 1,000-upload runs are **diagnostic only**. |
-| **Evidence** | Per-cycle duration; per-statement latency distribution; any renewal that misses its interval; database connection usage; on local storage only (renewal touches no file). **Completion, not scheduling (Q-A):** each renewal counts only when its transaction has committed and the operation's `receiver_alive_at` is observed updated, with the commit time recorded. A renewal that was scheduled, submitted or still running at the interval's end has not completed. |
-| **Pass** | At the threshold load (100 uploads, 5 s), on every cell, measured from **completed** renewals: the 99th-percentile cycle completes within the renewal interval and no operation misses two consecutive intervals. The 10- and 1,000-upload results are diagnostic only and decide nothing. |
-| **Fail** | At the threshold load, cycles routinely exceed the interval, so a live receiver could be judged stale. |
+| **Hypothesis** | With one-operation-per-transaction receiver renewal, and no batching of operations into one lock-holding transaction, every receiving operation's required renewal completes within each renewal interval at the acceptance load. |
+| **Parameters** | The accepted renewal interval is a quarter of `files.receivingTimeout`, clamped to 200 ms…5 s (`IngestionService.leaseIntervalMillis`); the configured timeout is PT1M…PT24H. **Acceptance-load run (Q-A, owner-approved 2026-11-19):** 100 concurrent RECEIVING uploads in one process; renewal interval **I = 5 s** (the minimum timeout, PT1M). **Diagnostic only:** runs at 10 and 1,000 uploads, and a 200 ms-interval stress run. |
+| **Acceptance rule** **[GB-P1]** | **Interval boundaries.** The measurement window starts at t₀, once all 100 operations are RECEIVING and each has completed at least one renewal. It consists of at least 60 consecutive, contiguous, half-open intervals [t₀ + k·I, t₀ + (k+1)·I), k = 0, 1, …, each measured on the **PostgreSQL server clock**. **Required renewal.** For every operation and every interval k, one renewal of that operation must **complete** within interval k. **Completion** means both: (a) the renewing transaction has **committed**, with its server commit timestamp (`pg_xact_commit_timestamp`) inside interval k; and (b) the change is **observable**: that operation's `receiver_alive_at` is read, from a separate connection after the commit, as the value that transaction wrote. **Pending renewals.** A renewal that is scheduled, submitted, still executing, or uncommitted at the end of interval k does **not** complete interval k. If it commits later, it counts only for the interval containing its commit timestamp. **Verdict.** Any operation without a completed renewal in any interval k of the window is a **missed deadline**, and **one missed deadline fails the acceptance-load run**. |
+| **Evidence** | Per operation and interval: renewal transaction ID, commit timestamp, the `receiver_alive_at` value written and the separately read value; the interval boundaries; the operations' state through the window. Diagnostic: per-cycle duration, per-statement latency distribution and percentiles, database connection usage. Local storage only (renewal touches no file). |
+| **Pass** | On every cell, the acceptance-load run has **no missed deadline** under the acceptance rule. |
+| **Fail** | On any cell, at least one missed deadline in the acceptance-load run. |
+| **Invalid** | Commit timestamps unavailable (`track_commit_timestamp` off); an operation left RECEIVING during the window for a reason other than renewal; interval boundaries not recorded on the server clock; fewer than 60 intervals measured. |
+| **Diagnostic only** | Percentiles and latency distributions, and every 10-upload, 1,000-upload and 200 ms run. They are reported, and decide neither PASS nor FAIL. |
 | **Safety implications** | Late renewal cannot cause an unsafe takeover (abandonment is logical only; physical cleanup is gated by the token, §5.8, T-7), but it can abandon live uploads. A FAIL is an availability finding returned to the owner; renewal is **not** re-batched (that would reopen D4-V1). |
 
 ---
@@ -570,7 +598,7 @@ OD-1, OD-2, OD-4 and OD-5 remain open; none is needed to execute Gate B under §
 
 | ID | Question | Resolution |
 |---|---|---|
-| **Q-A** | F-R pass threshold: what concurrent-upload load per process must per-operation renewal sustain? | **RESOLVED by owner approval, 2026-11-19:** 100 concurrent receiving uploads per process; 5-second renewal interval; renewals verified as actually completed within the interval under that load, not merely scheduled (§5.9 F-R). The 10- and 1,000-upload tests are diagnostic only. |
+| **Q-A** | F-R pass threshold: what concurrent-upload load per process must per-operation renewal sustain? | **RESOLVED by owner approval, 2026-11-19:** 100 concurrent receiving uploads per process; 5-second renewal interval. Each required renewal must complete (committed transaction and observable change to that operation's `receiver_alive_at`) within its defined interval; scheduled, outstanding or uncommitted renewals do not count; **any missed deadline fails** the acceptance-load run. Percentiles and the 10- and 1,000-upload runs are diagnostic only. The single governing rule, including interval boundaries and pending renewals, is §5.9 F-R "Acceptance rule". |
 
 No acceptance-critical planning question remains open.
 
