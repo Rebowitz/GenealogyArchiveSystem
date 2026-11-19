@@ -415,9 +415,9 @@ Gate C (§3.2). A PASS here is not evidence of complete coverage.
 | | |
 |---|---|
 | **Hypothesis** | One-operation-per-transaction receiver renewal completes a full renewal cycle for the planning load within one renewal interval, without batching operations into one lock-holding transaction. |
-| **Parameters** | The accepted renewal interval is a quarter of `files.receivingTimeout`, clamped to 200 ms…5 s (`IngestionService.leaseIntervalMillis`); the configured timeout is PT1M…PT24H. The check uses the **minimum** timeout (PT1M, interval 5 s) and, as a stress point, a 200 ms interval. **Planning load:** concurrent RECEIVING operations in one process at 10, 100 and 1,000, reflecting personal and small-institution scale (BUILD-SPEC §66). The pass threshold uses 100 (Q-A). |
-| **Evidence** | Per-cycle duration; per-statement latency distribution; any renewal that misses its interval; database connection usage; on local storage only (renewal touches no file). |
-| **Pass** | At the threshold load, on every cell, the 99th-percentile cycle completes within the renewal interval and no operation misses two consecutive intervals. The other loads are reported as characterisation. |
+| **Parameters** | The accepted renewal interval is a quarter of `files.receivingTimeout`, clamped to 200 ms…5 s (`IngestionService.leaseIntervalMillis`); the configured timeout is PT1M…PT24H. The check uses the **minimum** timeout (PT1M, interval 5 s) and, as a stress point, a 200 ms interval. **Planning load:** concurrent RECEIVING operations in one process at 10, 100 and 1,000, reflecting personal and small-institution scale (BUILD-SPEC §66). **Pass threshold (Q-A, resolved by owner approval 2026-11-19): 100 concurrent receiving uploads per process at a 5-second renewal interval.** The 10- and 1,000-upload runs are **diagnostic only**. |
+| **Evidence** | Per-cycle duration; per-statement latency distribution; any renewal that misses its interval; database connection usage; on local storage only (renewal touches no file). **Completion, not scheduling (Q-A):** each renewal counts only when its transaction has committed and the operation's `receiver_alive_at` is observed updated, with the commit time recorded. A renewal that was scheduled, submitted or still running at the interval's end has not completed. |
+| **Pass** | At the threshold load (100 uploads, 5 s), on every cell, measured from **completed** renewals: the 99th-percentile cycle completes within the renewal interval and no operation misses two consecutive intervals. The 10- and 1,000-upload results are diagnostic only and decide nothing. |
 | **Fail** | At the threshold load, cycles routinely exceed the interval, so a live receiver could be judged stale. |
 | **Safety implications** | Late renewal cannot cause an unsafe takeover (abandonment is logical only; physical cleanup is gated by the token, §5.8, T-7), but it can abandon live uploads. A FAIL is an availability finding returned to the owner; renewal is **not** re-batched (that would reopen D4-V1). |
 
@@ -566,11 +566,13 @@ OD-1, OD-2, OD-4 and OD-5 remain open; none is needed to execute Gate B under §
 
 ## 11. Planning questions (consolidated)
 
-### 11.1 Acceptance-critical (an answer is needed before this plan can be approved)
+### 11.1 Acceptance-critical
 
-| ID | Question | Plan default if the owner accepts it |
+| ID | Question | Resolution |
 |---|---|---|
-| **Q-A** | F-R pass threshold: what concurrent-upload load per process must per-operation renewal sustain? | 100 concurrent RECEIVING operations at a 5 s interval (§5.9); 10 and 1,000 reported as characterisation |
+| **Q-A** | F-R pass threshold: what concurrent-upload load per process must per-operation renewal sustain? | **RESOLVED by owner approval, 2026-11-19:** 100 concurrent receiving uploads per process; 5-second renewal interval; renewals verified as actually completed within the interval under that load, not merely scheduled (§5.9 F-R). The 10- and 1,000-upload tests are diagnostic only. |
+
+No acceptance-critical planning question remains open.
 
 ### 11.2 Settled in this plan as nonblocking defaults (no further design round)
 
