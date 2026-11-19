@@ -10,6 +10,9 @@ the applicable architectural refinements in [`PHASE-4-ARCHITECTURAL-CLARIFICATIO
 **D4-33** (WP1 Architecture C Draft 7: Gate A, architectural contract acceptance) was approved by the owner on
 2026-11-18; see its section below. It is not feasibility acceptance (Gate B) or implementation authorization
 (Gate C).
+**D4-34** (WP1 Architecture C Gate B planning selections: OD-3, OD-6 and OD-8, each Option A) was approved by the
+owner on 2026-11-18; see its section below. It selects preferred approaches only. It does not verify their
+feasibility, accept Gate B, or authorize proof execution or implementation.
 
 Approval of the decisions does **not** authorize implementation. Phase 4 coding still requires a separate owner
 instruction. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
@@ -245,10 +248,58 @@ verified baseline `5cfb0b4`; published in `bb8bdf9632dd5ce32eb0bc91289e585cd6e00
   - the accepted Phase 0–3 and Phase 4 platform and regression matrix (Windows and Linux × PostgreSQL 16 and 18).
 - **Open owner decisions:** OD-1 (D-LP-9 (a)), OD-2 (D-LP-3), OD-3 (fence library), OD-4 (mismatch lifecycle),
   OD-5 (receipt representation), OD-6 (administrative principal and grants), OD-8 (host-ID source).
+  *Status note (added by D4-34, 2026-11-18): the owner has since selected Option A for OD-3, OD-6 and OD-8 (D4-34).
+  Those selections are approved, but their feasibility is **not verified**. OD-1, OD-2, OD-4 and OD-5 remain open.*
 - **Open findings:** WP1-R1, F5-4, GAS-P4-002…GAS-P4-005. F5-1…F5-3 remain architecturally resolved and preserved.
 
 **Next step.** A written Gate B feasibility review plan under §10A.1 is required **before** any feasibility proof
 execution or Gate B review. That plan, and its execution, need separate owner authorization.
+
+## Approved decision (owner, 2026-11-18): D4-34 WP1 Architecture C Gate B planning selections (OD-3, OD-6, OD-8)
+
+**Status: APPROVED by the owner on 2026-11-18.** The owner selected Option A for each of OD-3, OD-6 and OD-8 of the
+accepted Architecture C contract
+([`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md), Draft 7,
+accepted at Gate A by D4-33; §6.3, §10.1, §10.2 and §13).
+
+**These selections resolve the preferred approaches, not their outstanding feasibility proofs.** Each selection is
+conditional on the verification named below. "Owner selection approved" does not mean "feasibility verified".
+
+| Decision | Selection | Owner selection | Feasibility | Condition | If the condition fails |
+|---|---|---|---|---|---|
+| **OD-3** Installation-fence implementation | **Option A: Java `FileChannel` first** | **APPROVED** | **NOT VERIFIED** | Successful P2 feasibility proof on the supported Windows and Linux platforms (contract §6.3) | Do **not** adopt JNA automatically. Return to the owner for a separate dependency and alternative-mechanism decision. |
+| **OD-6** Administrative principal | **Option A: dedicated non-superuser administrative role**, separate from the runtime role | **APPROVED** | **NOT VERIFIED** | Verification of the exact PostgreSQL privileges and capabilities needed for maintenance, role administration, migrations and backend termination, validated on PostgreSQL 16 and 18 (contract §10.1) | Return the issue to the owner. Do not silently escalate privileges. |
+| **OD-8** Host-ID source | **Option A: OS machine identifier** | **APPROVED** | **NOT VERIFIED** | Platform validation on Windows and Linux (contract §10.2) | Return to the owner. Do not silently substitute a provisioned identity file. |
+
+**Requirements preserved with these selections:**
+- **OD-3:** the contract's process-lifetime, shared and exclusive lock, protected-object and fail-closed requirements
+  (§6.3) are unchanged.
+- **OD-6:** runtime code is not granted backend-signalling authority (§10.1). Privileges are not escalated beyond
+  what is verified as required.
+- **OD-8:** the existing host-binding, clone and isolation, and fail-closed requirements are unchanged. An
+  unavailable, unreadable or invalid identifier must not permit an unsafe operation.
+
+**Effect.**
+- The contract's §13 table still lists OD-3, OD-6 and OD-8 as open choices, because the accepted contract text is not
+  edited. **This entry is the authoritative record of the selections.**
+- No accepted mechanism, historical decision, contract draft, independent review or correction response is altered.
+- OD-1 (D-LP-9 (a)), OD-2 (D-LP-3), OD-4 (mismatch lifecycle) and OD-5 (receipt representation) are unchanged and
+  remain open.
+- The open obligations recorded in D4-33 are unchanged. P2, the OD-6 privilege inventory and the OD-8 platform
+  validation are among them.
+
+**Gate boundaries (unchanged by this decision):**
+
+| Gate | Status |
+|---|---|
+| **A: architectural contract** | **ACCEPTED, 2026-11-18** (D4-33) |
+| **B: feasibility** | **NOT ACCEPTED.** Proof execution is **NOT AUTHORIZED**. |
+| **C: implementation** | **NOT AUTHORIZED** |
+| **WP2** | **HOLD** |
+
+**Next step.** These selections are inputs to the written Gate B feasibility review plan under §10A.1 of
+[`ENGINEERING-DESIGN-INSTRUCTIONS.md`](ENGINEERING-DESIGN-INSTRUCTIONS.md). The plan, and its execution, still need
+separate owner authorization.
 
 ---
 
