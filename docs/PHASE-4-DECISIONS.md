@@ -7,6 +7,9 @@ the applicable architectural refinements in [`PHASE-4-ARCHITECTURAL-CLARIFICATIO
 2026-11-17; see its section below. It is not WP1 implementation authorization or acceptance.
 **D4-32** (WP1 Architecture C historical admission: global-first refusal, OD-7) was approved by the owner on
 2026-11-18; see its section below. It is not WP1 implementation authorization or acceptance.
+**D4-33** (WP1 Architecture C Draft 7: Gate A, architectural contract acceptance) was approved by the owner on
+2026-11-18; see its section below. It is not feasibility acceptance (Gate B) or implementation authorization
+(Gate C).
 
 Approval of the decisions does **not** authorize implementation. Phase 4 coding still requires a separate owner
 instruction. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
@@ -187,6 +190,65 @@ recommended global initial refusal.
 - It does not resolve OD-1 (D-LP-9 (a)), OD-2 (D-LP-3), OD-3, OD-4, OD-5, OD-6 or OD-8.
 
 WP1 remains unaccepted. WP2 remains on HOLD.
+
+## Approved decision (owner, 2026-11-18): D4-33 WP1 Architecture C Draft 7 Gate A acceptance
+
+| ID | Decision | Approved content |
+|---|---|---|
+| D4-33 | **ACCEPTED** (owner, effective 2026-11-18) | **Gate A, architectural contract acceptance** ([`ENGINEERING-DESIGN-INSTRUCTIONS.md`](ENGINEERING-DESIGN-INSTRUCTIONS.md) §10A.2) of the WP1 Architecture C boundary contract, **Draft 7**, [`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md) at accepted baseline **`5cfb0b4df6cf244950d6dca52715ffd5c30504b5`** |
+
+**Basis.** The independent verification
+[`PHASE-4-WP1-ARCHITECTURE-C-DRAFT7-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT7-VERIFICATION.md) (Codex;
+verified baseline `5cfb0b4`; published in `bb8bdf9632dd5ce32eb0bc91289e585cd6e0081d`) found:
+- verdict **ACCEPT CORRECTIONS**;
+- D6-N1 architecturally **CLOSED**;
+- the remaining architectural (test-specification) qualification of D4-V1 **CLOSED**;
+- new findings: **0 BLOCKING, 0 MAJOR, 0 MINOR**;
+- no further finite architectural correction identified within its scope.
+
+**Effect.**
+- The Architecture C architectural correction cycle is **CLOSED**. No further architectural correction is required by
+  the accepted findings.
+- The accepted contract's mechanisms are as written at `5cfb0b4`; this entry does not alter them.
+- D4-31, D4-32 and the historical correction record (contract drafts, independent reviews and correction responses)
+  are preserved unchanged.
+- The Draft 7 contract still carries its "DRAFT — NOT ACCEPTED" heading. **This entry is the authoritative record of
+  its Gate A acceptance**; the accepted text is not edited.
+
+**Gate boundaries (unchanged by this decision):**
+
+| Gate | Status |
+|---|---|
+| **A: architectural contract** | **ACCEPTED, 2026-11-18** (this entry) |
+| **B: feasibility** | **NOT ACCEPTED.** Every feasibility and verification obligation remains open (below). No proof execution is authorized. |
+| **C: implementation** | **NOT AUTHORIZED.** No source, SQL, migration, test, deployment or implementation activity. |
+| **WP2** | **HOLD** |
+
+**Open obligations carried forward** (not resolved, waived or reclassified by this decision):
+- **Feasibility proofs:**
+  - P1 process identity;
+  - P2 process-lifetime fence;
+  - P3 NAS data and namespace completion;
+  - Proof 1 (exclusive maintenance boundary);
+  - Proof 2 (former-writer fencing, (a)–(q));
+  - executing contract §12.1 variants A to C, including building and validating the test-only hooks and the
+    client-death harness.
+- **Inventories and enforcement:**
+  - the full EDT, operation-row-writer and implicit-lock inventory, and the retained-window reorderings (contract
+    §5.4.2);
+  - outermost-transaction enforcement;
+  - renewal performance;
+  - B-9 grouping current-run revalidation;
+  - integrity and recovery compatibility (§5.8);
+  - privilege and deployment work;
+  - realistic inherited-state fixtures;
+  - the accepted Phase 0–3 and Phase 4 platform and regression matrix (Windows and Linux × PostgreSQL 16 and 18).
+- **Open owner decisions:** OD-1 (D-LP-9 (a)), OD-2 (D-LP-3), OD-3 (fence library), OD-4 (mismatch lifecycle),
+  OD-5 (receipt representation), OD-6 (administrative principal and grants), OD-8 (host-ID source).
+- **Open findings:** WP1-R1, F5-4, GAS-P4-002…GAS-P4-005. F5-1…F5-3 remain architecturally resolved and preserved.
+
+**Next step.** A written Gate B feasibility review plan under §10A.1 is required **before** any feasibility proof
+execution or Gate B review. That plan, and its execution, need separate owner authorization.
 
 ---
 
