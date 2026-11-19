@@ -29,7 +29,15 @@ Before initiating an independent review, read and apply **§10A of `docs/ENGINEE
 These rules supplement, and do not weaken, the convergence triggers and review-integrity requirements above and below.
 
 ## Current Phase 4 WP1 status
-**WP1 gate: SIMPLIFY — OWNER APPROVED (Architecture C, decision D4-31 in `docs/PHASE-4-DECISIONS.md`, 2026-11-17).** The RECONSIDER comparison required by `docs/ENGINEERING-DESIGN-INSTRUCTIONS.md` produced this decision; the governance rules, including reconsideration after repeated structural nonconvergence, remain in force. The replacement WP1 architectural contract and feasibility proofs are pending. Existing WP1 work is unchanged and unaccepted. Implementation of the Architecture C design is not authorized. **WP1 unaccepted. WP2 HOLD.** The prior locking-protocol proposal (revision 3.9) is superseded as the intended direction and retained as historical evidence; do not treat it as approved or initiate implementation, migrations, merge, tagging, or WP2 work absent explicit owner authorization. Preserve accepted Phase 0–3 behavior and the findings from the eleventh independent architectural assessment.
+**WP1 direction: Architecture C (decision D4-31 in `docs/PHASE-4-DECISIONS.md`, 2026-11-17).** The RECONSIDER comparison required by `docs/ENGINEERING-DESIGN-INSTRUCTIONS.md` produced this decision; the governance rules, including reconsideration after repeated structural nonconvergence, remain in force.
+- **Gate A:** the Architecture C boundary contract is ACCEPTED (D4-33, 2026-11-18).
+- **Gate B plan:** `docs/PHASE-4-WP1-GATE-B-PLAN.md` Revision 6 is ACCEPTED as the governing planning baseline (D4-36, 2026-11-19). Independent Codex disposition: ACCEPT CORRECTIONS; GB-P1, GB-N1 and GB-N2 CLOSED. **D4-36 is the authoritative plan-acceptance record**, notwithstanding the accepted plan's unchanged DRAFT header.
+- **D4-35** governs the F-R monotonic-clock (`System.nanoTime()`) measurement convention.
+- **Gate B:** feasibility proofs NOT EXECUTED; Gate B NOT ACCEPTED.
+- **Gate C:** implementation NOT AUTHORIZED. Existing WP1 implementation remains unaccepted.
+- **WP1 unaccepted. WP2 HOLD.**
+
+The prior locking-protocol proposal (revision 3.9) is superseded as the intended direction and retained as historical evidence; do not treat it as approved or initiate implementation, migrations, merge, tagging, or WP2 work absent explicit owner authorization. Preserve accepted Phase 0–3 behavior and the findings from the eleventh independent architectural assessment.
 
 ## Review integrity
 Remain independent of the builder's assertions. Verify source and operative contracts, cite exact files and commits, distinguish design from executed test evidence, and report limitations. Do not edit auditor findings to make corrections appear closed. Do not weaken accepted archival or security requirements for simplicity.
