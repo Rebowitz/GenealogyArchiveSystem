@@ -5,16 +5,17 @@
 | | |
 |---|---|
 | Repository | `Rebowitz/GenealogyArchiveSystem`, branch `phase-4` |
-| Draft | **Draft 2 (Gate 2 corrections)**. Draft 1 was `55041be`, reviewed at `bac22ae`. |
-| Baseline for this draft | `bac22aecdaa815f37b73c8f67cc9626750157539` |
+| Draft | **Draft 3 (Gate 2 verification corrections V1–V4)**. Draft 1 was `55041be`; Draft 2 was `095ba3f`, verified at `ef5859e`. |
+| Baseline for this draft | `ef5859e1122fea20a26547ad968a04211c6583df` |
 | Governing decisions | **D4-31**, Architecture C, Rules C-01…C-12. **D4-32**, OD-7 global-first historical admission refusal. Both are in [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md). |
-| Review addressed | [`PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md`](PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md) (Gate 2, ACCEPT WITH SPECIFIED CORRECTIONS), checklist C1–C8. The response map is in [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md). |
+| Review addressed | [`PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md`](PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md) (Gate 2, ACCEPT WITH SPECIFIED CORRECTIONS), checklist C1–C8, response in [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md). Gate 2 verification [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md) (V1–V4), response in [`PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md). |
 | Technical basis | [`PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md`](PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md) |
 | Historical evidence | [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md) revision 3.9. It is superseded as direction and cited only for the retained ordinary corrections. |
 | Authorization | Design documentation only. Nothing here is implemented, executed or approved, beyond D4-31 and D4-32. |
 | Status | WP1 unaccepted. WP2 HOLD. WP1-R1, F5-4 and GAS-P4-002…GAS-P4-005 are OPEN. F5-1…F5-3 are architecturally resolved and preserved. |
 
-Changes from Draft 1 are tagged **[G2-C1]**…**[G2-C8]**, after the review's checklist item.
+Changes from Draft 1 are tagged **[G2-C1]**…**[G2-C8]**, after the review's checklist item. Changes from Draft 2
+are tagged **[G3-V1]**…**[G3-V4]**, after the verification finding.
 
 ---
 
@@ -105,8 +106,8 @@ generic action journal.
 - worksheet locking through the session predicate;
 - private new rows;
 - terminal references (TR);
-- the G10 admission classes, including **owned O**: an operation row locked after Ct by the holder of its advisory
-  lock.
+- the G10 admission classes. **[G3-V1]** The G10 **owned O** premise (an operation row locked by the live holder of
+  its advisory lock) is **replaced** by the token-owned O premise and the O-row lock classes of §5.4.1.
 
 **Retained writer sequences:**
 - G `applyChunk`;
@@ -150,7 +151,8 @@ No window is claimed removable.
   legitimately produce private copies at distinct targets. Content coordination serialises their conflicting
   publications and claims; it does not promise that only one operation exists for X.
 - **B-8:** the advisory lock gives only mutual exclusion among **live database sessions**. It is not evidence that a
-  former holder stopped. Every takeover also requires §5.
+  former holder stopped, and it is no longer the premise for locking an operation row (§5.4.1). Every takeover also
+  requires §5.
 - **B-9 (grouping)** **[G2-C8]:** grouping (`capture-session-grouping:<session>`) is a multi-transaction,
   database-only writer.
   - **Source finding (verified at `bac22ae`, review S9):**
@@ -212,7 +214,9 @@ Ordinary paths do not read, wait for or write maintenance state, with two except
   - owner claim and release;
   - generation insertion and retirement;
   - findings and observations written inside a state-changing window;
-  - destruction marks and completion.
+  - destruction marks and completion;
+  - **[G3-V3]** cancellation finalization (CANCELLED with its U or claim change, and `staging_cleaned`), and
+    administrator retry, attest and release.
 - **Effect interval** **[G2-C1]:** the span during which a writer may issue conflicting effects or EDTs for the
   subject. It starts when the writer's token acquisition **commits** (§5.4). It ends only when **all** of the
   following hold:
@@ -225,9 +229,35 @@ Ordinary paths do not read, wait for or write maintenance state, with two except
 
   Process termination also ends the process's filesystem activity. It does **not** prove that the process's database
   backends have ended. §5.4 handles those.
-- **Logical cancellation** **[G2-C3]:** a state transition that ends a subject's archival life without performing any
-  filesystem effect. Examples are the accepted RECEIVING → ABANDONED timeout CAS, and an administrator cancel. It is
-  not an EDT of the current interval, and it neither clears nor transfers the token.
+- **Token-free transitions** **[G3-V3]**: the **only** transitions that may run without holding the subject's
+  interval. Each is owner-independent and request-only: it observes no filesystem object, and changes no Q, U, claim,
+  generation, staging or accountability record.
+
+  | Transition [SRC] | Why it is token-free |
+  |---|---|
+  | Stale RECEIVING → ABANDONED (`abandonStaleReceiving`): a CAS rechecking state **and** the stale predicate, with its ABANDONED event | Accepted logical abandonment. It only ends the upload's eligibility. The late receiver's renewal and its RECEIVING → STAGED CAS then fail, as accepted. |
+  | A cancellation **request** (`OperationAdminService.cancel`): the "cancellation requested" note and its queued worker job | It records a request. Finalization happens later in `performCancel`, under the interval. |
+  | Notes that change no state (`FileOperationRepository.note`) | Message text only |
+  | Receiver lease renewal (`renewReceivers`), run by the receiving process for its own uploads | Liveness evidence for the accepted timeout. It changes no state. |
+  | The token's own acquire, release and reclaim transactions (T-1, T-4, T-6) | They are the ownership protocol itself |
+
+  **Every other transition requires the interval (T-1 or T-6) and is an EDT under T-3, even when no archival bytes
+  are moved.** That includes any transition that:
+  - relies on a filesystem observation;
+  - changes Q or U records, or a physical ownership claim;
+  - releases or changes archival accountability;
+  - performs staging cleanup or any other physical effect.
+
+  **Administrator cancellation finalization** (`performCancel`) is one such transition [SRC
+  `OperationAdminService` 161–290]. It:
+  - observes the target (`OperationCopies.check`, `Presence.probe`);
+  - may move the copy to a CANCELLED_COPY quarantine;
+  - may record the claim unresolved (`claimBecomesUnresolved`) or release it (`releaseTarget`), in the CANCELLED
+    transaction;
+  - then deletes staging and marks it cleaned.
+
+  The whole of `performCancel` therefore runs inside an interval of the operation. Each of its database steps is an
+  EDT. Administrator retry, attest and release are classified the same way (§5.8).
 
 ### 5.2 The invariant
 
@@ -241,12 +271,13 @@ interval on O may still be open.**
 | W1's own token release committed and observed | **Yes** | The release is the interval's last step (§5.1 (d)) |
 | W1's process is gone on the designated host: the recorded PID is absent at a reliable observation, or the PID is present with a reliably read **different** start time. The check is made by a reclaimer on that host. | **Yes, hypothesis P1** [UNPROVED: Proof 2] | A terminated process issues no further calls. A process blocked in kernel I/O remains present. An absent PID observed reliably proves the recorded process ended, and a later reuse does not resurrect it. |
 | An administrator's recorded verification that W1's host is powered off or isolated from storage and database | **Yes, manual only** | C-07 host or access exclusion. Used for restore, rebind and tokens naming another host. |
-| Lost PostgreSQL connection; a free advisory lock; `pg_terminate_backend` returned true | **No** | The JVM and its I/O can outlive the session |
+| Lost PostgreSQL connection; a free advisory lock; `pg_terminate_backend` returned true | **No** | The JVM and its I/O can outlive the session. A signal is not confirmed exit. |
 | Job lease expired, stale presence, missing heartbeat | **No** | These are time-based (C-09) |
 | Service manager reports "stopped"; `WorkerProcess.stop` returned after its 10 s join [SRC] | **No** | Neither proves exit |
 | The process start time cannot be read; an access or query error; a permissions error (distinct from "no such process") | **No** | The identity is not established. This means refuse. |
 | The token names another host | **No** (automatic) | A local check cannot observe another host |
 | The random instance UUID | **No** (attribution only) | An unrelated OS process cannot be asked for it |
+| Contention on the O row (a lock wait, or 55P03) | **No** (never attribution) | Another legitimate same-role writer can hold O (§5.4.1). 55P03 also arises from `lock_timeout`. |
 
 **P1 hypothesis** **[G2-C7]:** under the actual service accounts on both platforms, Java 21 `ProcessHandle` can
 distinguish these cases, or fail closed when it cannot:
@@ -272,12 +303,22 @@ automatic.
 - `effect_owner_started_at` (OS start, in a representation that round-trips exactly per P1);
 - `effect_interval_id` (uuid, unique per interval).
 
-The runtime role may change only these columns, and the accepted lifecycle columns, through accepted writers. Granting
-the token CAS does not permit changing immutable archival fields (INV-6).
+The runtime role may change only these columns, and the accepted lifecycle columns, through accepted writers.
+Granting the token CAS does not permit changing immutable archival fields (INV-6).
+
+**Connection attribution label** [NEW] **[G3-V1]:**
+- Every runtime database connection carries the process's `process_instance_id` in its PostgreSQL
+  `application_name`. This extends the accepted `ApplicationName` label `genealogy-archive-<purpose>` [SRC
+  `DataSources`]. The exact format is fixed at implementation, within PostgreSQL's 63-byte limit.
+- Every runtime connection is created through `DataSources` (a build rule) [UNPROVED inventory].
+- This is a **label, not a registry**: there is no table, no registration transaction and no lifecycle. It exists so
+  that a reclaim can establish that **no backend of the former process remains** (T-6). Lock contention cannot
+  establish that, and the process check (P1) proves only that the JVM ended.
+- A spoofed or foreign label can only cause a **refusal**, never a takeover.
 
 **Rule T-1: acquisition commits before any effect.**
-- Acquisition is its own short transaction, run under the operation's advisory lock and outside any enclosing
-  transaction.
+- Acquisition is its own short, **outermost** transaction: nothing else is open on that connection, and the thread
+  holds no other transaction. The writer holds the operation's advisory lock when it acquires (§5.4.1).
 - It consists of one compare-and-set:
 
   ```sql
@@ -287,92 +328,154 @@ the token CAS does not permit changing immutable archival fields (INV-6).
                  AND s.installation_id = :installation AND s.host_id = :host)
   ```
 
-- It COMMITs before the first conflicting effect or EDT.
-- Zero rows updated means no effect: report "in progress elsewhere" or "installation not ready".
+- It COMMITs before the first conflicting effect or EDT. Zero rows updated means no effect: report "in progress
+  elsewhere" or "installation not ready".
 - When the subject's row is created by the writer that will act on it (a receiving upload), the token is set in the
   **inserting** transaction, which commits before the staging file is created.
 
-**Rule T-2: unknown acquisition outcome.**
+**Rule T-2: unknown outcome of the writer's own token transaction** (acquire or release). **[G3-V1]**
 - No effect is issued.
-- The writer confirms that its acquiring backend is gone: it re-reads `pg_stat_activity` for its recorded
-  `(pid, backend_start)` from a fresh connection, and terminates that backend if needed. The runtime role may signal
-  backends of its own role only.
-- It then reads the row:
-  - `effect_interval_id` equal to its own interval ⇒ acquired;
-  - anything else ⇒ not acquired.
-- If backend absence cannot be confirmed, the writer issues nothing and reports the condition. The subject may then
-  carry a token whose owner never acts. That token is later reclaimed under T-6, once the process ends.
+- The writer knows its **own** attempted backend exactly: the `(pid, backend_start)` it read when that connection
+  opened. It closes that connection.
+- From a fresh connection, after `pg_stat_clear_snapshot()`, it waits a bounded time for that exact
+  `(pid, backend_start)` to be absent from `pg_stat_activity`. The runtime never signals any backend, not even its
+  own.
+- If the backend is absent, it reads the row:
+  - its own interval ⇒ acquired (or, for a release, the release did not commit, so it retries the release);
+  - anything else ⇒ not acquired (or released).
+- If absence is not observed within the bound, it decides nothing and reports "own token transaction outcome
+  unknown; backend still present". Resolution is by the administrative path (§10.4), which may terminate **that
+  exact** backend after revalidating `(pid, backend_start)`, and then confirms absence.
+- A token left set by an unresolved acquisition is later reclaimed under T-6.
 
 **Rule T-3: every EDT checks the interval, in the same transaction.**
-- The EDT locks the subject's row with `SELECT … FROM file_operation WHERE operation_id = :op AND effect_interval_id
-  = :interval FOR NO KEY UPDATE`.
-- Alternatively, the EDT's own operation-row UPDATE carries `AND effect_interval_id = :interval`.
-- **Placement (lock order preserved):**
+- The EDT locks the subject's row with
+  `SELECT … FROM file_operation WHERE operation_id = :op AND effect_interval_id = :interval FOR NO KEY UPDATE`.
+  Alternatively, its own operation-row UPDATE carries `AND effect_interval_id = :interval`.
+- That predicate is the **token-owned O** premise (§5.4.1). Zero rows, or a mismatch, means the whole transaction
+  rolls back. The writer stops the interval, issues nothing more, and reports "ownership lost".
+- **Placement:**
   - in a window that already locks O, at its existing O position;
-  - otherwise, as an owned-O acquisition admitted by G10, **after** the window's last ordered lock (Ct or later),
-    never before Ct;
-  - a single-statement EDT on O itself puts the predicate in its WHERE clause;
-  - an effect-dependent autocommit statement on another row (for example an E1/E2 finding inside a state-changing
-    window) becomes a two-statement transaction: the statement first, then the O check, as owned O after Ct.
-- **Zero rows, or a mismatch ⇒ the whole transaction rolls back.** The writer stops the interval at once, issues no
-  further effects, and reports "ownership lost". No part of the EDT is accepted.
+  - otherwise, **after** the window's last ordered lock (Ct or later), never before Ct.
+- A converted effect-dependent finding (formerly a standalone E1/E2 autocommit statement in a state-changing window)
+  is no longer terminal. It becomes a short transaction with ordered locks first (its own Ct-level row), then
+  token-owned O. That is a Ct → O window under the retained order (§5.4.1).
+- All EDTs of one interval are issued **sequentially by the interval's owning thread**. Helper threads perform only
+  filesystem I/O.
 
 **Rule T-4: release.**
-- When §5.1 (a)–(c) hold, the owner commits
+- When §5.1 (a)–(c) hold, the owner commits, as an outermost transaction,
   `UPDATE … SET <five fields> = NULL WHERE operation_id = :op AND effect_interval_id = :interval`.
-- **Unknown release outcome:** the former owner issues **no further effects**, because the interval has already
-  ended locally. It resolves the outcome as T-2: confirm the backend is gone, then read. If its token is still set, it
-  retries the release. If the token is null, or names another interval, it does nothing.
-- A token left set after a lost release is safe. It only delays others until they reclaim under T-6.
+- **Unknown release outcome:** the former owner issues no further effects (the interval has ended locally) and
+  resolves the outcome by T-2.
+- A token left set after a lost release only delays others until they reclaim under T-6.
 
-**Rule T-5: stale-owner rollback.** If the owner ever finds a mismatch (T-3), it treats the subject as no longer
-its own. Such a mismatch is possible only after a mistaken reclaim or an administrator's deliberate clearing. The
-owner rolls back, issues nothing more, and leaves recovery to the current owner. This is defence in depth, not
-the exclusion proof.
+**Rule T-5: stale-owner rollback.** If the owner ever finds a mismatch (T-3), it rolls back, issues nothing more,
+and leaves recovery to the current owner. This is defence in depth, not the exclusion proof.
 
-**Rule T-6: reclaim.** A reclaimer reclaims only when all of the following hold:
+**Rule T-6: reclaim** **[G3-V1, executable form].** Preconditions:
 1. The token's host is this host. Otherwise refuse, and leave the token to the administrator (§5.7).
-2. The interval is not active in the reclaimer's **own** JVM. Each JVM keeps an in-memory set of its open intervals
-   and their pending asynchronous work. This set only prevents same-JVM confusion. It never authorises clearing
-   another thread's still-running interval.
+2. The interval is not active in the reclaimer's **own** JVM. The in-memory set only prevents same-JVM confusion; it
+   never authorises clearing another thread's still-running interval.
 3. The recorded process is gone (§5.3, P1).
-4. A reclaim transaction runs, as its own short transaction under the operation's advisory lock:
-   - `UPDATE … SET <five fields> = <mine> WHERE operation_id = :op AND effect_interval_id = :old_interval`, with
-     **NOWAIT**;
-   - in the same transaction, an `EFFECT_OWNER_RECLAIMED` operation event (old and new instance and interval);
-   - COMMIT before any effect.
-5. If the reclaim outcome is unknown, resolve it as T-2.
 
-**Why an old backend cannot commit after a reclaim** (no connection registry is needed). Every EDT of the old interval
-must hold the O row lock under its own interval predicate when it commits (T-3). For any old backend B, one of three
-cases applies:
-- **(i) B committed before the reclaim.** The reclaimer's fresh read and recovery see B's result.
-- **(ii) B holds the O row lock when the reclaim runs.** The NOWAIT UPDATE fails with 55P03, and the reclaimer refuses
-  ("a transaction of the former owner is still open"). The administrator, or a later recovery pass, terminates B by
-  `(pid, backend_start)` and confirms it is gone, which rolls B back. The reclaim is then retried.
-- **(iii) B has not reached its O check.** After the reclaim commits, B's predicate matches zero rows and B rolls
-  back entirely (T-3).
+Then **one short, outermost transaction**, under the operation's advisory lock:
 
-So an old backend either completed before the replacement, is refused as still open, or is rolled back as stale.
-Process death is never treated as backend death. **[UNPROVED: Proof 2 B1 variants]**
+```sql
+BEGIN;
+SET LOCAL lock_timeout = '<short bound>';            -- bounds the ROW SHARE table-lock wait,
+                                                      -- which NOWAIT does not cover
+SELECT 1 FROM file_operation
+ WHERE operation_id = :op AND effect_interval_id = :old_interval
+   FOR NO KEY UPDATE NOWAIT;                          -- 0 rows: token changed, so roll back and re-read
+SELECT pg_stat_clear_snapshot();
+SELECT count(*) FROM pg_stat_activity
+ WHERE datname = current_database()
+   AND application_name carries :old_instance;        -- must be 0, otherwise roll back and refuse
+UPDATE file_operation SET <five fields> = <mine>
+ WHERE operation_id = :op AND effect_interval_id = :old_interval;   -- this row is already locked by us
+INSERT INTO file_operation_event (… EFFECT_OWNER_RECLAIMED, old and new instance and interval …);
+COMMIT;
+```
 
-**Rule T-7: logical cancellation never touches the token.**
-- It never clears or transfers the token.
-- It never authorises deletion, promotion, release, adoption or any other conflicting physical work.
-- Physical cleanup after a logical cancellation is a separate interval, subject to T-1 or T-6.
+**Outcomes** (no inference, and never a termination by the runtime):
+- **55P03**, from either NOWAIT or `lock_timeout` ⇒ roll back and report "operation row busy". 55P03 is **not**
+  evidence that the former owner holds the row: another legitimate same-role writer may (§5.4.1). Recovery retries
+  later.
+- **A labelled backend of the former instance remains** ⇒ roll back and report "a database session of the former
+  process remains". Only the administrative path may terminate it, and only after confirming that the former process
+  is gone (P1) and revalidating the backend's `(pid, backend_start)` and label. It then confirms the backend is
+  absent. An unlabelled or unattributable blocker is never terminated automatically; the administrator investigates.
+- **An unknown reclaim COMMIT** ⇒ T-2.
+
+**Why no former backend can commit after a reclaim.** At the reclaim's COMMIT:
+- the former process is gone (P1);
+- **no backend carrying its label exists** (the check inside the reclaim transaction);
+- every runtime connection carries the label.
+
+The former process can open no new backend. So no backend of the former interval exists, and none can later lock
+anything. An EDT committed by it before the reclaim is visible to the reclaimer's fresh read. **[UNPROVED: Proof 2
+B1 variants and the labelling inventory]**
+
+#### 5.4.1 Ownership premise and O-row lock classes (replaces the G10 "owned O" premise) **[G3-V1]**
+
+The retained G10 premise ("owned O: `adv[O]` registered to this thread and not LOST") **no longer holds**, because
+trace T-d lets W1 continue after losing its advisory session. Draft 3 replaces it as follows.
+
+**Premise.**
+- A **non-terminal** acquisition of an operation row O (holding O while acquiring further locks, or acquiring O after
+  other locks) is permitted only to the **current interval's owning thread**.
+- That thread establishes the premise in the statement itself, through T-3's `effect_interval_id = :interval`
+  predicate.
+- The advisory lock still schedules work among live sessions (B-7). It is no longer a premise for locking O.
+
+**Every class of writer that locks an operation row:**
+
+| Class | Who | Locks held | Terminal? |
+|---|---|---|---|
+| **Token-owned O** | the current interval's owning thread (EDTs, T-3) | the window's retained ordered locks, then O (or O at its existing position) | No; the only non-terminal class |
+| Token acquire, release, reclaim (T-1, T-4, T-6) | any writer, outermost | O (plus the reclaim's event insert, a private new row) | **Yes** |
+| Stale RECEIVING abandonment CAS | recovery | O plus its event (private) | **Yes** |
+| Request-only cancel note, other notes | web or worker | O only (single statement) | **Yes** |
+| Receiver renewal (`renewReceivers`) | the receiving process | the RECEIVING O rows of its own uploads, in one statement | Terminal with respect to every other resource. Its competitors on those rows are all single-row terminal: abandonment CAS, the STAGED CAS, notes, token transactions. |
+| Multi-operation windows (destruction over other writers) | the DESTROY interval owner | each other operation's O is token-owned by the destruction: acquired by a separate T-1 per operation **before** the window, in operation-UUID order, then locked in operation-UUID order at the window's retained position | No; covered as token-owned O for each row |
+
+**No deadlock cycle passes through an O row:**
+- At any moment **exactly one** interval can own a given O, and T-6 guarantees that no backend of a former owner
+  survives.
+- So every non-terminal locker of a given O is one thread.
+- Every other locker holds nothing but O, plus a private insert, while it waits.
+- A cycle through O would need a second non-terminal holder of O, and none exists.
+
+Cycles through other resources are excluded by the retained order: the window's ordered locks, then O, or O at its
+retained position, with G1's π check for any later ordered acquisitions. **Any writer found during the inventory that
+fits none of these classes is an unclassified O-row writer, and is a contract failure until it is classified.**
+[UNPROVED: §12 inventory and LO tests]
+
+**Other content windows** (another operation's EDTs on content X, integrity re-verification, destruction):
+- They lock Ct(X) and content-scoped rows in the retained order, and **their own** token-owned O rows.
+- They lock another operation's O only as a terminal note, or as token-owned O after acquiring that operation's token.
+
+**Rule T-7: token-free transitions never touch the token** **[G3-V3]:**
+- The transitions listed in §5.1 never clear or transfer the token.
+- They never authorise deletion, promotion, release, adoption, a Q or U change, a claim change, staging cleanup or
+  any other conflicting physical work.
+- Physical cleanup or finalization after them is a separate interval, under T-1 or T-6.
 
 **Traces** (W = writer, O = operation):
 
 | # | Trace | Outcome |
 |---|---|---|
-| T-a | W1: T-1 COMMIT ok → copy and force → EDT (Ct, Q/O, interval predicate) COMMIT → T-4 release COMMIT | Normal |
-| T-b | W1: T-1 statement executed, then COMMIT rolled back (or the backend died before COMMIT) | W1 sees failure or an unknown outcome. No effect is issued. On unknown, T-2 finds the token null and W1 does nothing. |
-| T-c | W1: T-1 COMMIT unknown, backend still alive | W1 issues nothing. It terminates the backend and confirms it gone, then reads: its own interval ⇒ proceed; null ⇒ not acquired. |
-| T-d | W1 is copying; its advisory session drops; W2 takes the advisory lock and sees the token. W1's PID is present with the same start time. | W2 refuses. W1 continues, and its EDTs commit through the T-3 predicate on new pool connections. |
-| T-e | W1's JVM dies mid-copy while backend B1 is idle in a transaction holding the O lock (an EDT waiting to commit) | The recovery reclaim fails with NOWAIT and reports "former owner transaction open". The administrator or a recovery pass terminates B1, confirms it gone, and B1 rolls back. The reclaim retries and commits. The new owner verifies the bytes (C-3). |
-| T-f | W1's JVM dies; B1 is still connected but has not reached its O check | The reclaim commits. B1's later O check finds a mismatch and rolls back fully. |
-| T-g | W1 finishes; T-4 release COMMIT is unknown | W1 issues no further effects. T-2 resolution: still set ⇒ retry the release; null ⇒ done. |
-| T-h | Receiver W1 is alive but cannot reach the database; the timeout fires | Recovery commits RECEIVING → ABANDONED (logical, T-7). The token stays. Cleanup tries T-6: W1's PID is present ⇒ refuse ("renewal and progress absent; cleanup pending"). W1's later STAGED CAS fails, so W1 deletes its own temporary file and releases (T-4). Cleanup then finds the token null, or later reclaims after W1 exits. |
+| T-a | W1: T-1 COMMIT ok → copy and force → EDT (Ct, Q, then token-owned O) COMMIT → T-4 release COMMIT | Normal |
+| T-b | W1: T-1 statement executed, then the transaction rolled back (or the backend died before COMMIT) | No effect. If the outcome is unknown, T-2 finds the token null and W1 does nothing. |
+| T-c | W1: T-1 COMMIT unknown; its own backend is still present | W1 issues nothing. It closes the connection and waits a bounded time for its exact `(pid, backend_start)` to disappear. Absent ⇒ read: its own interval ⇒ proceed; null ⇒ not acquired. Still present ⇒ report; the administrative path resolves it. |
+| T-d | W1 is copying; its advisory session drops; W2 takes the advisory lock and sees the token. W1's PID is present with the same start time. | W2 refuses (W2 may only add a terminal note). W1 continues, and its EDTs commit through T-3 on new pool connections. |
+| T-e | W1's JVM dies while its backend B1 is still connected (idle in transaction holding Ct, or holding O) | The recovery reclaim sees B1's label (or gets 55P03 if B1 holds O) and rolls back with "a database session of the former process remains" (or "busy"). The administrator confirms W1 gone and B1's `(pid, backend_start)` and label, terminates B1, confirms absence (B1 rolls back), then the reclaim retries and commits. The new owner verifies the bytes (C-3). |
+| T-f | W1's JVM dies; the operating system closes its sockets, so B1 detects the disconnect and ends, rolling back its open transaction | The reclaim finds no labelled backend and no lock, and commits. |
+| T-g | W1 finishes; T-4 release COMMIT unknown | W1 issues nothing more and resolves by T-2 |
+| T-h | Receiver W1 is alive but cannot reach the database; the timeout fires | Recovery commits RECEIVING → ABANDONED (token-free, T-7). The token stays. Cleanup tries T-6: W1's PID is present ⇒ refuse ("renewal and progress absent; cleanup pending"). W1's later STAGED CAS fails, so W1 deletes its own temporary file and releases (T-4). Cleanup then finds the token null, or reclaims after W1 exits. |
+| T-i **[G3-V3]** | An administrator requests cancellation of a BLOCKED operation whose worker W1 lost its advisory session but is alive with the token | `cancel` records only the request (token-free). `performCancel` on worker W2 must acquire the interval: T-1 matches zero rows, and T-6 refuses because W1's process is present. So nothing is observed, moved, released, recorded unresolved or cleaned. The request remains visible and is retried. When W1 releases or exits, W2 acquires or reclaims and finalizes entirely within its interval, with each database step an EDT. |
+| T-j **[G3-V1]** | T-6 meets 55P03 because a legitimate same-role writer holds O (for example the receiving process's renewal) | Roll back and retry later. No backend is terminated, and nothing is inferred from the contention. |
 
 ### 5.5 End of an interval: storage outcome, blocked I/O and NAS **[G2-C7]**
 
@@ -425,7 +528,8 @@ This is trace T-d, together with T-3 for W1's later EDTs.
 - Nothing retries automatically into a takeover. Other subjects are unaffected.
 - Administrator routes:
   - wait;
-  - terminate the process (or the backend) and confirm;
+  - terminate the process and confirm its exit (P1); or, by the administrative path only, terminate an **exactly
+    attributed** backend (§10.4) and confirm its absence;
   - for another-host tokens or an unproven storage topology, record a host or storage exclusion statement and reclaim
     through the offline procedure (§6, §7.6).
 
@@ -434,11 +538,13 @@ This is trace T-d, together with T-3 for W1's later EDTs.
 | Effect / source [SRC, review §8] | Subject | Treatment |
 |---|---|---|
 | Upload receiving into staging; the receiver's own failure cleanup, including after a failed STAGED CAS (`IngestionService`) | the existing INGEST (or REPAIR) operation | Token set in the inserting transaction (T-1). The receiver cleans its own temporary file after its channel closes, then releases. The accepted receiver lease renewal and failed-STAGED-CAS behaviour are **preserved unchanged**: a late receiver cannot finalize an abandoned upload. |
-| Receiving timeout (`abandonStaleReceiving`) | same operation | **Preserved unchanged** as logical cancellation: the stale predicate is rechecked in the UPDATE with its ABANDONED event (T-7). A renewing slow upload is never selected. Its effect on the token: none. |
+| Receiving timeout (`abandonStaleReceiving`) | same operation | **Preserved unchanged** as a token-free transition (§5.1, T-7): the stale predicate is rechecked in the UPDATE with its ABANDONED event. A renewing slow upload is never selected. Its effect on the token: none. |
 | Staged-file cleanup (`RecoveryService.cleanStaging`) | the **existing** operation | Today it deletes with no owner exclusion [SRC]. It MUST acquire (T-1) or reclaim (T-6) an interval before deleting. The `staging_cleaned` and `target_created` guards are kept. `markStagingCleaned` is an EDT (T-3). If ownership cannot be established, the visible state is "renewal/progress absent; cleanup pending". |
 | Promotion, verification, commit, repair copies and partial replanning (`OperationProcessor`, `OperationCopies`) | INGEST or REPAIR | Interval; EDTs under T-3 |
 | Quarantine moves, `reconcileAll` and settlement (`QuarantineMoves`) | the Q entry's operation | Interval per entry; settlement is an EDT. `reconcileAll` acquires or reclaims per entry, never by elapsed time. |
-| Unresolved attest, release and quarantine (`UnresolvedObjects`); retry and cancel (`OperationAdminService`) | the row's operation | Interval for the physical part. A cancel is logical (T-7) unless it moves bytes. |
+| Cancellation request (`OperationAdminService.cancel`) | the operation | Token-free: request note plus queued job only (§5.1) |
+| **Cancellation finalization** (`performCancel`) **[G3-V3]** | the operation | **Whole method inside an interval** (T-1, or T-6), even when nothing is moved: the target observation, the CANCELLED_COPY move, `claimBecomesUnresolved` / `releaseTarget` with the CANCELLED transition (one EDT), staging delete and `markStagingCleaned` (EDT). The accepted outcomes and messages are unchanged. Without the interval it refuses and the request stays pending (trace T-i). |
+| Administrator retry (`OperationAdminService.retry`); unresolved attest, release and quarantine (`UnresolvedObjects`) | the row's operation | Inside an interval. Each state, U, Q or claim change is an EDT. A step may be reclassified as token-free only if the inventory shows it is request-only by the §5.1 criteria [UNPROVED inventory]. |
 | Destruction, with `tryLockAll` over the other writers (`DestructionProcessor`) | DESTROY, plus every other writer's token | Every other writer's token must be null or reclaimable under T-6. Otherwise refuse. |
 | Integrity re-verification (`IntegrityService.reverify`): restoring read-only protection, re-hashing, updating content state and findings | content X (no operation row) | A permission change on an original is a filesystem effect. It runs under Ct(X) coordination and F5-3 observation revalidation. Whether it conflicts with an open REPAIR or DESTROY interval on X, and needs that interval's exclusion, is an inventory obligation [UNPROVED]. "Reads hashes" is not treated as effect-free. |
 | `init-volume` marker and managed directories (`VolumePreservationService`, `VolumeMarker`, `ManagedVolume`) | the volume (no operation) | Kept as ordinary administrative provisioning: exclusive create plus force; the accepted refusal of an existing marker. A crash that leaves a marker without the database timestamp or the directories remains refused. Any reconciliation compares the full marker identity and the directory and database state under administrator authority. Nothing is overwritten or adopted. The command keeps its accepted ready-archive precondition, so it is not run during OFFLINE. |
@@ -563,7 +669,7 @@ accepted Flyway configuration [SRC].
 | E-2 | The history is a prefix of the target chain, with matching checksums. A hotfix or foreign history refuses. |
 | E-3 | Every migration is transactional. A non-transactional statement is refused at build time. |
 | E-4 | A coherent pre-upgrade checkpoint is recorded in the receipt. For the first Architecture C migration, it is recorded in the seed receipt. |
-| E-5 | Each committed migration step is evidenced by its Flyway history row. Receipts record the attempt's starting and final history version (MIGRATED, §9.2). |
+| E-5 **[G3-V2]** | **Native Flyway evidence is authoritative for migration steps.** Each committed step is proved only by its Flyway history row, the validated checksums of the whole history, and the schema validation, all read under exclusion after the attempting backend is confirmed absent. No migration writes a maintenance receipt (except the control migration's SEED, §7.5), and no receipt proves a migration. A **MIGRATED** receipt is an aggregate checkpoint record written **after** a run of migrations, in its own admin transaction. It records the start and final history versions observed at that moment. It is never atomic with the migrations it summarises. |
 
 ### 7.2 Validation before reopening
 
@@ -580,6 +686,7 @@ accepted Flyway configuration [SRC].
 | Successful migration | Validation → READY → reopen |
 | Failure before a committed checkpoint | The migration transaction rolls back and the history is unchanged. The attempt state is as found (§6.6). Fix and rerun, or restore the checkpoint. |
 | Failure after a committed checkpoint | The history shows an intermediate prefix, and ordinary processes cannot run (OFFLINE, `NOLOGIN`, freeze, fence). Rerun the same target build, which validates the prefix and continues, or restore the checkpoint. Intermediate schemas are never compatible for ordinary admission. |
+| **History committed, MIGRATED receipt missing** **[G3-V2]** (crash or connection loss after the last migration commit, before the aggregate receipt) | §7.4 Flyway branch. After confirming the backend is absent, validate the actual history (prefix of the target chain, checksums), and the schema if the top is the target. Then write a MIGRATED receipt with `reconciled = true`, recording the receipted or SEED start version and the actual final version. The history, not the receipt, is the evidence. Continue the remaining migrations, or validate. |
 | Unknown COMMIT | §7.4 |
 | Interrupted maintenance | §6.6 |
 | Runtime identity mismatch | §10.3 [OD-4] |
@@ -593,12 +700,23 @@ accepted Flyway configuration [SRC].
    and expected old and new values (§9.2).
 2. After an error, from a fresh admin connection, it confirms that backend is gone, terminating it if needed. If
    absence cannot be confirmed, it decides nothing and the state stays as it is.
-3. It looks up the exact receipt (§9.2):
-   - **the receipt is present, with this attempt, kind and old/new values**, and the singleton (or Flyway history row)
-     shows the new value ⇒ committed: reuse it, with no second receipt;
-   - **no such receipt, and the singleton shows the expected old value** ⇒ not committed: retry with freshly read
-     preconditions;
-   - **anything else** (another attempt's receipt, another binding, a mode not predicted) ⇒ refuse with diagnostics.
+3. **[G3-V2]** It decides by kind, using the evidence that is atomic with that kind (§9.2 table):
+   - **Flyway migration step:** read the history. The attempted version present with a valid checksum ⇒ committed;
+     absent ⇒ not committed. Then validate the prefix (E-1, E-2). No receipt is consulted or required. A missing
+     MIGRATED receipt is reconciled afterwards (§7.3).
+   - **SEED** (control migration): the history row, the `installation_state` row and the SEED receipt, all
+     together, or none.
+   - **ARCHIVE_INITIALIZED:** the `archive_instance` row, its accepted change-history entry and the receipt, all
+     together, or none (§7.5).
+   - **ENTER_OFFLINE, REBIND, READY:** look up the exact receipt:
+     - **the receipt is present, with this attempt, kind and old/new values**, and the singleton shows the new value
+       ⇒ committed: reuse it, with no second receipt;
+     - **no such receipt, and the singleton shows the expected old value** ⇒ not committed: retry with freshly read
+       preconditions;
+     - **anything else** (another attempt's receipt, another binding, a mode not predicted) ⇒ refuse with
+       diagnostics.
+   - **MIGRATED** (aggregate): present ⇒ reuse; absent ⇒ write it again from the actual validated history. It is
+     never evidence of a migration.
 
 **Success is never identified from the new binding or mode alone.**
 
@@ -717,15 +835,72 @@ Historical admission runs read-only during the one-time transition, and after an
 - A generation label or a content UUID **cannot** separate two real aliases of one physical path.
 - Sharing X does **not** merge distinct paths or generations into one object.
 
-### 8.3 Acceptable inherited evidence (R39-T; positive witnesses)
+### 8.3 Acceptable inherited evidence (R39-T): exhaustive witness classification **[G3-V4]**
 
-| Witness | Basis |
+**Normative source.** The witness for each inherited row class is the retained, accepted-writer-derived audit
+classification of revision 3.9:
+- **AU-1…AU-8** of proposal §5.6.5, as rebuilt on writer behaviour in **§5.7.9** (R7-A1…A4);
+- extended by the recorded-absent intent rules of **§5.8.7**;
+- refined by the positive-witness reading of **§5.10.6** (W_Q, W_U, PC, R39-T).
+
+Those sections are evidence of the derivations only. Revision 3.9's admission machinery (activation, publication,
+gates) is **not** retained.
+
+**Precedence.** Where retained text conflicts, the rules of §8.2, §8.4 and §8.5 of this contract win:
+- exact physical key versus content coordination domain;
+- role-scoped conflict checks and known relations;
+- movement authority from current authorization;
+- witness, then conflicts, then disposition.
+
+The retained A-6 waiver is inoperative, so no waiver exists.
+
+**Every row of these tables must match exactly one listed class.** A row matching none is **UNPROVED**, which is the
+retained UNSAFE-UNCLASSIFIED default.
+
+| Row class | Witness (positive, structured, writer-derived) | Retained source |
+|---|---|---|
+| **Generation, initial g₀(X)** | `operation_id = X.created_by_operation`, which is an INGEST of X with outcome NEW_CONTENT, `target_generation = g₀`, in COMMITTED or COMPLETED. **g₀ may be any number ≥ 1**: partial replans raise an ingest's target before Content exists, and `commitNewContent` stores `op.targetGeneration` [SRC]. `storage_path = originalPath(X, g₀)`; `volume_id = X.volume_id`. | AU-1 (§5.7.9, R7-A1) |
+| **Generation, later g ≠ g₀** | Created by a REPAIR R of X with `R.target_generation = g`, in COMMITTED or COMPLETED, g > g₀. Numbers may skip. Same path and volume rules. | AU-1 |
+| **Generation, superseded** (any state other than CURRENT), whether created by INGEST (g₀) or by REPAIR | Its **creator stays as above**; supersession does not change the creator. The state follows the accepted constructors: `commitRepair` (old CURRENT → MISSING or UNRESOLVED); `quarantineSuperseded` (QUARANTINE_PENDING → UNRESOLVED, MISSING, or QUARANTINED via settlement); destruction completion (→ DESTROYED). `quarantine_path` is non-null only for QUARANTINED or DESTROYED (V0014). An UNRESOLVED generation has an OPEN U of that (content, generation) at its storage path. Historical `vacated` is evidence, not identity (R7-A2). | AU-1 |
+| **Generation set of X** | Exactly one CURRENT while X is not DESTROYED; all DESTROYED when X is DESTROYED | AU-1 |
+| **Operation target meaning** | The (kind, state, outcome, `target_created`) table: INGEST NEW_CONTENT ⇒ its target generation **is** g₀(X); SHARED_CONTENT checked relationally; REPAIR and DESTROY name a persisted X | AU-2 (§5.6.5 table, §5.7.9 corrections) |
+| **Owner, GENERATION type** | **Forward:** names an existing generation with the same volume and `storage_path = path`. **Reverse:** every generation, in **every** state, has its GENERATION owner row (rows are never deleted, F1). A ledger row never implies that bytes are present. | AU-3 (a), (b) |
+| **Owner, OPERATION type** | **Forward:** names an operation with `target_created`, the same volume and `target_path = path`. **Reverse:** every operation with `target_created` and a non-null target has exactly one OPERATION row at (volume, `target_path`); a legacy row lost to V0017's `ON CONFLICT DO NOTHING` backfill fails the reverse direction (UNPROVED). **Kind consistency:** no OPERATION row at a path any generation records. | AU-3 (a), (b), (c) |
+| **U, by writer role** (exactly one role) | **W1** own copy (`claimBecomesUnresolved`: OPERATION_COPY, generation null, path = O's target, content = O's or null for a private ingest). **W2** supersession (`commitRepair`, `quarantineSuperseded`: DAMAGED_COPY or OBJECT_AT_VACATED_LOCATION at the storage path of generation g of X, generation = g) [SRC `OperationProcessor` 650–660]. **W3** destruction (`DestructionProcessor.newRecord`: OPERATION_COPY at a writer's target; CURRENT_COPY or OBJECT_AT_VACATED_LOCATION at the CURRENT storage path; DAMAGED_COPY at a QUARANTINE_PENDING or UNRESOLVED generation; QUARANTINED_COPY at a QUARANTINED generation's or Q's destination with generation null; OBJECT_AT_VACATED_LOCATION at a former location) [SRC `DestructionProcessor` 331–369]. Attestation fields consistent (V0019/V0020). | AU-4 (§5.7.9 writer-role table) |
+| **Q, INTENDED, by reason** (exactly one role) | Own copy: PARTIAL_COPY (trusted partial prefix), UNVERIFIED_COPY, CANCELLED_COPY, with the source read per **W_Q** (`originalPath(content, g)`, g from the row; this supersedes AU-5's "source = O's target"), the allowed suffix and the evidence basis per reason. ATTESTED_OBJECT: bound to an OPEN, attested, confirmed U at the source. **DAMAGED_GENERATION (legacy):** written by earlier Phase 2 builds, not by the current baseline [SRC: enum and V0014/V0019 constraint only]; source = storage path of a QUARANTINE_PENDING generation of Q's content; UNTRUSTED allowed. Pre-V0019 UNTRUSTED rows are admitted when the role relation holds. | AU-5 (§5.7.9); §5.8.7 recorded-absent; §5.10.6 W_Q |
+| **Q, settled** (QUARANTINED, SOURCE_ABSENT, REMOVED) and destinations | `quarantine_path = quarantinePath(Q.operation, suffix)`, with the suffix allowed for the reason; same-object references to a destination as listed | AU-5, AU-6 |
+| **Operation quarantine pointer** | Reference consistency only (§5.10.6): null, or the destination of a witnessed own-copy Q of that operation. It authorises nothing. | §5.10.6 |
+| **Aliases and claimant sets** | AU-7 and AU-8, applied with this contract's exact-key and known-relation rules (§8.2, §8.4) | AU-7, AU-8 |
+
+**Outcome mapping** to §8.5:
+
+| Retained classes | Outcome here |
 |---|---|
-| Own-copy Q | The reason is PARTIAL_COPY, UNVERIFIED_COPY or CANCELLED_COPY. The operation exists with kind INGEST or REPAIR. The source parses as `originalPath(content, g)`, with g **from the row**. The destination parses as `quarantinePath(op, allowed suffix)`. The volume equals the operation's, and the evidence matches the reason's shape. |
-| Attested-object Q | Reason ATTESTED_OBJECT, bound to the U and attestation evidence it settles. Its source may differ from its operation's current target. |
-| W1 operation-copy U | OPERATION_COPY with an INGEST or REPAIR operation. Generation null. Content equal to the operation's, or null for an unpersisted ingest. The path parses as `originalPath(uuid, g)`. |
-| Destruction-side U | Bound to the known object it records (`DestructionProcessor.newRecord`) |
-| Superseded generation | A generation row of X created by a REPAIR of X. A later REPAIR, or a destruction of X, referring to it is a **known relation**, not an alias. |
+| ADMITTED, ADMITTED-STALE, ADMITTED-CLEANUP | Admitted (inert where settled) |
+| UNSAFE-LEGACY, UNSAFE-UNCLASSIFIED | UNPROVED |
+| UNSAFE-ACTIVE, UNSAFE-AMBIGUOUS | UNSAFE |
+
+Every refusal refuses READY (D4-32).
+
+**Required passing fixtures** (healthy ordinary archives must pass):
+- g₀ = 1 and g₀ = 3;
+- skipped generation numbers;
+- an INGEST-created g₀ superseded after a repair, in each superseded state;
+- R1 and R2 repairs of X at different generations;
+- GENERATION owners of every generation state;
+- a final operation's stale OPERATION owner;
+- each W1/W2/W3 U kind;
+- each Q reason, including a legacy DAMAGED_GENERATION and a recorded-absent intent.
+
+**Required failing fixtures:**
+- a dangling owner in each direction;
+- an OPERATION owner at a generation path;
+- an unknown creator;
+- a U matching no role;
+- a foreign non-final claimant;
+- an alias.
+
+[UNPROVED: obligation 7]
 
 **Not evidence:**
 - absence of other references;
@@ -752,7 +927,7 @@ Historical admission runs read-only during the one-time transition, and after an
 
 ### 8.5 Order of classification and outcomes
 
-Every inherited Q, U, owner and generation row is classified **in this order**:
+Every inherited operation, generation, owner, Q and U row is classified **in this order**:
 1. Witness (§8.3).
 2. Conflict checks (§8.4).
 3. Disposition (below).
@@ -812,7 +987,7 @@ OD-5.
 |---|---|
 | `receipt_id` | A UUID generated by the tool **before** the transaction and stored with the attempt's local record. Immutable, unique. |
 | `attempt_id` | The maintenance attempt. Several receipts per attempt are allowed. **No foreign key** to the singleton's current attempt, so historical receipts never block a later attempt. |
-| `kind` | SEED, ENTER_OFFLINE, MIGRATED, ARCHIVE_INITIALIZED, REBIND, READY |
+| `kind` | SEED, ENTER_OFFLINE, MIGRATED, ARCHIVE_INITIALIZED, REBIND, READY. A MIGRATED receipt also carries `reconciled` (boolean). |
 | Old and new fields relevant to the kind | **ENTER_OFFLINE:** old mode READY with the previous attempt; new mode OFFLINE with this attempt. **REBIND:** old and new installation and host IDs. **READY:** old OFFLINE/attempt; new READY plus `ready_report_digest`. **MIGRATED:** starting and final history version. **SEED:** archive state (pristine or legacy-initialized), with the Archive ID when initialized. **ARCHIVE_INITIALIZED:** the new Archive ID. |
 | Archive ID, database identity | Compared values (never changed) |
 | Operator principal; recorded statements | Freeze, exclusion, former-host and coherent-restore statements, as text with no secrets. The full validation report is kept as a file; its digest is in the receipt. |
@@ -824,20 +999,30 @@ OD-5.
 - (`attempt_id`, `kind`, final version) is unique for MIGRATED checkpoints.
 - (`attempt_id`, old pair, new pair) is unique for REBIND.
 
-**One atomic operation.** In a single admin transaction, the tool:
-1. compares the expected singleton state (CAS predicate);
-2. inserts the exact receipt;
-3. changes the singleton.
+**Atomic target by kind** **[G3-V2]**. Draft 2's single universal "CAS + receipt + singleton change" applied
+literally only to the state transitions.
 
-If the CAS matches zero rows, or the insert fails, everything rolls back. Neither change survives.
+| Kind | Atomic with | Authoritative evidence after an unknown COMMIT |
+|---|---|---|
+| Native Flyway migration step | its own schema changes and Flyway history row (accepted, one transaction per migration). **No receipt.** | History row, validated checksums, schema (§7.4) |
+| **SEED** | the first Architecture C control migration: schema, history row, `installation_state` insert and SEED receipt, in one transaction | All present, or none |
+| **ARCHIVE_INITIALIZED** | the accepted initialization transaction: table lock, `archive_instance` insert, change-history entry, plus the receipt | All present, or none |
+| **ENTER_OFFLINE, REBIND, READY** | one admin transaction: compare the expected singleton state (CAS predicate), insert the exact receipt, change the singleton. A zero-row CAS or a failed insert rolls everything back. | The exact receipt, plus the singleton showing the new value |
+| **MIGRATED** (aggregate checkpoint) | nothing else: its own admin transaction, written **after** the migrations it summarises; `reconciled = true` when written by recovery | Informational. The history decides. |
+
+One permanent Archive ID is preserved, because only ARCHIVE_INITIALIZED can create it, and only in the pristine
+state (§7.5).
 
 **Append-only.** UPDATE, DELETE and TRUNCATE are refused, and the runtime role has no INSERT, so runtime cannot
 fabricate a success receipt.
 
-**Lookup after an unknown COMMIT** (§7.4):
+**Lookup after an unknown COMMIT** (§7.4), for ENTER_OFFLINE, REBIND and READY:
 - by `receipt_id`, **and** its kind and old/new values matching the attempted transition;
 - the singleton must show the new value;
 - a receipt of another attempt, or a different new value, means refuse.
+
+SEED and ARCHIVE_INITIALIZED are decided by the all-or-none presence of their atomic partners. Flyway steps are
+decided by the history.
 
 ---
 
@@ -847,7 +1032,7 @@ fabricate a success receipt.
 
 | Authority | Required capabilities | Never |
 |---|---|---|
-| **Runtime** (dedicated per installation; LOGIN only while READY) | DML on the application tables, as the accepted writers need; SELECT on `installation_state`; CAS on the token columns; signal backends of its **own** role only (needed by T-2) | DDL; writing `installation_state` or receipts; role administration; signalling other roles; superuser |
+| **Runtime** (dedicated per installation; LOGIN only while READY) | DML on the application tables, as the accepted writers need; SELECT on `installation_state`; CAS on the token columns; read `pg_stat_activity` for its own role (T-2, T-6) | DDL; writing `installation_state` or receipts; role administration; **signalling any backend**, including its own **[G3-V1]**; `pg_signal_backend`; superuser |
 | **Administrative** (maintenance only) | Schema owner for Flyway; write `installation_state` and receipts; change the runtime role's LOGIN or NOLOGIN; terminate this database's installation backends | Use by services; storage where the service account can read it |
 
 **Terminology corrected.**
@@ -856,7 +1041,7 @@ fabricate a success receipt.
 - Terminating backends of other roles requires membership in those roles or `pg_signal_backend`. That right can reach
   wider than one installation.
 
-**OD-6 is not a contract blocker.** The required capabilities above are fixed now; C-06 already approves the
+**[G3-V1]** The runtime needs no signalling right at all. **OD-6 is not a contract blocker.** The required capabilities above are fixed now; C-06 already approves the
 separation. The exact principal (a dedicated non-superuser role with bounded grants, or deliberately authorized DBA
 action) and the exact grants are settled before the proofs and implementation. Today a single role owns the schema
 and migrates "as the service account" [SRC]. That is a later deployment change.
@@ -898,7 +1083,22 @@ Only the administrative path, under §6, can:
 - reclaim tokens that name another host or an unproven storage topology;
 - apply historical resolutions.
 
-The runtime may reclaim only same-host tokens with proven exit (T-6).
+The runtime may reclaim only same-host tokens with proven exit and no remaining labelled backend (T-6).
+
+**Backend termination** **[G3-V1]** is administrative only. It is permitted for one backend at a time, and only
+after **exact attribution**:
+- **(a)** an attempting backend whose `(pid, backend_start)` the attempting process recorded itself (T-2, §7.4); or
+- **(b)** a backend carrying the label of a process instance that is confirmed gone (P1) or excluded by host
+  isolation.
+
+Before signalling, the administrator revalidates the backend's `(pid, backend_start)` (and label). After signalling,
+absence is confirmed on a fresh snapshot; signal success alone proves nothing. Lock contention, an unlabelled backend,
+or a backend of an unrelated same-role process is **never** grounds for termination: such a backend is investigated,
+or the action refuses.
+
+PostgreSQL's same-role signalling permission is a permission boundary, not an ownership boundary, so it is not used
+as one. M-5's maintenance drain is the one bulk exception: there, every non-tool backend of the database is
+terminated, and only after M-2 to M-4 have excluded all producers.
 
 ---
 
@@ -910,20 +1110,23 @@ The runtime may reclaim only same-host tokens with proven exit (T-6).
 |---|---|---|---|---|
 | 1 | Two workers compete for the same content | One acts per operation. Conflicting publications and claims are serialised. No deadlock. Generations are never reused. | Advisory lock; Ct and P2-8 windows; F5-1; T-1/T-3 | Ordinary corrections not implemented; LO/LP future tests |
 | 2 | Session loss while the original worker lives | No takeover | T-1 to T-6; P1 | **Yes:** Proof 2 |
-| 3 | Worker dies during I/O | One result; no adopted unknown bytes | T-6 (live-backend cases T-e, T-f); C-3 | **Yes:** Proof 2 (P1, P3) |
+| 3 | Worker dies during I/O | One result; no adopted unknown bytes | T-6 with label check (T-e, T-f); C-3 | **Yes:** Proof 2 (P1, P3) |
 | 4 | Blocked NAS, then recovery | No takeover or maintenance during the stall | C-2; token and fence persist | **Yes:** P3 |
 | 5 | Legacy restart during maintenance | No start; no write | M-2, M-3, M-5; §7.7 | **Yes:** Proof 1 |
 | 6 | Automatic service restart during migration | No producer admitted | Mask and restart freeze; fence; `NOLOGIN` | **Yes:** Proof 1, P2 |
 | 7 | Database connection survives shutdown | No late commit | M-5; prepared transactions refuse | Proof 1 |
 | 8 | Migration crash before a checkpoint | No partial migration | Transactional migration; offline boundary; bootstrap per §7.5 | Partly |
 | 9 | Migration crash after a checkpoint | No ordinary use of an intermediate schema | Prefix validation; continue or restore | Proof 1 |
-| 10 | Unknown transaction outcome | Decide only after the backend is confirmed gone; reuse or refuse | §7.4 with §9.2 receipts; T-2 and T-4 | **Yes:** Proof 1, Proof 2 |
+| 10 | Unknown transaction outcome | Decide only after the backend is confirmed gone; reuse or refuse | §7.4 by kind (Flyway history; SEED and ARCHIVE_INITIALIZED all-or-none; CAS + receipt) **[G3-V2]**; T-2 and T-4 | **Yes:** Proof 1, Proof 2 |
 | 11 | Runtime identity mismatch | No effects under the wrong identity | §10.3; T-1 | OD-4; unproved |
 | 12 | Replacement host while the old host may write | No reopen until the old host is excluded | §7.6; REBIND receipt; credential retirement | Operator premise; P3 |
 | 13 | Inherited ownership ambiguity | Refuse READY (D4-32) | §8 | **Yes:** obligation 7 fixtures |
 | 14 | Repeated repair or cross-operation relation | Admit known relations; refuse real conflicts | §8.2 to §8.5 | **Yes:** obligation 7 |
 | 15 **[G2-C2]** | Fresh install, including crashes at B-3, B-4 and B-5 | Exactly one Archive ID, or a safe OFFLINE refusal | §7.5 | **Yes:** Proof 1 |
-| 16 **[G2-C3]** | Receiving timeout with a live, isolated receiver | Logical ABANDONED; no cleanup while it may write; the late STAGED CAS fails; no File created | T-7; §5.8; trace T-h | **Yes:** Proof 2 |
+| 16 **[G2-C3]** | Receiving timeout with a live, isolated receiver | Token-free ABANDONED; no cleanup while it may write; the late STAGED CAS fails; no File created | T-7; §5.8; trace T-h | **Yes:** Proof 2 |
+| 17 **[G3-V3]** | Administrator cancellation while a lost-advisory owner lives | No observation, Q/U, claim or staging change until the interval is held; the request stays pending | §5.1; §5.8; trace T-i | **Yes:** Proof 2 |
+| 18 **[G3-V2]** | Migration history committed, MIGRATED receipt missing | Continue from the validated history; reconcile the receipt; no refusal on the missing receipt alone | E-5; §7.3; §7.4 | **Yes:** Proof 1 |
+| 19 **[G3-V1]** | Reclaim meets O-row contention from a legitimate same-role writer | Roll back and retry; no termination, no inference | T-6; trace T-j | **Yes:** Proof 2 |
 
 ---
 
@@ -946,7 +1149,7 @@ OFFLINE. The same applies to diagnostic status output.
 | | |
 |---|---|
 | **Prerequisites** | Prototype tool (M-1 to M-6, migration, validation, X-1 to X-4, bootstrap B-1 to B-6); prototype `installation_state` and receipt; runtime/admin role split on a scratch cluster; fence prototype (FileChannel candidate first); authentic Phase 3 and current Phase 4 builds as legacy artifacts; installed services (systemd; WinSW virtual accounts) |
-| **Setup** | (a) Legacy web receiving an upload; legacy worker mid-job; legacy CLI effect commands. (b) A compatible worker with an open interval. (c) An orphan runtime-role backend in an open transaction. (d) A prepared transaction. (e) A 3-step migration chain: fault after step 2 commits; unknown COMMIT on step 3, with the **original backend held alive** while a fresh read sees the old state. (f) A rebind with a crash after its transaction and before READY; unknown REBIND COMMIT with the backend alive. (g) Restart policies left enabled (negative control). **[G2-C7 additions]** (h) **Bootstrap:** no Archive ID and no state table → a successful single-ID initialization; crashes and unknown COMMITs at B-3 and B-4; interrupted B-5 configuration write. (i) **Entry and exit suffixes:** crashes after M-2, M-3 and M-6, after X-2, and during each X-3 action. (j) **Unknown READY COMMIT** with the backend alive. (k) **Legacy access combinations:** old configuration with the retired credential, and the new supported configuration presented to old binaries. (l) **Role capability negatives:** runtime cannot run DDL, write state or receipts, administer roles or signal other roles; admin can complete the bounded procedure. (m) **Wrong archive, wrong host, wrong configuration; missing or replaced fence object.** |
+| **Setup** | (a) Legacy web receiving an upload; legacy worker mid-job; legacy CLI effect commands. (b) A compatible worker with an open interval. (c) An orphan runtime-role backend in an open transaction. (d) A prepared transaction. (e) A 3-step migration chain: fault after step 2 commits; unknown COMMIT on step 3, with the **original backend held alive** while a fresh read sees the old state. (f) A rebind with a crash after its transaction and before READY; unknown REBIND COMMIT with the backend alive. (g) Restart policies left enabled (negative control). **[G2-C7 additions]** (h) **Bootstrap:** no Archive ID and no state table → a successful single-ID initialization; crashes and unknown COMMITs at B-3 and B-4; interrupted B-5 configuration write. (i) **Entry and exit suffixes:** crashes after M-2, M-3 and M-6, after X-2, and during each X-3 action. (j) **Unknown READY COMMIT** with the backend alive. (k) **Legacy access combinations:** old configuration with the retired credential, and the new supported configuration presented to old binaries. (l) **Role capability negatives:** runtime cannot run DDL, write state or receipts, administer roles or signal other roles; admin can complete the bounded procedure. (m) **Wrong archive, wrong host, wrong configuration; missing or replaced fence object.** **[G3-V2 additions]** (n) **History committed, MIGRATED receipt absent:** a crash after the last migration commit and before the aggregate receipt, and after an intermediate commit; recovery continues from the validated history and writes a `reconciled` receipt. Negative: a MIGRATED receipt whose history does not match is not accepted as evidence. (o) **Unknown COMMIT by kind:** the SEED control migration and ARCHIVE_INITIALIZED decided by all-or-none presence; ENTER_OFFLINE, REBIND and READY by the exact receipt. |
 | **Observable results** | Entry refuses while (a), (b) or (g) is alive, unverified or able to restart. (c) is drained; (d) refuses and is never resolved automatically. Recovery always reads the actual state (§6.6). Every unknown COMMIT is classified only after the original backend is confirmed gone, using the exact receipt. Bootstrap ends with one Archive ID or OFFLINE refusal. Legacy actors cause zero database mutation and zero protected filesystem effect. (m) refuses before migration, backend termination or a binding change. |
 | **Failure criteria** | Any producer effect, or any committed runtime-role transaction, during OFFLINE. Reopening without validation. A second Archive ID or a second rebind. A decision while the original backend lived. A legacy write. Fence acquisition while a compatible process lived. Automatic resolution of a prepared transaction. |
 | **Coverage** | Linux and Windows. PostgreSQL 16 and 18. Local volumes; NAS where available, labelled with its type. |
@@ -956,7 +1159,7 @@ OFFLINE. The same applies to diagnostic status output.
 | | |
 |---|---|
 | **Prerequisites** | Prototype token (T-1 to T-7) wired into one INGEST promotion, one quarantine move with settlement (a Q EDT), one U release (an EDT), receiving and `cleanStaging`. A test seam that blocks inside a filesystem call. A stalled storage target (Linux FUSE or a paused NFS export; Windows SMB with the server paused). |
-| **Setup** | (a) W1 acquires and starts promotion; its advisory backend is terminated while its JVM writes; W2 attempts the same operation. (b) W1 is blocked in a real kernel or NAS call. (c) W1 is killed (SIGKILL / TerminateProcess) mid-write, and W2 or recovery follows. **[G2-C7 additions]** (d) **B1 durability:** failure before the acquisition commits; unknown acquire and release COMMITs; W1's JVM killed while its backend holds the O row lock in an open EDT (T-e); and while its backend has not yet reached the check (T-f); Q and U EDT validation, not only the operation state transition. (e) **Receiving (M1):** renewal loss with a live receiver; timeout ABANDONED; attempted external cleanup; then the actual receiver closes or exits, followed by safe cleanup. (f) **Process identity across accounts:** the Windows web and worker virtual accounts; Linux service and admin visibility; same and different start; unavailable start; permission error; PID reuse; start time after a `timestamptz` round trip. (g) **Storage completion:** a stalled copy **and** a stalled rename; client/server reconnection after termination; observation of late write-back and namespace changes (a pre-exit size and hash sample is not enough). (h) **Same JVM and several JVMs:** the in-memory interval set never clears a still-running asynchronous effect. (i) Tokens naming another host; an unreadable identity. |
+| **Setup** | (a) W1 acquires and starts promotion; its advisory backend is terminated while its JVM writes; W2 attempts the same operation. (b) W1 is blocked in a real kernel or NAS call. (c) W1 is killed (SIGKILL / TerminateProcess) mid-write, and W2 or recovery follows. **[G2-C7 additions]** (d) **B1 durability:** failure before the acquisition commits; unknown acquire and release COMMITs; W1's JVM killed while its backend holds the O row lock in an open EDT (T-e); and while its backend has not yet reached the check (T-f); Q and U EDT validation, not only the operation state transition. (e) **Receiving (M1):** renewal loss with a live receiver; timeout ABANDONED; attempted external cleanup; then the actual receiver closes or exits, followed by safe cleanup. (f) **Process identity across accounts:** the Windows web and worker virtual accounts; Linux service and admin visibility; same and different start; unavailable start; permission error; PID reuse; start time after a `timestamptz` round trip. (g) **Storage completion:** a stalled copy **and** a stalled rename; client/server reconnection after termination; observation of late write-back and namespace changes (a pre-exit size and hash sample is not enough). (h) **Same JVM and several JVMs:** the in-memory interval set never clears a still-running asynchronous effect. (i) Tokens naming another host; an unreadable identity. **[G3-V1 and G3-V3 additions]** (j) **Executable reclaim:** `FOR NO KEY UPDATE NOWAIT` against a row held by a legitimate same-role writer (renewal, a terminal note), giving 55P03, a rollback and no termination; a `lock_timeout` 55P03 on the table lock (a concurrent `LOCK TABLE`), giving the same outcome; a labelled backend of the dead former instance still present, giving a refusal, then administrative termination after attribution, then a successful reclaim; an unlabelled same-role blocker, never terminated. (k) **Own-backend resolution (T-2):** an unknown acquire COMMIT with the own backend still present beyond the bound, giving a report and no signal by the runtime. (l) **O-row lock classes:** concurrent renewal, stale abandonment CAS, notes and token transactions against token-owned EDTs; zero 40P01. (m) **Cancellation finalization:** `performCancel` against a live lost-advisory owner, for each branch (UNVERIFIED with the claim recorded unresolved; ABSENT release-only; CANCELLED_COPY move; staging delete). Each is refused with no Q, U, claim or staging change until the interval is held; then finalized with every step an EDT. |
 | **Observable results** | No W2 effect or EDT while W1's process exists. W1's EDTs succeed through the predicate. After confirmed exit: a reclaim with an `EFFECT_OWNER_RECLAIMED` event, then byte verification and one accepted result. T-e refuses until the backend is terminated; T-f rolls back fully. (e) produces no STAGED and no File after cancellation, no cleanup while the receiver may write, and an unchanged result for an actively renewing slow upload. (i) refuses. |
 | **Failure criteria** | Any W2 effect while W1 exists. A reclaim by elapsed time. A committed stale EDT. A reclaim of another host's token. A duplicate File or content. An adopted unverified byte. A late write or namespace change altering what W2 relied on. |
 | **Coverage** | Linux and Windows; PostgreSQL 16 and 18; local and NAS volumes. Java-seam blocking is labelled separately from kernel or NAS stall characterisation. |
@@ -983,7 +1186,7 @@ machinery.
 | OD-3 | Fence library and identity | Open choice; the safety invariant (§6.3) is fixed now. Candidate: FileChannel under P2; JNA if P2 fails. A new dependency needs approval. | **Not a contract-acceptance blocker.** Choose before proof execution and implementation. |
 | OD-4 | Runtime mismatch lifecycle | Open. Recommend latch and controlled exit (§10.3). | Before implementation |
 | OD-5 | Receipt representation | Open. Recommend a dedicated append-only table. The data contract (§9.2) is fixed now. | Before DDL |
-| OD-6 | Administrative principal and exact grants | Open choice. The capabilities (§10.1) are fixed now; separation is approved by C-06. | **Not a contract-acceptance blocker.** Settle and test before proofs and implementation. |
+| OD-6 | Administrative principal and exact grants | Open choice. The capabilities (§10.1) are fixed now; separation is approved by C-06. **[G3-V1]** The runtime needs no signalling right; the administrative path needs exact-attribution termination only. | **Not a contract-acceptance blocker.** Settle and test before proofs and implementation. |
 | OD-7 | Historical refusal scope | **APPROVED as D4-32**: global-first; scoped admission deferred | — |
 | OD-8 | Host-ID source | Open. Recommend the OS machine identifier. | Before implementation |
 | OD-9 | Receiving timeout behaviour | **No decision needed.** The contract adopts the narrower correction (§5.8, T-7): logical abandonment unchanged; physical cleanup gated. Draft 1's changed user-visible "receiving, stalled" behaviour is **withdrawn**. An owner decision would be needed only to choose that changed behaviour deliberately. | — |
@@ -1025,7 +1228,8 @@ The Architecture C operating model is not reopened.
 | GAS-P4-004 | OPEN | §4.2 B-5, B-6 |
 | GAS-P4-005 | OPEN | §7.7; M-3 to M-5 |
 | F5-1 to F5-3 | Resolved; preserved | §4.2 |
-| Gate 2 review B1, B2, M1 to M3, N1, N2, P1 to P3 | Responded in this draft; verification is Codex's | See the correction-response document |
+| Gate 2 review B1, B2, M1 to M3, N1, N2, P1 to P3 | Responded in Draft 2; verified (ef5859e) as CLOSED for B2, N1, N2 and C7; PARTIAL elsewhere | [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md) |
+| Gate 2 verification V1 to V4 | Responded in this draft; verification is Codex's | [`PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md) |
 | B-9 grouping current-run check | Source lacks it [SRC]; required | §4.3; U |
 
 ### 14.3 Accepted Phase 0–3 invariants
@@ -1049,7 +1253,7 @@ The Architecture C operating model is not reopened.
 
 ## 15. Complexity budget and comparison with revision 3.9
 
-| Measure | Revision 3.9 | This contract (Draft 2) |
+| Measure | Revision 3.9 | This contract (Draft 3) |
 |---|---|---|
 | New control tables | 9 | 1, or 2 with a dedicated receipt table |
 | Tables under a generic gate | 49 | 0 |
@@ -1060,15 +1264,17 @@ The Architecture C operating model is not reopened.
 | Native boundary | JNA same-handle | one local fence; candidate open (OD-3) |
 | Ordinary business windows | 19 / 22 | unchanged |
 
-**Administrative transitions, listed** (they are transactions, not a framework):
-1. SEED, inside the control migration;
-2. ENTER_OFFLINE;
-3. MIGRATED, per checkpoint;
-4. ARCHIVE_INITIALIZED, at bootstrap;
-5. REBIND;
-6. READY.
+**Administrative transitions, listed** (they are transactions, not a framework). **[G3-V2]** Each has a
+kind-specific atomic target (§9.2):
+1. Native Flyway migration steps: schema and history only, with no receipt;
+2. SEED, inside the control migration;
+3. ENTER_OFFLINE: CAS plus receipt;
+4. MIGRATED: an aggregate checkpoint after migrations, never atomic with them;
+5. ARCHIVE_INITIALIZED, inside the accepted initialization transaction;
+6. REBIND: CAS plus receipt;
+7. READY: CAS plus receipt.
 
-Each is one CAS plus receipt transaction (§9.2). The ordinary token transitions are T-1, T-3, T-4 and T-6.
+The ordinary token transitions are T-1, T-3, T-4 and T-6.
 
 **Three authority layers are kept deliberately separate**, because they address different failure domains:
 - subject effect ownership (the token);
@@ -1083,6 +1289,15 @@ Reducing them to one advisory lock would be unsafe.
 - M1 reuses the existing operation.
 - M2 scopes the evidence rules.
 - M3 completes the receipt's data contract.
+
+**What the V1–V4 corrections added** **[G3]:** no table, state, controller, journal, epoch, registry or framework.
+- **V1** replaces a premise (token-owned O), adds an O-row lock-class inventory, gives the reclaim an executable SQL
+  form, removes the runtime's signalling capability, and extends the existing connection label with the process
+  instance ID. That label is the one new mechanism, justified in §5.4: without it, a reclaim cannot exclude surviving
+  backends of a dead process.
+- **V2** narrows the receipts to kind-specific atomic targets.
+- **V3** narrows the token-free list.
+- **V4** adopts the retained derivations by reference.
 
 ---
 

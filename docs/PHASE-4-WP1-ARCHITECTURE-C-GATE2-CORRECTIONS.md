@@ -10,6 +10,18 @@
 
 The review's finding text is not altered. This document records responses only.
 
+> **Draft 3 note (2026-11-18).** This record describes the Draft 2 responses and is kept as history. The Gate 2
+> verification ([`PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md))
+> found V1–V4. Draft 3 **supersedes** these statements below:
+> - C1's "reclaim … with NOWAIT … terminate and confirm": now an executable `FOR NO KEY UPDATE NOWAIT` with
+>   `lock_timeout`; no inference from 55P03; no runtime termination; exact attribution only (contract T-2, T-6,
+>   §5.4.1, §10.4).
+> - The "logical cancellation" wording in C1 and C3: now a closed list of token-free transitions;
+>   administrator cancellation finalization requires the interval (§5.1, T-7, T-i).
+> - Owner-attention item 3 ("runtime signalling privilege"): the runtime now needs **no** signalling right.
+>
+> See [`PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md).
+
 ## 1. Correction map
 
 | Item | Review finding | Contract sections changed | Response |
