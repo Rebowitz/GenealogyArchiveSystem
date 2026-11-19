@@ -7,6 +7,14 @@
 | Revised contract | [`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md), **Draft 6**. Changes are tagged **[G6-D5N1]** and **[G6-D5N2]**. |
 | Status | Documentation only. DRAFT — NOT ACCEPTED. No protocol change; nothing implemented or executed; no finding closed. |
 
+> **Draft 7 note (2026-11-18).** The Draft 6 verification
+> ([`PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-VERIFICATION.md), D6-N1)
+> found that §12.1 relied on tuple-lock entries in `pg_locks`. PostgreSQL normally does not show row locks there. The
+> "named-backend `pg_locks`" observations summarised below are **superseded**: Draft 7 establishes lock state through
+> verified hook placement, recorded per-operation statements and instrumentation, and known-statement outcomes.
+> `pg_blocking_pids` and transaction-ID and advisory waits are corroboration only. See
+> [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT7-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT7-CORRECTIONS.md).
+
 ## 1. D5-N1: §12.1 test reachability
 
 **Contract section:** §12.1, rewritten.

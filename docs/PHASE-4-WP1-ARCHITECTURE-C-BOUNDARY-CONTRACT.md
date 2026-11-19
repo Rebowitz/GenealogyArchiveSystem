@@ -5,10 +5,10 @@
 | | |
 |---|---|
 | Repository | `Rebowitz/GenealogyArchiveSystem`, branch `phase-4` |
-| Draft | **Draft 6 (Draft 5 verification corrections D5-N1, D5-N2)**. Draft 1 was `55041be`; Draft 2 `095ba3f` (verified at `ef5859e`); Draft 3 `a9ba91d` (verified at `63c86e4`); Draft 4 `f2a06fb` (verified at `7b289c8`); Draft 5 `519ce68` (verified at `2dd6250`). |
-| Baseline for this draft | `2dd6250c206c4432554080163b511fe5ac2989c3` |
+| Draft | **Draft 7 (Draft 6 verification correction D6-N1)**. Draft 6 was `b04c6e2` (verified at `68c91b3`). Draft 1 was `55041be`; Draft 2 `095ba3f` (verified at `ef5859e`); Draft 3 `a9ba91d` (verified at `63c86e4`); Draft 4 `f2a06fb` (verified at `7b289c8`); Draft 5 `519ce68` (verified at `2dd6250`). |
+| Baseline for this draft | `68c91b38b616a79706d01607d3d6081b6f1dea5b` |
 | Governing decisions | **D4-31**, Architecture C, Rules C-01…C-12. **D4-32**, OD-7 global-first historical admission refusal. Both are in [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md). |
-| Review addressed | [`PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md`](PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md) (Gate 2, ACCEPT WITH SPECIFIED CORRECTIONS), checklist C1–C8, response in [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md). Gate 2 verification [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md) (V1–V4), response in [`PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md). Draft 3 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md). Draft 4 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md). Draft 5 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md). |
+| Review addressed | [`PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md`](PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md) (Gate 2, ACCEPT WITH SPECIFIED CORRECTIONS), checklist C1–C8, response in [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md). Gate 2 verification [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md) (V1–V4), response in [`PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md). Draft 3 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md). Draft 4 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md). Draft 5 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md). Draft 6 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT7-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT7-CORRECTIONS.md). |
 | Technical basis | [`PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md`](PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md) |
 | Historical evidence | [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md) revision 3.9. It is superseded as direction and cited only for the retained ordinary corrections. |
 | Authorization | Design documentation only. Nothing here is implemented, executed or approved, beyond D4-31 and D4-32. |
@@ -18,7 +18,7 @@ Changes from Draft 1 are tagged **[G2-C1]**…**[G2-C8]**, after the review's ch
 are tagged **[G3-V1]**…**[G3-V4]**, after the verification finding. Changes from Draft 3 are tagged **[G4-V1]** and
 **[G4-V4]**, after the Draft 3 verification. Changes from Draft 4 are tagged **[G5-D4V1]**, **[G5-D4N1]**
 and **[G5-S8]** (the verification's §8 completion criteria); **[G5]** marks combined changes. Changes from Draft 5
-are tagged **[G6-D5N1]** and **[G6-D5N2]**.
+are tagged **[G6-D5N1]** and **[G6-D5N2]**. Changes from Draft 6 are tagged **[G7-D6N1]**.
 
 ---
 
@@ -1330,7 +1330,7 @@ OFFLINE. The same applies to diagnostic status output.
 | **Failure criteria** | Any W2 effect while W1 exists. A reclaim by elapsed time. A committed stale EDT. A reclaim of another host's token. A duplicate File or content. An adopted unverified byte. A late write or namespace change altering what W2 relied on. |
 | **Coverage** | Linux and Windows; PostgreSQL 16 and 18; local and NAS volumes. Java-seam blocking is labelled separately from kernel or NAS stall characterisation. |
 
-### 12.1 Surviving-renewal regression (future; deterministic; real PostgreSQL; not executed) **[G5-D4V1, G6-D5N1]**
+### 12.1 Surviving-renewal regression (future; deterministic; real PostgreSQL; not executed) **[G5-D4V1, G6-D5N1, G7-D6N1]**
 
 Draft 5's single combined chronology is **replaced** by three separate, controlled variants. A successful reclaim of B
 cannot coexist with the same uninterrupted conflicting renewal lock on B, so the overlap and the refusal cases are
@@ -1343,12 +1343,28 @@ separate schedules.
   before or after the row lock, and which trigger timing (`BEFORE` or `AFTER`, row or statement) it uses.
   - A timed `pg_sleep` is never a barrier.
   - Bounded waits are used only to **observe** a named state.
-- **Observations:** blockers are identified per **named** backend with `pg_locks` and `pg_blocking_pids`.
+- **Observation evidence rule** **[G7-D6N1]:**
+  - PostgreSQL row-level (tuple) locks are normally **not** shown in `pg_locks`, because they are stored on disk. A
+    row waiter usually appears as a wait on the holder's **transaction ID**.
+  - So `pg_locks` is **not** an exhaustive tuple-lock registry. **No assertion may rest on the presence or absence of a
+    tuple-lock entry in `pg_locks`.**
+  - No claim that a row was **never** locked may rest solely on absent entries, or on a finite series of snapshots.
+  - Lock state is established instead by:
+    - **(a)** verified server-hook placement, tied to the exact backend `(pid, backend_start)`;
+    - **(b)** a recorded per-operation acquisition and statement timeline (the captured SQL text and its parameters;
+      test-only per-operation acquisition instrumentation where needed);
+    - **(c)** outcomes of known single-row statements (committed, blocked, or 55P03).
+  - `pg_blocking_pids` and the transaction-ID and advisory-lock waits visible in `pg_locks` are **corroboration**
+    only.
+  - Hooks are restricted to the intended test backend and statement, so that token reclaims and replacement
+    statements are never stopped by a renewal barrier. Their placement is verified by the harness, not assumed.
 - **No hidden retries:** application retries are disabled. Every controller-directed attempt is enumerated.
 - **Recording:** every SQLSTATE is captured explicitly.
 - **Outcomes:** **zero 40P01 on corrected paths**. Success, refusal and timeout each have their own assertion.
-- **Rollbacks:** every rollback is checked for no partial effects (interval columns, state, events,
-  `receiver_alive_at`, claims).
+- **Rollbacks:** every rolled-back transaction is checked for no partial effects **of that transaction**: interval
+  columns, state, events, `receiver_alive_at` changes made by it, claims. **[G7-D6N1]** An independently committed
+  renewal that the schedule permits (A-8, A-10) is not a partial effect of the rolled-back replacement, and must not
+  be counted as one.
 - **Preserved regressions:** the accepted actively renewing slow-upload tests and the failed-STAGED-CAS tests pass
   unchanged with per-operation renewal.
 
@@ -1357,21 +1373,21 @@ separate schedules.
 | Step | Action and required observation |
 |---|---|
 | A-1 | Create two RECEIVING REPAIR operations A < B (by UUID) on the same content X. Process W1 holds both intervals and renews both, one operation per transaction. |
-| A-2 | W1's renewal of B is stopped at **barrier 1**, placed **before** the statement acquires any operation row (for example in a `BEFORE … FOR EACH STATEMENT` trigger, or a test hook evaluated before the row is locked). Observe the backend `R` (exact `pid`, `backend_start`) waiting at barrier 1, with no row lock on A or B in `pg_locks`. |
+| A-2 | W1's renewal of B is stopped at **barrier 1**, placed **before** the statement acquires any operation row (for example in a `BEFORE … FOR EACH STATEMENT` trigger, or a test hook evaluated before the row is locked). Observe the backend `R` (exact `pid`, `backend_start`) waiting at barrier 1 (the barrier's own advisory wait, visible in `pg_locks`, names R). **[G7-D6N1]** The **pre-acquisition phase is established by the barrier's verified placement before any operation-row acquisition**, not by absent tuple entries. It is corroborated at A-4: both reclaims commit, so no conflicting holder of A or B existed then. |
 | A-3 | Kill W1's client process. **Confirm that the process has exited** (P1 evidence) **and that backend R is still alive**, with the same `(pid, backend_start)`, still waiting at barrier 1. The harness must genuinely keep the server statement alive after client death. A run in which R has already ended does **not** exercise this variant and is reported as invalid. |
 | A-4 | Reclaim A, then B, under E-1 and E-2 (T-6). Observe **both** reclaim transactions committed: new interval IDs and `EFFECT_OWNER_RECLAIMED` events. |
-| A-5 | Release barrier 1. R's statement re-evaluates its predicate on B (still RECEIVING) and locks B. It stops at **barrier 2**, placed **after** B is locked and **before** R's transaction ends (for example in an `AFTER … FOR EACH ROW` trigger on the renewal UPDATE). Observe R holding B's row lock and not holding or requesting A. |
-| A-6 | Start the replacement's UUID-ordered prefix (a destruction-shaped EDT: A, then B, then Ct(X)), with a recorded `lock_timeout`. Observe the replacement **holding A and blocked on B**, with `pg_blocking_pids(replacement)` = {R}. |
-| A-7 | Confirm throughout that **R never requests A** (no lock wait or grant on A for R in `pg_locks`). |
+| A-5 | Release barrier 1. R's statement re-evaluates its predicate on B (still RECEIVING) and locks B. It stops at **barrier 2**, placed **after** B is locked and **before** R's transaction ends (for example in an `AFTER … FOR EACH ROW` trigger on the renewal UPDATE). **[G7-D6N1]** B-held is established by barrier 2's verified post-lock placement naming B (the hook records the operation ID it fired for). It is corroborated at A-6 by the replacement's known B-only locking statement being blocked by R. |
+| A-6 | Start the replacement's UUID-ordered prefix (a destruction-shaped EDT: A, then B, then Ct(X)), with a recorded `lock_timeout`. **[G7-D6N1]** Replacement-A-held is established by the **successful return** of its A-only `SELECT … FOR NO KEY UPDATE` in the still-open transaction, before it requests B. Blocked-on-B is established by its B-only statement not returning while barrier 2 holds R. That is corroborated by `pg_blocking_pids(replacement)` = {R} and by its transaction-ID wait on R's transaction in `pg_locks`. |
+| A-7 | **[G7-D6N1]** That **R never requests A** is established from three sources together: the captured single-operation statement (`… WHERE state = 'RECEIVING' AND operation_id = :B`, parameter B recorded); the audited hook path (the hooks fire only for B); and, where needed, test-only per-operation acquisition instrumentation that records each operation ID R's statement locks. It is **not** inferred from absent `pg_locks` entries or from sampled snapshots. |
 | A-8 (success) | Release barrier 2. R's statement completes, and its autocommit transaction ends, with whatever outcome the dead client permits. The replacement acquires B, proceeds to Ct(X) and completes. **Zero 40P01.** |
-| A-9 (timeout) | In a separate run, hold barrier 2 throughout the replacement's bounded lock wait. The replacement gets **55P03** from `lock_timeout` and rolls back with **no partial effects**. **Zero 40P01.** |
+| A-9 (timeout) | In a separate run, hold barrier 2 throughout the replacement's bounded lock wait. The replacement gets **55P03** from `lock_timeout` and rolls back with **no partial effects of the replacement transaction** (its A lock and anything it wrote are released or undone). **Zero 40P01.** |
 | A-10 | In both runs: no stale EDT commit, and R's update, if any, changes only B's `receiver_alive_at`. |
 
 #### Variant B: busy reclaim and refusal (separate schedule; never combined with A)
 
 | Step | Action and required observation |
 |---|---|
-| B-1 | A RECEIVING operation B. A renewal transaction holds B's row lock, stopped at a barrier after the lock and before its transaction ends. |
+| B-1 | A RECEIVING operation B whose interval owner process is **confirmed exited (E-1 established)**, so that T-6 reaches its NOWAIT branch; a live owner is refused before any SQL and does not exercise it. A renewal transaction for B, from a named holder backend, is stopped at a barrier verified to sit after its B row lock and before its transaction ends. **[G7-D6N1]** The holder is established by the hook's placement and recorded operation ID, and corroborated by B-2's 55P03. No granted tuple entry in `pg_locks` is assumed. |
 | B-2 | Run T-6 for B. Require **SQLSTATE 55P03**, rollback of the **whole** reclaim attempt, an **unchanged** `effect_interval_id`, no event, and no replacement effect. |
 | B-3 | Release the holder. Its transaction ends. A **separately recorded fresh** reclaim attempt is then allowed and must commit. It is recorded as a new attempt, never as part of variant A. |
 
@@ -1380,7 +1396,7 @@ separate schedules.
 | Step | Action and required observation |
 |---|---|
 | C-1 | Use the superseded single-statement `UPDATE … ANY(:ids)` renewal over A and B, **only** as a labelled characterisation, never as acceptance. |
-| C-2 | To claim reproduction of the Draft 4 counterexample, **establish deterministically** that the statement locks **B before A** (a per-row barrier after B's lock, observed in `pg_locks`). Then establish the opposing wait graph: the multi-row statement holds B and waits on A, while a prefix holds A and waits on B. An uncontrolled `ANY`-array scan order is **not** evidence of ordering. |
+| C-2 | To claim reproduction of the Draft 4 counterexample, **establish deterministically** that the statement locks **B before A** **[G7-D6N1]** (deterministic per-operation acquisition instrumentation and a per-row barrier after B's lock, recording the operation IDs in acquisition order; not an observation of tuple entries in `pg_locks`). Then establish the opposing wait graph through the **observed** named-backend waits: the multi-row statement, having recorded its B acquisition, does not return and is blocked by the prefix's backend; the prefix, having acquired A, does not return on B and is blocked by the multi-row backend. This is corroborated by mutual `pg_blocking_pids` and transaction-ID waits, or by an actual 40P01. An uncontrolled `ANY`-array scan order is **not** evidence of ordering. |
 | C-3 | If the graph is reproduced, record the outcome (including any 40P01) as characterisation. If it is **not** reproduced, report "not reproduced" explicitly. Neither result counts as validation of the corrected path. |
 
 A failed hypothesis returns to the owner as evidence with a complexity comparison. It is not hidden by added
@@ -1451,7 +1467,8 @@ The Architecture C operating model is not reopened.
 | Gate 2 verification V1 to V4 | Responded in Draft 3; verified at `63c86e4`: V2, V3 CLOSED; V1, V4 PARTIAL | [`PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md) |
 | Draft 3 verification V1 (label authority, terminal-lock scope) and V4 (exactly-one scope) | Responded in Draft 4; verified at `7b289c8`: V4 CLOSED, V1 PARTIAL (D4-V1, D4-N1) | [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md) |
 | Draft 4 verification D4-V1 (renewal and multi-O cycle), D4-N1 (trace and proof wording) and the §8 criteria | Responded in Draft 5; verified at `2dd6250`: D4-N1 CLOSED; D4-V1 architecture satisfactory, test specification PARTIAL (D5-N1); D5-N2 | [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md) |
-| Draft 5 verification D5-N1 (§12.1 reachability) and D5-N2 (T-m timeout wording) | Responded in this draft; verification is Codex's | [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md) |
+| Draft 5 verification D5-N1 (§12.1 reachability) and D5-N2 (T-m timeout wording) | Responded in Draft 6; verified at `68c91b3`: D5-N2 CLOSED; D5-N1 PARTIAL (D6-N1) | [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md) |
+| Draft 6 verification D6-N1 (§12.1 observation evidence) | Responded in this draft; verification is Codex's | [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT7-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT7-CORRECTIONS.md) |
 | B-9 grouping current-run check | Source lacks it [SRC]; required | §4.3; U |
 
 ### 14.3 Accepted Phase 0–3 invariants
@@ -1537,6 +1554,9 @@ accepted windows, and carries an all-writer verification burden (§5.4.2).
 **Draft 6 net change [G6]:** documentation only, with no protocol change. §12.1 is split into three reachable variants (a
 future test specification), and T-m's timeout wording is narrowed. No table, state, timer, lease policy or mechanism
 is added.
+
+**Draft 7 net change [G7]:** test-specification wording only (§12.1 observation evidence). No protocol, table, state or
+mechanism change.
 ---
 
 ## 16. Consistency updates for later (reported, not made)
