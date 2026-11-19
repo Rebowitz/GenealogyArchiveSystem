@@ -19,7 +19,7 @@ Track consecutive structural findings and convergence. After **two consecutive r
 Conclude architectural reviews with an evidence-supported gate: **CONTINUE**, **SIMPLIFY**, **RECONSIDER**, or **READY FOR IMPLEMENTATION REVIEW**. A gate recommendation does not constitute owner authorization.
 
 ## Mandatory pre-cycle review planning and acceptance gates
-Before initiating an independent review, read and apply **§10A of `docs/ENGINEERING-DESIGN-INSTRUCTIONS.md`** (proposed 2026-11-18, pending owner approval).
+Before initiating an independent review, read and apply **§10A of `docs/ENGINEERING-DESIGN-INSTRUCTIONS.md`** (owner-approved, adopted 2026-11-18).
 - Confirm the acceptance gate under review: A (architectural contract), B (feasibility) or C (implementation). Confirm the written review plan that names it.
 - Review the complete acceptance-critical scope together. Classify every finding by severity (BLOCKING, MAJOR, MINOR), the gate it affects, and whether it blocks that gate, with evidence and closure criteria.
 - Report deferred obligations separately from acceptance-blocking findings.

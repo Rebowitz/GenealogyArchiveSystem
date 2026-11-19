@@ -129,8 +129,7 @@ Builder and reviewer recommend dispositions; only the owner approves changes to 
 
 ### 10A. Mandatory Pre-Cycle Review Planning and Acceptance Gates
 
-**Status:** proposed amendment (2026-11-18), **pending separate owner review and approval** before it is treated as
-adopted project policy.
+**Status:** owner-approved, adopted 2026-11-18.
 - It supplements §3 (convergence triggers), §4 (alternative designs), §8 (reviewer questions) and §10 (dispositions).
   It does not replace or weaken them.
 - It does not change any technical acceptance criterion.
