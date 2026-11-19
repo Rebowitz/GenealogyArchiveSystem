@@ -18,6 +18,16 @@ Track consecutive structural findings and convergence. After **two consecutive r
 
 Conclude architectural reviews with an evidence-supported gate: **CONTINUE**, **SIMPLIFY**, **RECONSIDER**, or **READY FOR IMPLEMENTATION REVIEW**. A gate recommendation does not constitute owner authorization.
 
+## Mandatory pre-cycle review planning and acceptance gates
+Before initiating an independent review, read and apply **§10A of `docs/ENGINEERING-DESIGN-INSTRUCTIONS.md`** (proposed 2026-11-18, pending owner approval).
+- Confirm the acceptance gate under review: A (architectural contract), B (feasibility) or C (implementation). Confirm the written review plan that names it.
+- Review the complete acceptance-critical scope together. Classify every finding by severity (BLOCKING, MAJOR, MINOR), the gate it affects, and whether it blocks that gate, with evidence and closure criteria.
+- Report deferred obligations separately from acceptance-blocking findings.
+- Apply the stopping rule and the round-escalation points.
+- Do not recommend another architectural revision for a nonblocking finding, or for an improvement that belongs to a later gate.
+
+These rules supplement, and do not weaken, the convergence triggers and review-integrity requirements above and below.
+
 ## Current Phase 4 WP1 status
 **WP1 gate: SIMPLIFY — OWNER APPROVED (Architecture C, decision D4-31 in `docs/PHASE-4-DECISIONS.md`, 2026-11-17).** The RECONSIDER comparison required by `docs/ENGINEERING-DESIGN-INSTRUCTIONS.md` produced this decision; the governance rules, including reconsideration after repeated structural nonconvergence, remain in force. The replacement WP1 architectural contract and feasibility proofs are pending. Existing WP1 work is unchanged and unaccepted. Implementation of the Architecture C design is not authorized. **WP1 unaccepted. WP2 HOLD.** The prior locking-protocol proposal (revision 3.9) is superseded as the intended direction and retained as historical evidence; do not treat it as approved or initiate implementation, migrations, merge, tagging, or WP2 work absent explicit owner authorization. Preserve accepted Phase 0–3 behavior and the findings from the eleventh independent architectural assessment.
 

@@ -20,6 +20,16 @@ If genuine ambiguity could change historical semantics, identity, provenance, ev
 ### Mandatory engineering design governance
 Before proposing architecture, implementing a phase, or responding to an independent architectural assessment, read and follow `docs/ENGINEERING-DESIGN-INSTRUCTIONS.md` (owner-approved 2026-11-17). It supplements the authority order above without overriding archival invariants or accepted specifications. Apply its mandatory simplicity assessment, two-/three-review convergence escalation triggers, alternative-design comparison, and explicit CONTINUE/SIMPLIFY/RECONSIDER/READY FOR IMPLEMENTATION REVIEW gate. Do not treat passing the next review as the engineering objective. If a convergence trigger fires, stop incremental architectural revisions and report the required reassessment to the owner. Phase 4 WP1's RECONSIDER comparison produced the owner's Architecture C decision (D4-31, 2026-11-17): the WP1 gate is **SIMPLIFY — OWNER APPROVED**. The replacement WP1 design and feasibility proofs are pending; existing WP1 work is unchanged and unaccepted; implementation of the Architecture C design is not authorized; WP2 is HOLD. Do not infer implementation authorization from this file.
 
+### Mandatory pre-cycle review planning and acceptance gates
+Before preparing architectural proposals, correction assignments or responses to independent reviews, read and apply **§10A of `docs/ENGINEERING-DESIGN-INSTRUCTIONS.md`** (proposed 2026-11-18, pending owner approval).
+- Read the governing review plan and the acceptance criteria of the current gate: A (architectural contract), B (feasibility) or C (implementation).
+- Identify whether each finding affects and blocks the current gate. Separate required corrections from deferred work, and record the deferred items with their resolution stage.
+- Consolidate related corrections, and apply the round-escalation points.
+- Do not revise the governing architecture merely to perfect future implementation or test-harness details.
+- Stop and request owner direction when the process requires reassessment.
+
+This supplements, and does not alter, the authority order, the convergence triggers or existing responsibilities.
+
 ### v1 hosting requirement
 The same application codebase must support independent Archive Instances hosted on **Windows and Linux**. PostgreSQL is authoritative on both. The normal client is a web browser.
 
