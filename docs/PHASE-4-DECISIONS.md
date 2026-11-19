@@ -13,6 +13,8 @@ the applicable architectural refinements in [`PHASE-4-ARCHITECTURAL-CLARIFICATIO
 **D4-34** (WP1 Architecture C Gate B planning selections: OD-3, OD-6 and OD-8, each Option A) was approved by the
 owner on 2026-11-18; see its section below. It selects preferred approaches only. It does not verify their
 feasibility, accept Gate B, or authorize proof execution or implementation.
+**D4-35** (WP1 Gate B F-R measurement timebase: the test host's monotonic `System.nanoTime()` clock) was approved by
+the owner on 2026-11-19; see its section below. It is a measurement-method decision, not a change to Architecture C.
 
 Approval of the decisions does **not** authorize implementation. Phase 4 coding still requires a separate owner
 instruction. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
@@ -300,6 +302,30 @@ conditional on the verification named below. "Owner selection approved" does not
 **Next step.** These selections are inputs to the written Gate B feasibility review plan under §10A.1 of
 [`ENGINEERING-DESIGN-INSTRUCTIONS.md`](ENGINEERING-DESIGN-INSTRUCTIONS.md). The plan, and its execution, still need
 separate owner authorization.
+
+## Approved decision (owner, 2026-11-19): D4-35 WP1 Gate B F-R measurement timebase
+
+**Status: APPROVED by the owner on 2026-11-19.**
+
+**Decision.** The test host's monotonic `System.nanoTime()` clock is the **sole authoritative timebase** for Gate B F-R
+(per-operation renewal) performance acceptance in
+[`PHASE-4-WP1-GATE-B-PLAN.md`](PHASE-4-WP1-GATE-B-PLAN.md) §5.9.
+- The five-second interval boundaries, readback send times and complete-result receipt times are all measured on that
+  one clock.
+- It is the accepted Gate B elapsed-time convention. No independent SI-time calibration is required.
+- Cross-clock offset, round-trip-time and drift-bound mechanisms do not enter acceptance decisions.
+- PostgreSQL `clock_timestamp()`, commit timestamps and time-sync state are corroborative or diagnostic evidence only.
+
+**Basis.** No defensible bound on relative change between the client and PostgreSQL clocks was available within Gate
+B's planned harness and scope. Every planned cell runs PostgreSQL on the same host as the harness, so one monotonic
+clock removes the cross-clock question.
+
+**Effect.**
+- This is a measurement-method decision only. The Architecture C contract and D4-31…D4-34 are unchanged.
+- The owner-approved Q-A threshold is unchanged: 100 concurrent RECEIVING uploads per process, at least 60 contiguous
+  five-second intervals, zero missed deadlines. Alternate loads and percentiles remain diagnostic only.
+- The plan remains DRAFT — NOT APPROVED. Gate B is NOT ACCEPTED, and proof execution is NOT AUTHORIZED. Gate C is NOT
+  AUTHORIZED. WP2 is HOLD.
 
 ---
 
