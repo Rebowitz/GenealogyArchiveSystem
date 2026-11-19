@@ -587,8 +587,9 @@ Architecture C (hybrid, with explicit offline maintenance and recovery) and Rule
 | Item | Status |
 |---|---|
 | WP1 architectural direction | **SIMPLIFY — OWNER APPROVED** (Architecture C) |
-| Replacement WP1 architectural contract | Pending (not yet authorized or completed) |
-| Feasibility verification (fencing and exclusion proofs) | Pending |
+| Replacement WP1 architectural contract | **ACCEPTED** at Gate A, 2026-11-18 (D4-33): [`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md) Draft 7 at `5cfb0b4` |
+| Gate B feasibility plan | **ACCEPTED**, 2026-11-19 (D4-36): [`PHASE-4-WP1-GATE-B-PLAN.md`](PHASE-4-WP1-GATE-B-PLAN.md) Revision 6 at `709da2c`; Codex ACCEPT CORRECTIONS; GB-P1, GB-N1, GB-N2 CLOSED |
+| Feasibility verification (Gate B proofs) | **NOT EXECUTED**. Gate B NOT ACCEPTED. |
 | WP1 implementation (of the Architecture C replacement design) | Not authorized |
 | WP1 acceptance | Pending |
 | WP2 | HOLD |
@@ -601,6 +602,19 @@ The technical basis is
 [`PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md`](PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md).
 The WP1 work already committed on `phase-4` (the Historical Date work and the WP1-R2 and WP1-R3 corrections) is
 unchanged and remains unaccepted.
+
+**Gate B execution handoff** (references only; the accepted plan governs and nothing here adds a requirement):
+
+| Topic | Where in [`PHASE-4-WP1-GATE-B-PLAN.md`](PHASE-4-WP1-GATE-B-PLAN.md) Revision 6 |
+|---|---|
+| Proof matrix and scope (P1–P3, V-R, V-H, Proof 1, Proof 2 (a)–(q), §12.1 A–C, F-O, F-T, F-R); Gate C retentions | §3, §5.1–§5.9 |
+| Environments: Windows and Linux × PostgreSQL 16 and 18; local storage baseline; NFS as initial NAS target | §4.1, §6 |
+| Prototype boundary, open-decision stand-ins, scratch databases, observer, process-death instrumentation | §4.2–§4.5 |
+| Evidence content and outcome categories (PASS, FAIL, INVALID, INCONCLUSIVE, NOT RUN) | §4.6, §9 |
+| Execution order and dependency stops | §7 |
+| Results review and failed-proof handling (no automatic redesign) | §8.5, §8.6 |
+| Authorizations still required before execution | §10 (AU-3 to AU-7, AU-9, AU-10; see D4-36) |
+| F-R timebase | D4-35 |
 
 ---
 

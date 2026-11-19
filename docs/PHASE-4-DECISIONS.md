@@ -15,6 +15,8 @@ owner on 2026-11-18; see its section below. It selects preferred approaches only
 feasibility, accept Gate B, or authorize proof execution or implementation.
 **D4-35** (WP1 Gate B F-R measurement timebase: the test host's monotonic `System.nanoTime()` clock) was approved by
 the owner on 2026-11-19; see its section below. It is a measurement-method decision, not a change to Architecture C.
+**D4-36** (WP1 Gate B feasibility plan Revision 6 accepted as the governing planning baseline) was approved by the
+owner on 2026-11-19; see its section below. It accepts the plan, not Gate B, and executes no proof.
 
 Approval of the decisions does **not** authorize implementation. Phase 4 coding still requires a separate owner
 instruction. See [`PHASE-4-PLAN.md`](PHASE-4-PLAN.md).
@@ -326,6 +328,45 @@ clock removes the cross-clock question.
   five-second intervals, zero missed deadlines. Alternate loads and percentiles remain diagnostic only.
 - The plan remains DRAFT — NOT APPROVED. Gate B is NOT ACCEPTED, and proof execution is NOT AUTHORIZED. Gate C is NOT
   AUTHORIZED. WP2 is HOLD.
+
+## Approved decision (owner, 2026-11-19): D4-36 WP1 Gate B feasibility plan acceptance
+
+**Status: ACCEPTED by the owner on 2026-11-19.**
+
+**Decision.** [`PHASE-4-WP1-GATE-B-PLAN.md`](PHASE-4-WP1-GATE-B-PLAN.md) **Revision 6**, at baseline
+`709da2cc181caf8d3245a29c8bed557a866ebf60`, is the **governing Gate B planning baseline** for WP1 Architecture C
+(ENGINEERING-DESIGN-INSTRUCTIONS.md §10A.1).
+
+**Independent review (preserved).**
+
+| Item | Record |
+|---|---|
+| Reviewer | Codex (independent), consolidated Gate B plan review under §10A.4, with targeted verifications |
+| Reviewed SHA | `709da2cc181caf8d3245a29c8bed557a866ebf60` |
+| Disposition | **ACCEPT CORRECTIONS** |
+| GB-P1 (MAJOR): F-R acceptance rule and evidence | **CLOSED** (Revisions 3–6; D4-35 timebase) |
+| GB-N1 (MINOR): P2 second-channel negative control | **CLOSED** (Revision 3) |
+| GB-N2 (MINOR): observer authority and placement | **CLOSED** (Revision 3) |
+
+The review reports were delivered to the owner and are not published in the repository at this baseline. Their
+finding text is the reviewer's; this entry records only the dispositions.
+
+**Effect.**
+- The plan's header still reads "DRAFT — NOT APPROVED". The accepted text is not edited; **this entry is the
+  authoritative record of its acceptance**, as D4-33 is for the contract.
+- The plan's requirements, the Architecture C contract and D4-31…D4-35 are unchanged. No new requirement is added.
+- Accepting the plan does not execute or accept any proof. Execution still needs the plan's §10 authorizations that
+  are not yet recorded (AU-3 to AU-7, AU-9, AU-10). AU-1, AU-2 and AU-8 are satisfied by the review, the 2026-11-19
+  scope clarification and this decision.
+
+**Gate boundaries:**
+
+| Gate | Status |
+|---|---|
+| **A: architectural contract** | **ACCEPTED, 2026-11-18** (D4-33) |
+| **B: feasibility** | Plan **ACCEPTED** (this entry). Proofs **NOT EXECUTED**. Gate B **NOT ACCEPTED**. |
+| **C: implementation** | **NOT AUTHORIZED** |
+| **WP2** | **HOLD** |
 
 ---
 
