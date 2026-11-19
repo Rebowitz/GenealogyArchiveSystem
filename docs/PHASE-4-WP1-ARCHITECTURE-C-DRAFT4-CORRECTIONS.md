@@ -7,6 +7,17 @@
 | Revised contract | [`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md), **Draft 4**. Changes are tagged **[G4-V1]** and **[G4-V4]**. |
 | Status | Documentation only. DRAFT — NOT ACCEPTED. No implementation, experiments or finding closures. V2 and V3 are not reopened. No new owner decision is required. |
 
+> **Draft 5 note (2026-11-18).** The Draft 4 verification
+> ([`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md)) found
+> D4-V1 and D4-N1. Draft 5 **supersedes** these statements below:
+> - "a surviving backend that has not taken the row holds no lock of that window": it may hold a lower-UUID O
+>   prefix, compatible key locks or a harmless stale row lock, but obtains no qualifying authority;
+> - the reading that any holder of O makes NOWAIT fail: only conflicting locks do, and FK KEY SHARE is compatible;
+> - the multi-row renewal treatment: renewal is now one operation per transaction;
+> - "nothing added beyond restating" the O-first placement: it reorders windows.
+>
+> See [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md).
+
 ## 1. V1: backend attribution and authority
 
 The preferred bounded design was adopted: **label-based reclaim authority is removed**. No registry, table, state or
