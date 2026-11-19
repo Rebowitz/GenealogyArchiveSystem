@@ -7,6 +7,13 @@
 | Revised contract | [`PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md`](PHASE-4-WP1-ARCHITECTURE-C-BOUNDARY-CONTRACT.md), **Draft 5**. Changes are tagged **[G5-D4V1]**, **[G5-D4N1]**, **[G5-S8]** and **[G5]**. |
 | Status | Documentation only. DRAFT — NOT ACCEPTED. No implementation, experiments or finding closures. V2, V3 and V4 are not reopened. No new owner decision is required. |
 
+> **Draft 6 note (2026-11-18).** The Draft 5 verification
+> ([`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-VERIFICATION.md)) found
+> that the single §12.1 schedule summarised below could not be reached as written (D5-N1). It also found that T-m's
+> "at most one lease period" claim overstated the timing bound (D5-N2). Draft 6 replaces §12.1 with three separate
+> variants (A overlap, B refusal, C characterisation) and removes the bound. See
+> [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md).
+
 ## 1. D4-V1 (MAJOR): renewal and the multi-operation cycle
 
 The preferred bounded correction is adopted: **receiver renewal processes one operation per independent, outermost,

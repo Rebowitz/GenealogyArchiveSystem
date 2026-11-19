@@ -5,10 +5,10 @@
 | | |
 |---|---|
 | Repository | `Rebowitz/GenealogyArchiveSystem`, branch `phase-4` |
-| Draft | **Draft 5 (Draft 4 verification corrections D4-V1, D4-N1 and §8 criteria)**. Draft 1 was `55041be`; Draft 2 `095ba3f` (verified at `ef5859e`); Draft 3 `a9ba91d` (verified at `63c86e4`); Draft 4 `f2a06fb` (verified at `7b289c8`). |
-| Baseline for this draft | `7b289c84649135b4a9419f03e368feb242b5a235` |
+| Draft | **Draft 6 (Draft 5 verification corrections D5-N1, D5-N2)**. Draft 1 was `55041be`; Draft 2 `095ba3f` (verified at `ef5859e`); Draft 3 `a9ba91d` (verified at `63c86e4`); Draft 4 `f2a06fb` (verified at `7b289c8`); Draft 5 `519ce68` (verified at `2dd6250`). |
+| Baseline for this draft | `2dd6250c206c4432554080163b511fe5ac2989c3` |
 | Governing decisions | **D4-31**, Architecture C, Rules C-01…C-12. **D4-32**, OD-7 global-first historical admission refusal. Both are in [`PHASE-4-DECISIONS.md`](PHASE-4-DECISIONS.md). |
-| Review addressed | [`PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md`](PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md) (Gate 2, ACCEPT WITH SPECIFIED CORRECTIONS), checklist C1–C8, response in [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md). Gate 2 verification [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md) (V1–V4), response in [`PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md). Draft 3 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md). Draft 4 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md). |
+| Review addressed | [`PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md`](PHASE-4-WP1-ARCHITECTURE-C-INDEPENDENT-REVIEW.md) (Gate 2, ACCEPT WITH SPECIFIED CORRECTIONS), checklist C1–C8, response in [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md). Gate 2 verification [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-VERIFICATION.md) (V1–V4), response in [`PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md). Draft 3 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT3-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md). Draft 4 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md). Draft 5 verification [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-VERIFICATION.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-VERIFICATION.md), response in [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md). |
 | Technical basis | [`PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md`](PHASE-4-WP1-ARCHITECTURAL-SIMPLIFICATION-ASSESSMENT.md) |
 | Historical evidence | [`PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md`](PHASE-4-WP1-LOCK-PROTOCOL-PROPOSAL.md) revision 3.9. It is superseded as direction and cited only for the retained ordinary corrections. |
 | Authorization | Design documentation only. Nothing here is implemented, executed or approved, beyond D4-31 and D4-32. |
@@ -17,7 +17,8 @@
 Changes from Draft 1 are tagged **[G2-C1]**…**[G2-C8]**, after the review's checklist item. Changes from Draft 2
 are tagged **[G3-V1]**…**[G3-V4]**, after the verification finding. Changes from Draft 3 are tagged **[G4-V1]** and
 **[G4-V4]**, after the Draft 3 verification. Changes from Draft 4 are tagged **[G5-D4V1]**, **[G5-D4N1]**
-and **[G5-S8]** (the verification's §8 completion criteria); **[G5]** marks combined changes.
+and **[G5-S8]** (the verification's §8 completion criteria); **[G5]** marks combined changes. Changes from Draft 5
+are tagged **[G6-D5N1]** and **[G6-D5N2]**.
 
 ---
 
@@ -607,7 +608,7 @@ do today, is **outside** theorem (A).
 | T-i **[G3-V3]** | An administrator requests cancellation of a BLOCKED operation whose worker W1 lost its advisory session but is alive with the token | `cancel` records only the request (token-free). `performCancel` on worker W2 must acquire the interval: T-1 matches zero rows, and T-6 refuses because W1's process is present. So nothing is observed, moved, released, recorded unresolved or cleaned. The request remains visible and is retried. When W1 releases or exits, W2 acquires or reclaims and finalizes entirely within its interval, with each database step an EDT. |
 | T-j **[G3-V1]** | T-6 meets 55P03 because a legitimate same-role writer holds O (for example the receiving process's renewal) | Roll back and retry later. No backend is terminated, and nothing is inferred from the contention. |
 | T-l **[G4-V1]** | A live, unrelated backend carries the dead former process's label string | It has no effect on authority. The reclaim does not consult labels (a diagnostic census, if run, may only cause a refusal). It is never terminated on the label. |
-| T-m **[G5-D4V1]** | Draft 4 counterexample. Receiving REPAIRs A < B of X belong to W1. W1 sent a renewal and died; its renewal backend survives. A and B are reclaimed under E-1 and E-2. A replacement destruction locks the prefix A, then B. | Renewal is now one operation per transaction, so the surviving statement updates at most **one** row (say B), holds it only for that autocommit statement, and never requests A. The destruction waits for B until that statement ends, then proceeds; or it hits `lock_timeout` and retries. No cycle and no 40P01. The stale renewal may extend B's `receiver_alive_at` once; that delays the accepted timeout by at most one lease period and confers no EDT authority. |
+| T-m **[G5-D4V1, G6-D5N2]** | Draft 4 counterexample. Receiving REPAIRs A < B of X belong to W1. W1 sent a renewal and died; its renewal backend survives. A and B are reclaimed under E-1 and E-2. A replacement destruction locks the prefix A, then B. | Renewal is now one operation per transaction, so the surviving statement updates at most **one** row (say B), holds it only for that autocommit statement, and never requests A. The destruction waits for B until that statement ends, then proceeds; or it hits `lock_timeout` and retries. No cycle and no 40P01. **[G6-D5N2]** The surviving single-row statement may update B's `receiver_alive_at` **once**, to the time at which its `clock_timestamp()` expression is evaluated. The accepted stale predicate (`greatest(last_progress_at, coalesce(receiver_alive_at, last_progress_at))` against the configured timeout) then decides eligibility from the stored timestamps. **No fixed elapsed-time bound** from process death, or from the previously expected expiry, is established by this rule. The renewal changes neither token ownership nor EDT authority. |
 
 ### 5.5 End of an interval: storage outcome, blocked I/O and NAS **[G2-C7]**
 
@@ -1290,7 +1291,7 @@ terminated, and only after M-2 to M-4 have excluded all producers.
 | 18 **[G3-V2]** | Migration history committed, MIGRATED receipt missing | Continue from the validated history; reconcile the receipt; no refusal on the missing receipt alone | E-5; §7.3; §7.4 | **Yes:** Proof 1 |
 | 19 **[G3-V1]** | Reclaim meets O-row contention from a legitimate same-role writer | Roll back and retry; no termination, no inference | T-6; trace T-j | **Yes:** Proof 2 |
 | 20 **[G4-V1]** | A surviving former backend with an unusable label, a foreign backend with the former label, or no census available | No unjustified reclaim, no stale commit, no termination | T-6 E-1/E-2 (labels not used); §10.4; traces T-f, T-k, T-l | **Yes:** Proof 2 (n)–(q) |
-| 21 **[G5-D4V1]** | A surviving renewal backend overlapping a reclaimed multi-operation prefix | No cycle, no 40P01, no stale EDT commit; accepted lease semantics kept | Single-row renewal transactions (§5.4.1); T-3 prefix; trace T-m | **Yes:** §12.1 |
+| 21 **[G5-D4V1]** | A surviving renewal backend overlapping a reclaimed multi-operation prefix | No cycle, no 40P01, no stale EDT commit; accepted lease semantics kept | Single-row renewal transactions (§5.4.1); T-3 prefix; trace T-m | **Yes:** §12.1 variants A and B (C is a characterisation only) |
 | 22 **[G5-S8]** | An EDT discovers, after Ct, that it needs an operation row outside its prefix | Roll back and rediscover; never append O out of order | T-3 late-discovery rule; §5.4.2 | **Yes:** inventory and LO tests |
 
 ---
@@ -1329,16 +1330,58 @@ OFFLINE. The same applies to diagnostic status output.
 | **Failure criteria** | Any W2 effect while W1 exists. A reclaim by elapsed time. A committed stale EDT. A reclaim of another host's token. A duplicate File or content. An adopted unverified byte. A late write or namespace change altering what W2 relied on. |
 | **Coverage** | Linux and Windows; PostgreSQL 16 and 18; local and NAS volumes. Java-seam blocking is labelled separately from kernel or NAS stall characterisation. |
 
-### 12.1 Surviving-renewal regression (future; deterministic; real PostgreSQL; not executed) **[G5-D4V1]**
+### 12.1 Surviving-renewal regression (future; deterministic; real PostgreSQL; not executed) **[G5-D4V1, G6-D5N1]**
 
-| | |
+Draft 5's single combined chronology is **replaced** by three separate, controlled variants. A successful reclaim of B
+cannot coexist with the same uninterrupted conflicting renewal lock on B, so the overlap and the refusal cases are
+separate schedules.
+
+**Common rules for all three variants:**
+- **Environment:** real PostgreSQL 16 and 18; Linux and Windows clients.
+- **Barriers:** named **server-side** barriers that establish an actual lock state. A barrier is, for example, a
+  test-only function blocking on a test advisory lock that the controller holds. Its placement is stated exactly:
+  before or after the row lock, and which trigger timing (`BEFORE` or `AFTER`, row or statement) it uses.
+  - A timed `pg_sleep` is never a barrier.
+  - Bounded waits are used only to **observe** a named state.
+- **Observations:** blockers are identified per **named** backend with `pg_locks` and `pg_blocking_pids`.
+- **No hidden retries:** application retries are disabled. Every controller-directed attempt is enumerated.
+- **Recording:** every SQLSTATE is captured explicitly.
+- **Outcomes:** **zero 40P01 on corrected paths**. Success, refusal and timeout each have their own assertion.
+- **Rollbacks:** every rollback is checked for no partial effects (interval columns, state, events,
+  `receiver_alive_at`, claims).
+- **Preserved regressions:** the accepted actively renewing slow-upload tests and the failed-STAGED-CAS tests pass
+  unchanged with per-operation renewal.
+
+#### Variant A: actual post-reclaim overlap (corrected path)
+
+| Step | Action and required observation |
 |---|---|
-| **Purpose** | Show that the corrected renewal (one operation per outermost transaction) cannot form a cycle with a multi-operation token-owned prefix when a renewal backend survives its client process |
-| **Setup** | (1) Two RECEIVING REPAIR operations A < B (by UUID) on the same content X, both owned by process W1's intervals, with W1's receiver renewing both. (2) W1's renewal backend is held at a **server-side barrier** (for example a test-only advisory-lock wait inside a statement-level trigger, or `pg_sleep` in a test function) **after** it has begun its single-row renewal of B and before commit. W1's client process is then killed, so the backend survives its client. (3) E-1 is established for W1 (P1), and both intervals are reclaimed under T-6. Each reclaim either commits, or refuses with 55P03 while the renewal backend holds that row, and is retried after the barrier releases. Both outcomes are recorded. (4) A replacement multi-operation transaction (a destruction-shaped prefix A, then B, then Ct(X)) starts while the renewal backend still holds B. (5) Controlled barriers release the renewal backend's statement. Blockers are observed through `pg_locks` and `pg_blocking_pids` by named test backends. (6) **Retries are disabled** for the diagnostic run. Every SQLSTATE, every timeout and each transaction's outcome are recorded. |
-| **Expected** | The renewal holds only B and never requests A. The replacement waits for B and then completes; or, if `lock_timeout` fires first, it rolls back with a recorded 55P03 and no partial effect. **Zero 40P01.** The three outcomes are distinguished and asserted exactly: expected refusal (reclaim 55P03 while B is held), bounded timeout (replacement 55P03, rolled back), and successful completion. No stale EDT commits. `receiver_alive_at` may advance at most once from the stale statement. |
-| **Negative control** | The same schedule with the accepted multi-row `UPDATE … ANY(:ids)` is run as a labelled characterisation of the Draft 4 counterexample. It is not an acceptance test, and its outcome is recorded rather than asserted. |
-| **Preserved regression** | The accepted actively-renewing slow-upload tests (receiver lease renewed independently of byte progress; never abandoned while renewing) pass unchanged with per-operation renewal. So do the late-receiver failed-STAGED-CAS tests. |
-| **Coverage** | Linux and Windows clients; PostgreSQL 16 and 18 |
+| A-1 | Create two RECEIVING REPAIR operations A < B (by UUID) on the same content X. Process W1 holds both intervals and renews both, one operation per transaction. |
+| A-2 | W1's renewal of B is stopped at **barrier 1**, placed **before** the statement acquires any operation row (for example in a `BEFORE … FOR EACH STATEMENT` trigger, or a test hook evaluated before the row is locked). Observe the backend `R` (exact `pid`, `backend_start`) waiting at barrier 1, with no row lock on A or B in `pg_locks`. |
+| A-3 | Kill W1's client process. **Confirm that the process has exited** (P1 evidence) **and that backend R is still alive**, with the same `(pid, backend_start)`, still waiting at barrier 1. The harness must genuinely keep the server statement alive after client death. A run in which R has already ended does **not** exercise this variant and is reported as invalid. |
+| A-4 | Reclaim A, then B, under E-1 and E-2 (T-6). Observe **both** reclaim transactions committed: new interval IDs and `EFFECT_OWNER_RECLAIMED` events. |
+| A-5 | Release barrier 1. R's statement re-evaluates its predicate on B (still RECEIVING) and locks B. It stops at **barrier 2**, placed **after** B is locked and **before** R's transaction ends (for example in an `AFTER … FOR EACH ROW` trigger on the renewal UPDATE). Observe R holding B's row lock and not holding or requesting A. |
+| A-6 | Start the replacement's UUID-ordered prefix (a destruction-shaped EDT: A, then B, then Ct(X)), with a recorded `lock_timeout`. Observe the replacement **holding A and blocked on B**, with `pg_blocking_pids(replacement)` = {R}. |
+| A-7 | Confirm throughout that **R never requests A** (no lock wait or grant on A for R in `pg_locks`). |
+| A-8 (success) | Release barrier 2. R's statement completes, and its autocommit transaction ends, with whatever outcome the dead client permits. The replacement acquires B, proceeds to Ct(X) and completes. **Zero 40P01.** |
+| A-9 (timeout) | In a separate run, hold barrier 2 throughout the replacement's bounded lock wait. The replacement gets **55P03** from `lock_timeout` and rolls back with **no partial effects**. **Zero 40P01.** |
+| A-10 | In both runs: no stale EDT commit, and R's update, if any, changes only B's `receiver_alive_at`. |
+
+#### Variant B: busy reclaim and refusal (separate schedule; never combined with A)
+
+| Step | Action and required observation |
+|---|---|
+| B-1 | A RECEIVING operation B. A renewal transaction holds B's row lock, stopped at a barrier after the lock and before its transaction ends. |
+| B-2 | Run T-6 for B. Require **SQLSTATE 55P03**, rollback of the **whole** reclaim attempt, an **unchanged** `effect_interval_id`, no event, and no replacement effect. |
+| B-3 | Release the holder. Its transaction ends. A **separately recorded fresh** reclaim attempt is then allowed and must commit. It is recorded as a new attempt, never as part of variant A. |
+
+#### Variant C: characterisation of the superseded multi-row renewal (labelled negative control)
+
+| Step | Action and required observation |
+|---|---|
+| C-1 | Use the superseded single-statement `UPDATE … ANY(:ids)` renewal over A and B, **only** as a labelled characterisation, never as acceptance. |
+| C-2 | To claim reproduction of the Draft 4 counterexample, **establish deterministically** that the statement locks **B before A** (a per-row barrier after B's lock, observed in `pg_locks`). Then establish the opposing wait graph: the multi-row statement holds B and waits on A, while a prefix holds A and waits on B. An uncontrolled `ANY`-array scan order is **not** evidence of ordering. |
+| C-3 | If the graph is reproduced, record the outcome (including any 40P01) as characterisation. If it is **not** reproduced, report "not reproduced" explicitly. Neither result counts as validation of the corrected path. |
 
 A failed hypothesis returns to the owner as evidence with a complexity comparison. It is not hidden by added
 machinery.
@@ -1407,7 +1450,8 @@ The Architecture C operating model is not reopened.
 | Gate 2 review B1, B2, M1 to M3, N1, N2, P1 to P3 | Responded in Draft 2; verified (ef5859e) as CLOSED for B2, N1, N2 and C7; PARTIAL elsewhere | [`PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-GATE2-CORRECTIONS.md) |
 | Gate 2 verification V1 to V4 | Responded in Draft 3; verified at `63c86e4`: V2, V3 CLOSED; V1, V4 PARTIAL | [`PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-V1-V4-CORRECTIONS.md) |
 | Draft 3 verification V1 (label authority, terminal-lock scope) and V4 (exactly-one scope) | Responded in Draft 4; verified at `7b289c8`: V4 CLOSED, V1 PARTIAL (D4-V1, D4-N1) | [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT4-CORRECTIONS.md) |
-| Draft 4 verification D4-V1 (renewal and multi-O cycle), D4-N1 (trace and proof wording) and the §8 criteria | Responded in this draft; verification is Codex's | [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md) |
+| Draft 4 verification D4-V1 (renewal and multi-O cycle), D4-N1 (trace and proof wording) and the §8 criteria | Responded in Draft 5; verified at `2dd6250`: D4-N1 CLOSED; D4-V1 architecture satisfactory, test specification PARTIAL (D5-N1); D5-N2 | [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT5-CORRECTIONS.md) |
+| Draft 5 verification D5-N1 (§12.1 reachability) and D5-N2 (T-m timeout wording) | Responded in this draft; verification is Codex's | [`PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md`](PHASE-4-WP1-ARCHITECTURE-C-DRAFT6-CORRECTIONS.md) |
 | B-9 grouping current-run check | Source lacks it [SRC]; required | §4.3; U |
 
 ### 14.3 Accepted Phase 0–3 invariants
@@ -1489,6 +1533,10 @@ accepted windows, and carries an all-writer verification burden (§5.4.2).
 - The window-mapping obligations are recorded (§5.4.2).
 - A future regression is specified (§12.1).
 
+
+**Draft 6 net change [G6]:** documentation only, with no protocol change. §12.1 is split into three reachable variants (a
+future test specification), and T-m's timeout wording is narrowed. No table, state, timer, lease policy or mechanism
+is added.
 ---
 
 ## 16. Consistency updates for later (reported, not made)
